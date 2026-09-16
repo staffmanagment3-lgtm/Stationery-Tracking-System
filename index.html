@@ -2,29 +2,30 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#2c3e50">
     <title>Stationery Tracker System</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
 <div id="app">
     <!-- Login View -->
     <section id="login-view" class="view active">
         <div class="login-container">
-            <div class="logo-placeholder">
-                <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNTAiIGhlaWdodD0iMTUwIiB2aWV3Qm94PSIwIDAgMTUwIDE1MCI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsbD0iI2YxZjUfOSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjE0IiBmaWxsPSIjOTRhM2I4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiPlNjaG9vbCBMb2dvPC90ZXh0Pjwvc3ZnPg==" alt="School Logo" id="school-logo">
-            </div>
+            <img src="school.png" alt="School Logo" class="login-logo" onerror="this.style.display='none'">
             <h2>School Stationery Tracker</h2>
             <form id="login-form">
                 <div class="input-group">
-                    <label for="adec-number">ADEC Pass Number</label>
-                    <input type="text" id="adec-number" placeholder="Enter ADEC Number" required autocomplete="username">
+                    <label for="adec-number">ADEK Pass Number</label>
+                    <input type="text" id="adec-number" placeholder="Enter ADEK Pass Number" required autocomplete="username">
                 </div>
                 <div class="input-group">
                     <label for="password">Password</label>
                     <input type="password" id="password" placeholder="Enter Password" required autocomplete="current-password">
                 </div>
-                <button type="submit" id="login-btn">Login</button>
+                <button type="submit" id="login-btn" class="primary-btn">Login</button>
             </form>
             <div class="dev-tools">
                 <button id="bypass-admin-btn" class="quick-access-btn">⚡ Direct Open Admin Panel</button>
@@ -36,7 +37,12 @@
     <!-- Developer Dashboard -->
     <section id="developer-dashboard" class="view">
         <header>
-            <h1>Developer Dashboard</h1>
+            <div style="display:flex; align-items:center;">
+                <div class="header-logo-container">
+                    <img src="school.png" alt="School Logo" onerror="this.style.display='none'">
+                </div>
+                <h1>Developer Dashboard</h1>
+            </div>
             <button class="logout-btn">Logout</button>
         </header>
         <div class="content">
@@ -47,8 +53,12 @@
                 <h3>Provision System Account</h3>
                 <form id="dev-create-account-form">
                     <div class="input-group">
-                        <label for="dev-adec-number">ADEC Pass Number</label>
-                        <input type="text" id="dev-adec-number" placeholder="Enter unique ADEC ID" required>
+                        <label for="dev-name">Full Name</label>
+                        <input type="text" id="dev-name" placeholder="Enter staff name" required>
+                    </div>
+                    <div class="input-group">
+                        <label for="dev-adec-number">ADEK Pass Number</label>
+                        <input type="text" id="dev-adec-number" placeholder="Enter unique ADEK Pass Number" required>
                     </div>
                     <div class="input-group">
                         <label for="dev-password">Account Password</label>
@@ -110,12 +120,16 @@
     <!-- Admin Dashboard -->
     <section id="admin-dashboard" class="view">
         <header>
-            <h1>Admin Dashboard</h1>
+            <div style="display:flex; align-items:center;">
+                <div class="header-logo-container">
+                    <img src="school.png" alt="School Logo" onerror="this.style.display='none'">
+                </div>
+                <h1>Admin Dashboard</h1>
+            </div>
             <button class="logout-btn">Logout</button>
         </header>
         <div class="content">
-            <!-- Modern Tab Navigation -->
-            <nav class="admin-nav">
+            <nav class="admin-nav scroll-x">
                 <button data-target="tab-inventory" class="active">Inventory</button>
                 <button data-target="tab-add-item">Add Item</button>
                 <button data-target="tab-google-drive">Google Drive</button>
@@ -126,8 +140,8 @@
             <div id="admin-content-area">
                 <!-- Tab: Inventory -->
                 <div id="tab-inventory" class="admin-tab active">
-                    <div class="admin-actions-area" style="margin-top:20px;display:flex;gap:15px;flex-wrap:wrap;">
-                        <button id="export-inventory-btn" class="action-btn" style="background-color:#27ae60;color:white;">📊 Export Full Inventory</button>
+                    <div class="admin-actions-area">
+                        <button id="export-inventory-btn" class="action-btn btn-green">📊 Export Full Inventory</button>
                     </div>
                     <div id="admin-analytics-area" style="margin-top:30px;">
                         <h3>Usage Analytics (Items per Teacher)</h3>
@@ -137,7 +151,7 @@
                     </div>
                     <div id="admin-master-inventory-area" style="margin-top:30px;">
                         <h3>Master Inventory Report</h3>
-                        <div class="search-bar" style="margin-bottom:15px;">
+                        <div class="search-bar">
                             <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
                             <input type="text" id="admin-inventory-search" placeholder="🔍 Filter inventory by name or serial...">
                         </div>
@@ -174,23 +188,32 @@
                             </div>
                             <div class="input-group">
                                 <label for="inv-item-name">Item Name</label>
-                                <input type="text" id="inv-item-name" placeholder="Enter item name" required>
+                                <div style="display:flex; gap:8px;">
+                                    <input type="text" id="inv-item-name" placeholder="Enter item name" required style="flex-grow:1;">
+                                    <button type="button" class="primary-btn purple btn-ocr-trigger" data-target="inv-item-name" style="width:auto; padding:0 12px; min-width:44px;" title="Scan Text from Label">📝 Scan</button>
+                                </div>
                             </div>
                             <div class="input-group">
                                 <label for="inv-description">Description</label>
-                                <textarea id="inv-description" placeholder="Enter description" rows="3" required></textarea>
+                                <div style="display:flex; flex-direction:column; gap:8px;">
+                                    <textarea id="inv-description" placeholder="Enter description" rows="3" required></textarea>
+                                    <button type="button" class="primary-btn purple btn-ocr-trigger" data-target="inv-description" style="width:100%; height:36px; min-height:36px; font-size:12px;" title="Scan Text from Label">📝 Scan Text from Label</button>
+                                </div>
                             </div>
                             <div class="input-group">
                                 <label for="inv-serial-number">Serial Number</label>
-                                <input type="text" id="inv-serial-number" placeholder="Enter serial number" required>
+                                <div style="display:flex; gap:8px;">
+                                    <input type="text" id="inv-serial-number" placeholder="Enter serial number" required style="flex-grow:1;">
+                                    <button type="button" id="start-scan-btn" class="primary-btn purple" style="width:auto; padding:0 12px; min-width:44px;" title="Scan Barcode/QR">📷 Scan</button>
+                                </div>
                             </div>
                             <div class="input-group">
                                 <label for="inv-quantity">Current Quantity</label>
-                                <input type="number" id="inv-quantity" placeholder="Enter quantity" min="0" required>
+                                <input type="number" id="inv-quantity" placeholder="Enter quantity" min="0" required inputmode="numeric">
                             </div>
                             <div class="input-group">
                                 <label for="inv-opening-quantity">Opening Quantity</label>
-                                <input type="number" id="inv-opening-quantity" placeholder="Enter opening quantity" min="0" required>
+                                <input type="number" id="inv-opening-quantity" placeholder="Enter opening quantity" min="0" required inputmode="numeric">
                             </div>
                             <div class="input-group">
                                 <label for="inv-image">Image</label>
@@ -214,24 +237,21 @@
                         <h3>Google Drive Connector</h3>
                         <p style="margin-bottom:15px;color:#64748b;font-size:14px;">Routing image uploads directly to Google Drive via Apps Script.</p>
 
-                        <!-- Drive Status Widget -->
-                        <div id="drive-status-widget" style="background:#f1f5f9; padding:15px; border-radius:8px; margin-bottom:20px; border:1px solid #e2e8f0;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-weight:600; color:#475569;">Connection Status:</span>
+                        <div id="drive-status-widget">
+                            <div class="drive-row">
+                                <span class="drive-label">Connection Status:</span>
                                 <span id="drive-connection-indicator" style="color:#94a3b8;">⚪ Checking...</span>
                             </div>
-                            <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-weight:600; color:#475569;">Storage Usage:</span>
-                                <span id="drive-storage-text" style="font-size:13px; color:#64748b;">-- / --</span>
+                            <div class="drive-row">
+                                <span class="drive-label">Storage Usage:</span>
+                                <span id="drive-storage-text" style="font-size:13px;color:#64748b;">-- / --</span>
                             </div>
-                            <div style="width:100%; height:8px; background:#e2e8f0; border-radius:4px; margin-top:8px; overflow:hidden;">
-                                <div id="drive-storage-bar" style="width:0%; height:100%; background:#3498db; transition:width 0.5s;"></div>
-                            </div>
+                            <div class="drive-bar"><div id="drive-storage-bar" style="width:0%;"></div></div>
                         </div>
 
                         <div class="input-group">
                             <label for="apps-script-url">Google Apps Script Web App URL</label>
-                            <div style="display:flex;gap:10px;">
+                            <div class="url-row">
                                 <input type="text" id="apps-script-url" placeholder="https://script.google.com/macros/s/.../exec" style="flex-grow:1;">
                                 <button id="save-apps-script-url" class="primary-btn green" style="width:auto;padding:0 15px;">Save URL</button>
                             </div>
@@ -241,10 +261,9 @@
 
                 <!-- Tab: Manage Staff -->
                 <div id="tab-manage-staff" class="admin-tab">
-                    <!-- Manage Staff Sub-Nav -->
-                    <div class="admin-nav" style="margin-bottom:20px; border-bottom:1px solid #e2e8f0; padding-bottom:15px; justify-content:center; background:#f8fafc; border-radius:8px; padding:10px;">
-                        <button id="btn-show-provision" class="active" style="width:auto; padding:8px 15px; font-size:13px;">➕ Provision New Account</button>
-                        <button id="btn-show-directory" style="width:auto; padding:8px 15px; font-size:13px;">📋 Staff Directory List</button>
+                    <div class="admin-nav sub-nav scroll-x">
+                        <button id="btn-show-provision" class="active">➕ Provision New Account</button>
+                        <button id="btn-show-directory">📋 Staff Directory List</button>
                     </div>
 
                     <div id="staff-provision-view">
@@ -252,8 +271,12 @@
                             <h3>Provision Teacher Account</h3>
                             <form id="admin-create-teacher-form">
                                 <div class="input-group">
-                                    <label for="admin-adec-number">ADEC Pass Number</label>
-                                    <input type="text" id="admin-adec-number" placeholder="Enter Teacher's ADEC ID" required>
+                                    <label for="admin-name">Full Name</label>
+                                    <input type="text" id="admin-name" placeholder="Enter teacher name" required>
+                                </div>
+                                <div class="input-group">
+                                    <label for="admin-adec-number">ADEK Pass Number</label>
+                                    <input type="text" id="admin-adec-number" placeholder="Enter Teacher's ADEK Pass Number" required>
                                 </div>
                                 <div class="input-group">
                                     <label for="admin-password">Account Password</label>
@@ -266,21 +289,21 @@
                     </div>
 
                     <div id="staff-list-view" style="display:none;">
-                        <div id="admin-staff-list-area" style="margin-top: 10px;">
+                        <div id="admin-staff-list-area" style="margin-top:10px;">
                             <h3>Registered Staff & Teachers</h3>
                             <div class="table-responsive">
                                 <table class="history-table">
                                     <thead>
-                                        <tr>
-                                            <th>ADEC Pass No</th>
-                                            <th>Name</th>
-                                            <th>Role</th>
-                                            <th>Password</th>
-                                            <th>Action</th>
-                                        </tr>
+                                    <tr>
+                                        <th>ADEK Pass No</th>
+                                        <th>Name</th>
+                                        <th>Role</th>
+                                        <th>Password</th>
+                                        <th>Action</th>
+                                    </tr>
                                     </thead>
                                     <tbody id="admin-staff-list">
-                                        <tr><td colspan="5">Loading staff directory...</td></tr>
+                                    <tr><td colspan="5">Loading staff directory...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -290,8 +313,8 @@
 
                 <!-- Tab: Orders & Requests -->
                 <div id="tab-orders" class="admin-tab">
-                    <div class="admin-actions-area" style="margin-top:20px;display:flex;gap:15px;flex-wrap:wrap;">
-                        <button id="export-history-btn" class="action-btn" style="background-color:#2980b9;color:white;">📑 Export Order History</button>
+                    <div class="admin-actions-area">
+                        <button id="export-history-btn" class="action-btn btn-blue">📑 Export Order History</button>
                     </div>
                     <div id="admin-requests-area">
                         <h3>Live Requisition Requests</h3>
@@ -320,8 +343,13 @@
     <!-- Teacher Dashboard -->
     <section id="teacher-dashboard" class="view">
         <header>
-            <h1>Teacher Portal</h1>
-            <div style="display:flex;gap:10px;">
+            <div style="display:flex; align-items:center;">
+                <div class="header-logo-container">
+                    <img src="school.png" alt="School Logo" onerror="this.style.display='none'">
+                </div>
+                <h1>Teacher Portal</h1>
+            </div>
+            <div class="header-actions">
                 <button id="cart-btn">🛒 Cart (<span id="cart-count">0</span>)</button>
                 <button class="logout-btn">Logout</button>
             </div>
@@ -330,7 +358,7 @@
             <h2>Stationery Catalog</h2>
             <div class="search-bar">
                 <label for="stationery-search" class="visually-hidden">Search</label>
-                <input type="text" id="stationery-search" placeholder="🔍 Search by name or serial...">
+                <input type="text" id="stationery-search" placeholder="🔍 Search by name or serial..." autocomplete="off">
             </div>
             <div id="stationery-list" class="grid-container">
                 <p>Loading catalog...</p>
@@ -392,7 +420,7 @@
         <div class="modal-content" style="border-top:8px solid #f39c12;max-width:450px;">
             <h3>🔔 Notification Alert</h3>
             <p id="notification-text" style="font-size:16px;margin:15px 0;color:#2c3e50;">
-                Your request status changed to 'Ready for Pickup'!
+                Your request status changed to 'Approved'!
             </p>
             <div class="modal-actions">
                 <button id="close-notification-btn" class="primary-btn orange" style="width:100%;">Close</button>
@@ -408,6 +436,52 @@
             <div class="modal-actions">
                 <button id="print-order-btn" class="primary-btn blue" style="width:100%;margin-bottom:10px;">Print Receipt</button>
                 <button id="close-order-detail-btn" class="secondary-btn" style="width:100%;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Item Detail Modal ("Janam Kundali") -->
+    <div id="item-detail-modal" class="modal">
+        <div class="modal-content" style="max-width:500px;">
+            <h3>📦 Janam Kundali (Item Details)</h3>
+            <div id="item-detail-content"></div>
+            <div class="modal-actions" style="margin-top:20px;">
+                <button id="close-item-detail-btn" class="secondary-btn" style="flex:1;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scanner Modal -->
+    <div id="qr-scanner-modal" class="modal">
+        <div class="modal-content" style="max-width:450px; text-align:center;">
+            <h3>📷 Barcode / QR Scanner</h3>
+            <p style="font-size:12px; color:#64748b; margin-bottom:15px;">Center the code within the frame</p>
+            <div id="reader" style="width:100%; min-height:250px;"></div>
+            <div class="modal-actions" style="margin-top:20px;">
+                <button id="close-scanner-btn" class="secondary-btn" style="width:100%;">Cancel / Stop Camera</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- OCR Scanner Modal -->
+    <div id="ocr-scanner-modal" class="modal">
+        <div class="modal-content" style="max-width:500px; text-align:center; position:relative;">
+            <h3>📝 OCR Text Scanner</h3>
+            <p style="font-size:12px; color:#64748b; margin-bottom:10px;">Snapshot a clear label to extract text</p>
+
+            <div id="ocr-camera-wrap" style="position:relative; width:100%; aspect-ratio: 4/3; background:#000; border-radius:12px; overflow:hidden; border:2px solid #e2e8f0;">
+                <video id="ocr-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <canvas id="ocr-canvas" style="display:none;"></canvas>
+
+                <div id="ocr-loader" style="display:none; position:absolute; inset:0; background:rgba(15,23,42,0.8); color:white; flex-direction:column; align-items:center; justify-content:center; z-index:10;">
+                    <div class="spinner" style="border-top-color:#fff; margin-bottom:10px;"></div>
+                    <p id="ocr-status-text">Scanning & Reading Text...</p>
+                </div>
+            </div>
+
+            <div class="modal-actions" style="margin-top:20px; flex-direction:column; gap:10px;">
+                <button id="ocr-snap-btn" class="primary-btn purple">📸 Snap & Extract Text</button>
+                <button id="close-ocr-btn" class="secondary-btn">Close / Stop Camera</button>
             </div>
         </div>
     </div>
