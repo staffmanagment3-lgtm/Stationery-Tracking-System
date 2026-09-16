@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#2c3e50">
+    <link rel="manifest" href="manifest.json">
     <title>Stationery Tracker System</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
@@ -11,6 +12,36 @@
 </head>
 <body>
 <div id="app">
+    <!-- Side Drawer Overlay -->
+    <div id="drawer-overlay" class="drawer-overlay"></div>
+
+    <!-- Side Drawer Menu -->
+    <aside id="side-drawer" class="side-drawer">
+        <div class="drawer-header">
+            <div class="header-logo-container" style="margin: 0;">
+                <img src="school.png" alt="School Logo" style="height: 40px;">
+            </div>
+            <button id="close-drawer-btn" class="close-btn">&times;</button>
+        </div>
+
+        <!-- Admin Menu -->
+        <nav id="admin-menu" class="drawer-nav" style="display: none;">
+            <button data-target="tab-inventory" class="drawer-item active">📦 Master Inventory</button>
+            <button data-target="tab-add-item" class="drawer-item">➕ Add New Item</button>
+            <button data-target="tab-google-drive" class="drawer-item">📁 Google Drive Assets</button>
+            <button data-target="tab-orders" class="drawer-item">📋 Live Requisition Requests</button>
+            <button data-target="tab-manage-staff" class="drawer-item">👥 Staff Management</button>
+            <button id="logout-btn-admin" class="drawer-item logout-item">🚪 Logout</button>
+        </nav>
+
+        <!-- Teacher Menu -->
+        <nav id="teacher-menu" class="drawer-nav" style="display: none;">
+            <button id="drawer-cart-btn" class="drawer-item">🛒 My Cart</button>
+            <button id="drawer-history-btn" class="drawer-item">📜 My Order History</button>
+            <button id="logout-btn-teacher" class="drawer-item logout-item">🚪 Logout</button>
+        </nav>
+    </aside>
+
     <!-- Login View -->
     <section id="login-view" class="view active">
         <div class="login-container">
@@ -37,13 +68,16 @@
     <!-- Developer Dashboard -->
     <section id="developer-dashboard" class="view">
         <header>
-            <div style="display:flex; align-items:center;">
+            <div style="display:flex; align-items:center; gap: 15px;">
+                <button id="dev-hamburger" class="menu-toggle">☰</button>
                 <div class="header-logo-container">
                     <img src="school.png" alt="School Logo" onerror="this.style.display='none'">
                 </div>
-                <h1>Developer Dashboard</h1>
+                <h1>Developer</h1>
             </div>
-            <button class="logout-btn">Logout</button>
+            <div class="header-actions">
+                <button class="logout-btn">Logout</button>
+            </div>
         </header>
         <div class="content">
             <h2>Developer Administration Panel</h2>
@@ -120,23 +154,23 @@
     <!-- Admin Dashboard -->
     <section id="admin-dashboard" class="view">
         <header>
-            <div style="display:flex; align-items:center;">
+            <div style="display:flex; align-items:center; gap: 15px;">
+                <button id="admin-hamburger" class="menu-toggle">☰</button>
                 <div class="header-logo-container">
                     <img src="school.png" alt="School Logo" onerror="this.style.display='none'">
                 </div>
-                <h1>Admin Dashboard</h1>
+                <h1 class="desktop-only">Admin Dashboard</h1>
             </div>
-            <button class="logout-btn">Logout</button>
+            <div class="header-actions">
+                <div id="notification-bell" class="notification-bell">
+                    <span class="bell-icon">🔔</span>
+                    <span id="notif-badge" class="badge-count" style="display: none;">0</span>
+                </div>
+                <button class="logout-btn desktop-only">Logout</button>
+            </div>
         </header>
         <div class="content">
-            <nav class="admin-nav scroll-x">
-                <button data-target="tab-inventory" class="active">Inventory</button>
-                <button data-target="tab-add-item">Add Item</button>
-                <button data-target="tab-google-drive">Google Drive</button>
-                <button data-target="tab-manage-staff">Manage Staff</button>
-                <button data-target="tab-orders">Orders & Requests</button>
-            </nav>
-
+            <!-- Navigation moved to drawer -->
             <div id="admin-content-area">
                 <!-- Tab: Inventory -->
                 <div id="tab-inventory" class="admin-tab active">
@@ -343,15 +377,16 @@
     <!-- Teacher Dashboard -->
     <section id="teacher-dashboard" class="view">
         <header>
-            <div style="display:flex; align-items:center;">
+            <div style="display:flex; align-items:center; gap: 15px;">
+                <button id="teacher-hamburger" class="menu-toggle">☰</button>
                 <div class="header-logo-container">
                     <img src="school.png" alt="School Logo" onerror="this.style.display='none'">
                 </div>
                 <h1>Teacher Portal</h1>
             </div>
             <div class="header-actions">
-                <button id="cart-btn">🛒 Cart (<span id="cart-count">0</span>)</button>
-                <button class="logout-btn">Logout</button>
+                <button id="cart-btn" class="cart-btn-main">🛒 <span id="cart-count">0</span></button>
+                <button class="logout-btn desktop-only">Logout</button>
             </div>
         </header>
         <div class="content">

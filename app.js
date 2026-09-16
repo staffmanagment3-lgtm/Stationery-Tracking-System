@@ -159,6 +159,15 @@ const $ = (id) => document.getElementById(id);
 document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
 
+    // Register Service Worker for PWA
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js')
+                .then(reg => console.log('SW Registered'))
+                .catch(err => console.log('SW Registration failed', err));
+        });
+    }
+
     const loginForm = $('login-form');
     const bypassAdminBtn = $('bypass-admin-btn');
     const logoutBtns = document.querySelectorAll('.logout-btn');
@@ -186,6 +195,77 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeOcrBtn = $('close-ocr-btn');
     let ocrStream = null;
     let currentOcrTarget = null;
+
+    // --- Drawer Logic ---
+    const sideDrawer = $('side-drawer');
+    const drawerOverlay = $('drawer-overlay');
+    const closeDrawerBtn = $('close-drawer-btn');
+    const hamburgers = [$('dev-hamburger'), $('admin-hamburger'), $('teacher-hamburger')];
+
+    const toggleDrawer = (open) => {
+        if (open) {
+            sideDrawer.classList.add('open');
+            drawerOverlay.classList.add('active');
+        } else {
+            sideDrawer.classList.remove('open');
+            drawerOverlay.classList.remove('active');
+        }
+    };
+
+    hamburgers.forEach(h => h?.addEventListener('click', () => toggleDrawer(true)));
+    closeDrawerBtn?.addEventListener('click', () => toggleDrawer(false));
+    drawerOverlay?.addEventListener('click', () => toggleDrawer(false));
+
+    // Side Menu Item Clicks
+    const drawerItems = document.querySelectorAll('.drawer-item[data-target]');
+    drawerItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const targetId = item.dataset.target;
+
+            // Toggle active state in drawer
+            drawerItems.forEach(i => i.classList.remove('active'));
+            item.classList.add('active');
+
+            // Handle Tab Switching
+            const adminTabs = document.querySelectorAll('.admin-tab');
+            adminTabs.forEach(tab => tab.classList.remove('active'));
+            const targetTab = $(targetId);
+            if (targetTab) targetTab.classList.add('active');
+
+            toggleDrawer(false);
+        });
+    });
+
+    $('drawer-cart-btn')?.addEventListener('click', () => {
+        toggleDrawer(false);
+        $('cart-modal').classList.add('active');
+        renderCart();
+    });
+
+    $('drawer-history-btn')?.addEventListener('click', () => {
+        toggleDrawer(false);
+        window.scrollTo({
+            top: $('teacher-history-area').offsetTop - 100,
+            behavior: 'smooth'
+        });
+    });
+
+    // Logout via drawer
+    [$('logout-btn-admin'), $('logout-btn-teacher')].forEach(btn => {
+        btn?.addEventListener('click', () => {
+            toggleDrawer(false);
+            cleanupListeners();
+            localStorage.removeItem('stationery_user_adec');
+            currentUser = null;
+            cart = {};
+            updateCartBadge();
+            catalogState.allItems = [];
+            catalogState.filtered = [];
+            catalogState.currentPage = 1;
+            catalogState.searchTerm = '';
+            showView('login-view');
+        });
+    });
 
     // --- Tab Navigation ---
     const adminNavButtons = document.querySelectorAll('.admin-nav button[data-target]');
@@ -462,6 +542,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+// ==================== NOTIFICATIONS ====================
+function listenForNewOrders() {
+    const ordersRef = ref(db, 'orders');
+    addListener(ordersRef, (snapshot) => {
+        const data = snapshot.val() || {};
+        const pendingCount = Object.values(data).filter(o => o.status === 'Pending Approval').length;
+
+        const badge = $('notif-badge');
+        if (badge) {
+            badge.textContent = pendingCount;
+            badge.style.display = pendingCount > 0 ? 'flex' : 'none';
+        }
+
+        // Background Push Trigger (Simplified for this demo)
+        Object.entries(data).forEach(([id, order]) => {
+            if (order.status === 'Pending Approval' && !alertedRequests.has(id)) {
+                alertedRequests.add(id);
+                if (Notification.permission === "granted") {
+                    new Notification("New Requisition Request", {
+                        body: `From: ${order.teacherName}`,
+                        icon: 'school.png'
+                    });
+                }
+            }
+        });
+    });
+}
+
 // ==================== SCANNER LOGIC ====================
 async function initScanner() {
     if (!html5QrCode) {
@@ -475,6 +583,14 @@ async function initScanner() {
     };
 
     try {
+        const constraints = {
+            video: {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        };
+
         await html5QrCode.start(
             { facingMode: "environment" },
             config,
@@ -515,9 +631,14 @@ async function stopScanner() {
 async function startOcrCamera() {
     const video = $('ocr-video');
     try {
-        ocrStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
+        const constraints = {
+            video: {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        };
+        ocrStream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = ocrStream;
     } catch (err) {
         console.error("OCR Camera Error:", err);
@@ -592,12 +713,23 @@ async function handleUserRole(adecNumber) {
             currentUser = { uid: adecNumber, ...userData };
             fetchSystemBranding();
             fetchCategories();
+
+            // Set up drawer based on role
+            $('admin-menu').style.display = userData.role === 'ADMIN' ? 'flex' : 'none';
+            $('teacher-menu').style.display = userData.role === 'TEACHER' ? 'flex' : 'none';
+
+            // Request Notification Permission
+            if ("Notification" in window) {
+                Notification.requestPermission();
+            }
+
             if (userData.role === 'DEVELOPER') {
                 showView('developer-dashboard');
                 fetchAuditLogs();
             } else if (userData.role === 'ADMIN') {
                 showView('admin-dashboard');
                 initAdminDashboards();
+                listenForNewOrders();
             } else if (userData.role === 'TEACHER') {
                 showView('teacher-dashboard');
                 fetchInventory();
