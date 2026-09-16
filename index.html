@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stationery Tracker System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+    <!-- Login View -->
+    <section id="login-view" class="view active">
+        <div class="login-container">
+            <div class="logo-placeholder">
+                <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNTAiIGhlaWdodD0iMTUwIiB2aWV3Qm94PSIwIDAgMTUwIDE1MCI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsbD0iI2YxZjUfOSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjE0IiBmaWxsPSIjOTRhM2I4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiPlNjaG9vbCBMb2dvPC90ZXh0Pjwvc3ZnPg==" alt="School Logo" id="school-logo">
+            </div>
+            <h2>School Stationery Tracker</h2>
+            <form id="login-form">
+                <div class="input-group">
+                    <label for="adec-number">ADEC Pass Number</label>
+                    <input type="text" id="adec-number" placeholder="Enter ADEC Number" required autocomplete="username">
+                </div>
+                <div class="input-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" placeholder="Enter Password" required autocomplete="current-password">
+                </div>
+                <button type="submit" id="login-btn">Login</button>
+            </form>
+            <div class="dev-tools">
+                <button id="bypass-admin-btn" class="quick-access-btn">⚡ Direct Open Admin Panel</button>
+            </div>
+            <p id="login-error" class="error-message"></p>
+        </div>
+    </section>
+
+    <!-- Developer Dashboard -->
+    <section id="developer-dashboard" class="view">
+        <header>
+            <h1>Developer Dashboard</h1>
+            <button class="logout-btn">Logout</button>
+        </header>
+        <div class="content">
+            <h2>Developer Administration Panel</h2>
+            <p>Provision staff accounts and audit system operations.</p>
+
+            <div class="form-container">
+                <h3>Provision System Account</h3>
+                <form id="dev-create-account-form">
+                    <div class="input-group">
+                        <label for="dev-adec-number">ADEC Pass Number</label>
+                        <input type="text" id="dev-adec-number" placeholder="Enter unique ADEC ID" required>
+                    </div>
+                    <div class="input-group">
+                        <label for="dev-password">Account Password</label>
+                        <input type="password" id="dev-password" placeholder="Enter secure password" required minlength="4">
+                    </div>
+                    <div class="input-group">
+                        <label for="dev-role">System Role Mapping</label>
+                        <select id="dev-role" required>
+                            <option value="" disabled selected>Select Authorization Level</option>
+                            <option value="ADMIN">Admin</option>
+                            <option value="TEACHER">Teacher</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="primary-btn">Create Account</button>
+                </form>
+                <p id="dev-form-message" class="message"></p>
+            </div>
+
+            <div class="form-container" style="margin-top:20px;">
+                <h3>System Branding</h3>
+                <div class="input-group">
+                    <label for="branding-logo-upload">Upload School Logo (PNG/JPG, max 500KB)</label>
+                    <input type="file" id="branding-logo-upload" accept="image/*">
+                </div>
+                <button id="upload-branding-btn" class="primary-btn purple">Update System Logo</button>
+                <p id="branding-message" class="message"></p>
+            </div>
+
+            <div class="form-container" style="margin-top:20px;">
+                <h3>Category Management</h3>
+                <div class="input-group">
+                    <label for="new-category-name">Add New Category</label>
+                    <div style="display:flex;gap:10px;">
+                        <input type="text" id="new-category-name" placeholder="Category Name" style="flex-grow:1;">
+                        <button id="add-category-btn" class="primary-btn green" style="width:auto;padding:0 20px;">Add</button>
+                    </div>
+                </div>
+                <div id="category-list-container" style="margin-top:15px;">
+                    <ul id="system-categories-list" style="list-style:none;padding:0;"></ul>
+                </div>
+            </div>
+
+            <div id="system-audit-logs-area" style="margin-top:30px;">
+                <h3>System Audit Logs</h3>
+                <div class="table-responsive">
+                    <table class="history-table compact-table">
+                        <thead>
+                        <tr><th>Timestamp</th><th>User</th><th>Action</th><th>Details</th></tr>
+                        </thead>
+                        <tbody id="audit-logs-list">
+                        <tr><td colspan="4">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Admin Dashboard -->
+    <section id="admin-dashboard" class="view">
+        <header>
+            <h1>Admin Dashboard</h1>
+            <button class="logout-btn">Logout</button>
+        </header>
+        <div class="content">
+            <!-- Modern Tab Navigation -->
+            <nav class="admin-nav">
+                <button data-target="tab-inventory" class="active">Inventory</button>
+                <button data-target="tab-add-item">Add Item</button>
+                <button data-target="tab-google-drive">Google Drive</button>
+                <button data-target="tab-manage-staff">Manage Staff</button>
+                <button data-target="tab-orders">Orders & Requests</button>
+            </nav>
+
+            <div id="admin-content-area">
+                <!-- Tab: Inventory -->
+                <div id="tab-inventory" class="admin-tab active">
+                    <div class="admin-actions-area" style="margin-top:20px;display:flex;gap:15px;flex-wrap:wrap;">
+                        <button id="export-inventory-btn" class="action-btn" style="background-color:#27ae60;color:white;">📊 Export Full Inventory</button>
+                    </div>
+                    <div id="admin-analytics-area" style="margin-top:30px;">
+                        <h3>Usage Analytics (Items per Teacher)</h3>
+                        <div id="analytics-cards" class="analytics-grid">
+                            <p>Calculating analytics...</p>
+                        </div>
+                    </div>
+                    <div id="admin-master-inventory-area" style="margin-top:30px;">
+                        <h3>Master Inventory Report</h3>
+                        <div class="search-bar" style="margin-bottom:15px;">
+                            <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
+                            <input type="text" id="admin-inventory-search" placeholder="🔍 Filter inventory by name or serial...">
+                        </div>
+                        <div class="table-responsive">
+                            <table class="history-table">
+                                <thead>
+                                <tr>
+                                    <th>Serial</th><th>Name</th><th>Description</th>
+                                    <th>Open Qty</th><th>Current Qty</th><th>Image</th><th>Status</th>
+                                </tr>
+                                </thead>
+                                <tbody id="master-inventory-list">
+                                <tr><td colspan="7">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: Add Item -->
+                <div id="tab-add-item" class="admin-tab">
+                    <div class="form-container" style="border-left:5px solid #10b981;">
+                        <h3>Add New Inventory Item</h3>
+                        <form id="add-inventory-form">
+                            <div class="input-group">
+                                <label for="inv-category">Category</label>
+                                <select id="inv-category" required>
+                                    <option value="" disabled selected>Loading categories...</option>
+                                </select>
+                            </div>
+                            <div class="input-group" id="custom-category-group" style="display:none;">
+                                <label for="inv-custom-category">Custom Category</label>
+                                <input type="text" id="inv-custom-category" placeholder="Enter custom category">
+                            </div>
+                            <div class="input-group">
+                                <label for="inv-item-name">Item Name</label>
+                                <input type="text" id="inv-item-name" placeholder="Enter item name" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="inv-description">Description</label>
+                                <textarea id="inv-description" placeholder="Enter description" rows="3" required></textarea>
+                            </div>
+                            <div class="input-group">
+                                <label for="inv-serial-number">Serial Number</label>
+                                <input type="text" id="inv-serial-number" placeholder="Enter serial number" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="inv-quantity">Current Quantity</label>
+                                <input type="number" id="inv-quantity" placeholder="Enter quantity" min="0" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="inv-opening-quantity">Opening Quantity</label>
+                                <input type="number" id="inv-opening-quantity" placeholder="Enter opening quantity" min="0" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="inv-image">Image</label>
+                                <input type="file" id="inv-image" accept="image/*" capture="environment" required>
+                            </div>
+                            <div class="barcode-preview-area">
+                                <label>Barcode Preview</label>
+                                <div class="barcode-svg-container">
+                                    <svg id="barcode"></svg>
+                                </div>
+                            </div>
+                            <button type="submit" id="save-inventory-btn" class="primary-btn green">Save Inventory Item</button>
+                        </form>
+                        <p id="form-message" class="message"></p>
+                    </div>
+                </div>
+
+                <!-- Tab: Google Drive -->
+                <div id="tab-google-drive" class="admin-tab">
+                    <div class="form-container">
+                        <h3>Google Drive Connector</h3>
+                        <p style="margin-bottom:15px;color:#64748b;font-size:14px;">Routing image uploads directly to Google Drive via Apps Script.</p>
+
+                        <!-- Drive Status Widget -->
+                        <div id="drive-status-widget" style="background:#f1f5f9; padding:15px; border-radius:8px; margin-bottom:20px; border:1px solid #e2e8f0;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-weight:600; color:#475569;">Connection Status:</span>
+                                <span id="drive-connection-indicator" style="color:#94a3b8;">⚪ Checking...</span>
+                            </div>
+                            <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-weight:600; color:#475569;">Storage Usage:</span>
+                                <span id="drive-storage-text" style="font-size:13px; color:#64748b;">-- / --</span>
+                            </div>
+                            <div style="width:100%; height:8px; background:#e2e8f0; border-radius:4px; margin-top:8px; overflow:hidden;">
+                                <div id="drive-storage-bar" style="width:0%; height:100%; background:#3498db; transition:width 0.5s;"></div>
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="apps-script-url">Google Apps Script Web App URL</label>
+                            <div style="display:flex;gap:10px;">
+                                <input type="text" id="apps-script-url" placeholder="https://script.google.com/macros/s/.../exec" style="flex-grow:1;">
+                                <button id="save-apps-script-url" class="primary-btn green" style="width:auto;padding:0 15px;">Save URL</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: Manage Staff -->
+                <div id="tab-manage-staff" class="admin-tab">
+                    <!-- Manage Staff Sub-Nav -->
+                    <div class="admin-nav" style="margin-bottom:20px; border-bottom:1px solid #e2e8f0; padding-bottom:15px; justify-content:center; background:#f8fafc; border-radius:8px; padding:10px;">
+                        <button id="btn-show-provision" class="active" style="width:auto; padding:8px 15px; font-size:13px;">➕ Provision New Account</button>
+                        <button id="btn-show-directory" style="width:auto; padding:8px 15px; font-size:13px;">📋 Staff Directory List</button>
+                    </div>
+
+                    <div id="staff-provision-view">
+                        <div class="form-container">
+                            <h3>Provision Teacher Account</h3>
+                            <form id="admin-create-teacher-form">
+                                <div class="input-group">
+                                    <label for="admin-adec-number">ADEC Pass Number</label>
+                                    <input type="text" id="admin-adec-number" placeholder="Enter Teacher's ADEC ID" required>
+                                </div>
+                                <div class="input-group">
+                                    <label for="admin-password">Account Password</label>
+                                    <input type="password" id="admin-password" placeholder="Enter secure password" required minlength="4">
+                                </div>
+                                <button type="submit" class="primary-btn blue">Create Teacher Account</button>
+                            </form>
+                            <p id="admin-staff-message" class="message"></p>
+                        </div>
+                    </div>
+
+                    <div id="staff-list-view" style="display:none;">
+                        <div id="admin-staff-list-area" style="margin-top: 10px;">
+                            <h3>Registered Staff & Teachers</h3>
+                            <div class="table-responsive">
+                                <table class="history-table">
+                                    <thead>
+                                        <tr>
+                                            <th>ADEC Pass No</th>
+                                            <th>Name</th>
+                                            <th>Role</th>
+                                            <th>Password</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-staff-list">
+                                        <tr><td colspan="5">Loading staff directory...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: Orders & Requests -->
+                <div id="tab-orders" class="admin-tab">
+                    <div class="admin-actions-area" style="margin-top:20px;display:flex;gap:15px;flex-wrap:wrap;">
+                        <button id="export-history-btn" class="action-btn" style="background-color:#2980b9;color:white;">📑 Export Order History</button>
+                    </div>
+                    <div id="admin-requests-area">
+                        <h3>Live Requisition Requests</h3>
+                        <div id="admin-requests-list">
+                            <p>Loading...</p>
+                        </div>
+                    </div>
+                    <div id="admin-history-area" style="margin-top:30px;margin-bottom:30px;">
+                        <h3>Full Order History</h3>
+                        <div class="table-responsive">
+                            <table class="history-table">
+                                <thead>
+                                <tr><th>Order ID</th><th>Teacher</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr>
+                                </thead>
+                                <tbody id="admin-history-list">
+                                <tr><td colspan="6">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Teacher Dashboard -->
+    <section id="teacher-dashboard" class="view">
+        <header>
+            <h1>Teacher Portal</h1>
+            <div style="display:flex;gap:10px;">
+                <button id="cart-btn">🛒 Cart (<span id="cart-count">0</span>)</button>
+                <button class="logout-btn">Logout</button>
+            </div>
+        </header>
+        <div class="content">
+            <h2>Stationery Catalog</h2>
+            <div class="search-bar">
+                <label for="stationery-search" class="visually-hidden">Search</label>
+                <input type="text" id="stationery-search" placeholder="🔍 Search by name or serial...">
+            </div>
+            <div id="stationery-list" class="grid-container">
+                <p>Loading catalog...</p>
+            </div>
+            <div id="teacher-history-area" style="margin-top:40px;">
+                <h3>My Order History</h3>
+                <div class="table-responsive">
+                    <table class="history-table">
+                        <thead>
+                        <tr><th>Order ID</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr>
+                        </thead>
+                        <tbody id="teacher-history-list">
+                        <tr><td colspan="5">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Cart Modal -->
+    <div id="cart-modal" class="modal">
+        <div class="modal-content">
+            <h3>Shopping Cart</h3>
+            <div id="cart-items"></div>
+            <div id="cart-message" class="message"></div>
+            <div class="modal-actions">
+                <button id="submit-requisition-btn" class="primary-btn green">Submit Requisition</button>
+                <button id="close-cart-btn" class="secondary-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Handover Modal -->
+    <div id="handover-modal" class="modal">
+        <div class="modal-content">
+            <h3>Order Handover Confirmation</h3>
+            <div class="signature-section">
+                <div class="signature-pad-container">
+                    <label>Admin Signature</label>
+                    <canvas id="admin-canvas" width="450" height="150"></canvas>
+                    <button id="clear-admin-sig-btn" class="clear-btn">Clear</button>
+                </div>
+                <div class="signature-pad-container">
+                    <label>Teacher Signature</label>
+                    <canvas id="teacher-canvas" width="450" height="150"></canvas>
+                    <button id="clear-teacher-sig-btn" class="clear-btn">Clear</button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="complete-order-btn" class="primary-btn green">Complete & Close Order</button>
+                <button id="close-handover-modal-btn" class="secondary-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Modal -->
+    <div id="notification-modal" class="modal">
+        <div class="modal-content" style="border-top:8px solid #f39c12;max-width:450px;">
+            <h3>🔔 Notification Alert</h3>
+            <p id="notification-text" style="font-size:16px;margin:15px 0;color:#2c3e50;">
+                Your request status changed to 'Ready for Pickup'!
+            </p>
+            <div class="modal-actions">
+                <button id="close-notification-btn" class="primary-btn orange" style="width:100%;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Order Detail Modal -->
+    <div id="order-detail-modal" class="modal">
+        <div class="modal-content" style="max-width:650px;">
+            <h3>📋 Order Details</h3>
+            <div id="order-detail-content" class="print-area"></div>
+            <div class="modal-actions">
+                <button id="print-order-btn" class="primary-btn blue" style="width:100%;margin-bottom:10px;">Print Receipt</button>
+                <button id="close-order-detail-btn" class="secondary-btn" style="width:100%;">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
