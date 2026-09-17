@@ -186,27 +186,31 @@
                             <p>Calculating analytics...</p>
                         </div>
                     </div>
-                    <div id="admin-master-inventory-area" style="margin-top:30px;">
-                        <h3>Master Inventory Report</h3>
-                        <div class="search-bar">
-                            <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
-                            <input type="text" id="admin-inventory-search" placeholder="🔍 Filter inventory by name or serial...">
-                        </div>
-                        <div class="table-responsive">
-                            <table class="history-table">
-                                <thead>
-                                <tr>
-                                    <th>Serial</th><th>Name</th><th>Description</th>
-                                    <th>Open Qty</th><th>Current Qty</th><th>Image</th><th>Status</th>
-                                </tr>
-                                </thead>
-                                <tbody id="master-inventory-list">
-                                <tr><td colspan="7">Loading...</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div id="admin-inventory-pagination"></div>
+            <div id="admin-master-inventory-area" style="margin-top:30px;">
+                <h3>Master Inventory Report</h3>
+                <div class="search-bar">
+                    <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
+                    <input type="text" id="admin-inventory-search" placeholder="🔍 Filter inventory by name or serial...">
+                </div>
+
+                <div id="inventory-container">
+                    <!-- Dynamic Responsive Inventory (Table or Cards) -->
+                    <div class="table-responsive">
+                        <table class="history-table">
+                            <thead>
+                            <tr>
+                                <th>Serial</th><th>Name</th><th>Description</th>
+                                <th>Open Qty</th><th>Current Qty</th><th>Image</th><th>Status</th>
+                            </tr>
+                            </thead>
+                            <tbody id="master-inventory-list">
+                            <tr><td colspan="7">Loading...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
+                </div>
+                <div id="admin-inventory-pagination"></div>
+            </div>
                 </div>
 
                 <!-- Tab: Add Item -->
@@ -561,6 +565,9 @@
         <div class="modal-content" style="max-width:500px; text-align:center; position:relative;">
             <h3>📝 OCR Text Scanner</h3>
             <p style="font-size:12px; color:#64748b; margin-bottom:10px;">Snapshot a clear label to extract text</p>
+
+            <!-- Native Fallback Input -->
+            <input type="file" id="ocr-file-fallback" accept="image/*" capture="environment" style="display: none;">
 
             <div id="ocr-camera-wrap" style="position:relative; width:100%; aspect-ratio: 4/3; background:#000; border-radius:12px; overflow:hidden; border:2px solid #e2e8f0;">
                 <video id="ocr-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>

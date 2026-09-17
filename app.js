@@ -517,51 +517,116 @@ function listenForNewOrders() {
 }
 
 // ==================== SCANNER / OCR ====================
-async function initScanner() {
-    if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
-    const config = { fps: 10, qrbox: { width: 250, height: 150 }, aspectRatio: 1.0 };
-    try {
-        await html5QrCode.start({ facingMode: "environment" }, config, (decodedText) => {
-            const input = $('inv-serial-number');
-            if (input) { input.value = decodedText; input.dispatchEvent(new Event('input')); }
-            showToast("Code Scanned!", "success");
-            stopScanner();
-        }, () => { });
-    } catch (err) { showToast("Camera error", "error"); stopScanner(); }
-}
-
-async function stopScanner() {
-    $('qr-scanner-modal').classList.remove('active');
-    if (html5QrCode && html5QrCode.isScanning) { try { await html5QrCode.stop(); } catch (e) { } }
-}
-
 async function startOcrCamera() {
-    const videoElement = $('ocr-video');
+    stopOcrCamera(); // Always release previous active tracks first
+
+    const videoEl = $('ocr-video');
     const fallbackInput = $('ocr-file-fallback');
 
-    const constraintList = [
-        { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
+    const constraintsList = [
+        { video: { facingMode: "environment" } },
         { video: { facingMode: "user" } },
         { video: true }
     ];
 
-    let streamSuccess = false;
-
-    stopOcrCamera(); // Always release previous active tracks first
-
-    for (const constraints of constraintList) {
+    let activeStream = null;
+    for (const constraints of constraintsList) {
         try {
-            ocrStream = await navigator.mediaDevices.getUserMedia(constraints);
-            if (videoElement && ocrStream) {
-                videoElement.srcObject = ocrStream;
-                await videoElement.play();
-                streamSuccess = true;
-                break;
-            }
-        } catch (err) {
-            console.warn("Camera constraint attempt failed:", constraints, err);
+            activeStream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (activeStream) break;
+        } catch (e) {
+            console.warn("Camera attempt failed:", constraints, e);
         }
     }
+
+    if (activeStream && videoEl) {
+        ocrStream = activeStream;
+        videoEl.srcObject = activeStream;
+        await videoEl.play();
+        $('ocr-scanner-modal').classList.add('active');
+    } else {
+        // Fallback to Native Mobile Camera App
+        console.log("Live stream failed. Opening native camera...");
+        if (fallbackInput) {
+            alert("Live browser camera blocked. Opening device camera app...");
+            fallbackInput.click();
+        } else {
+            alert("Could not access camera. Please check Chrome camera permissions.");
+        }
+    }
+}
+
+async function handleOcrFileFallback(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const loader = $('ocr-loader');
+    if (loader) loader.style.display = 'flex';
+
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        const img = new Image();
+        img.src = e.target.result;
+        img.onload = async () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+
+            preprocessCanvasForOcr(canvas);
+            await processOcrFromCanvas(canvas);
+        };
+    };
+    reader.readAsDataURL(file);
+}
+
+async function processOcrFromCanvas(canvas) {
+    const loader = $('ocr-loader');
+    if (loader) loader.style.display = 'flex';
+    $('ocr-status-text').textContent = "Reading label text...";
+
+    try {
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$-_./&()%+= ',
+            preserve_interword_spaces: '1',
+            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OR_LINE
+        });
+
+        const result = await worker.recognize(canvas);
+        const rawText = result.data.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+        await worker.terminate();
+
+        const inputEl = document.getElementById(currentOcrTarget);
+        if (inputEl && rawText.length > 0) {
+            inputEl.value = rawText;
+            inputEl.dispatchEvent(new Event('input'));
+            alert(`Text Captured: "${rawText}"`);
+        } else {
+            alert("Unable to read text clearly.");
+        }
+        stopOcrCamera();
+    } catch (err) {
+        console.error("OCR Error:", err);
+        showToast("OCR Failed", "error");
+        if (loader) loader.style.display = 'none';
+    }
+}
+
+function stopOcrCamera() {
+    if (ocrStream) {
+        ocrStream.getTracks().forEach(track => track.stop());
+        ocrStream = null;
+    }
+    const videoElement = $('ocr-video');
+    if (videoElement) {
+        videoElement.srcObject = null;
+    }
+    if ($('ocr-loader')) $('ocr-loader').style.display = 'none';
+    if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
+}
 
     if (!streamSuccess) {
         console.error("All getUserMedia attempts failed.");
@@ -829,6 +894,12 @@ function fetchMasterInventory() {
     });
 }
 
+function getStatusBadge(qty) {
+    if (qty <= 0) return '<span class="badge bg-danger">Out of Stock</span>';
+    if (qty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${qty})</span>`;
+    return '<span class="badge bg-success">In Stock</span>';
+}
+
 function renderMasterInventory() {
     const container = $('inventory-container');
     if (!container) return;
@@ -842,39 +913,38 @@ function renderMasterInventory() {
 
     const start = (adminInventoryState.currentPage - 1) * PAGE_SIZE;
     const end = start + PAGE_SIZE;
-    const items = adminInventoryState.filtered.slice(start, end);
+    const pageItems = adminInventoryState.filtered.slice(start, end);
 
-    if (items.length === 0) {
-        container.innerHTML = '<div class="alert alert-info text-center">No inventory items available.</div>';
+    if (pageItems.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted p-4">No inventory records found.</div>';
         return;
     }
 
-    // 1. Build Desktop Table
-    let desktopHtml = `
-        <div class="table-responsive desktop-only">
-            <table class="table table-hover align-middle inventory-desktop-table w-100 history-table">
+    // 1. Desktop Table Markup
+    const desktopTable = `
+        <div class="table-responsive d-none d-md-block">
+            <table class="table table-hover align-middle history-table">
                 <thead class="table-light">
                     <tr>
                         <th>Image</th><th>Serial No</th><th>Item Name</th>
-                        <th>Description</th><th>Open Qty</th><th>Current Qty</th>
+                        <th>Category</th><th>Description</th><th>Qty Available</th>
                         <th>Status</th><th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${items.map(item => {
+                    ${pageItems.map(item => {
                         const qty = parseInt(item.quantity) || 0;
-                        const directUrl = getDirectDriveUrl(item.imageUrl);
                         return `
                         <tr class="${qty < 5 ? 'row-low-stock' : ''}">
-                            <td><img src="${directUrl}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
+                            <td><img src="${getDirectDriveUrl(item.imageUrl)}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
                             <td><code>${item.serialNumber || 'N/A'}</code></td>
                             <td><strong>${escapeHtml(item.itemName)}</strong></td>
+                            <td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td>
                             <td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td>
-                            <td>${item.openingQuantity || 0}</td>
                             <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
                             <td>${getStatusBadge(qty)}</td>
                             <td>
-                                <button class="btn btn-sm btn-outline-primary me-1" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button>
                             </td>
                         </tr>`;
                     }).join('')}
@@ -882,6 +952,39 @@ function renderMasterInventory() {
             </table>
         </div>
     `;
+
+    // 2. Mobile Cards Markup
+    const mobileCards = `
+        <div class="d-block d-md-none inventory-cards-wrapper">
+            ${pageItems.map(item => {
+                const qty = parseInt(item.quantity) || 0;
+                return `
+                <div class="inventory-card-mobile">
+                    <div class="inventory-card-header">
+                        <img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')">
+                        <div style="flex:1;">
+                            <h6 class="mb-0">${escapeHtml(item.itemName)}</h6>
+                            <small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>
+                            ${getStatusBadge(qty)}
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span>
+                    </div>
+                    <p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description available.')}</p>
+                    <div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3">
+                        <span class="small text-muted">Current Quantity:</span>
+                        <span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span>
+                    </div>
+                    <button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button>
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+
+    container.innerHTML = desktopTable + mobileCards;
+    renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
+}
 
     // 2. Build Mobile Cards
     let mobileHtml = `
