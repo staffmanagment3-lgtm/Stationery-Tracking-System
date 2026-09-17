@@ -34,10 +34,16 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const reqUrl = event.request.url;
+  // Bypass Service Worker for Google Apps Script, Firebase, and external APIs
+  if (reqUrl.includes('script.google.com') || reqUrl.includes('firebaseio.com') || reqUrl.includes('googleapis.com')) {
+    return; // Let the browser make a direct network request
+  }
+
   event.respondWith(
     caches.match(event.request).then((response) => {
       return response || fetch(event.request);
-    })
+    }).catch(() => fetch(event.request))
   );
 });
 

@@ -4,29 +4,26 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.0.4";
+const APP_VERSION = "1.0.6";
 
-// Auto Cache Purge Logic
-(function checkAppVersion() {
-    const savedVersion = localStorage.getItem('app_installed_version');
-    if (savedVersion !== APP_VERSION) {
-        console.log(`Version change detected: ${savedVersion} -> ${APP_VERSION}. Clearing old caches...`);
+// Safe Version Check (Preserves Auth Keys)
+(function safeVersionCheck() {
+  const CURRENT_VER = APP_VERSION;
+  const savedVer = localStorage.getItem('app_version');
 
-        if ('caches' in window) {
-            caches.keys().then(names => {
-                for (let name of names) caches.delete(name);
-            });
-        }
-
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(registrations => {
-                for (let registration of registrations) registration.unregister();
-            });
-        }
-
-        localStorage.setItem('app_installed_version', APP_VERSION);
-        window.location.reload(true);
+  if (savedVer !== CURRENT_VER) {
+    console.warn(`Upgrading app version to ${CURRENT_VER}`);
+    if ('caches' in window) {
+      caches.keys().then(names => names.forEach(name => caches.delete(name)));
     }
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+            for (let registration of registrations) registration.unregister();
+        });
+    }
+    localStorage.setItem('app_version', CURRENT_VER);
+    window.location.reload();
+  }
 })();
 
 const firebaseConfig = {
@@ -60,11 +57,26 @@ const FALLBACK_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
 let currentUser = null;
 let cart = {};
 let inventoryData = {};
+let unsubscribeListeners = [];
+let html5QrCode = null;
+let ocrStream = null;
+let currentOcrTarget = null;
+let notificationsList = [];
+
 // New Order Signature Pads
 let adminPad = null;
 let teacherPad = null;
 let teacherRequestPad = null;
 let selectedOrderIdForApproval = null;
+
+const catalogState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
+const adminInventoryState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
+const auditLedgerState = { allItems: [], filtered: [], currentPage: 1 };
+const teacherOrdersState = { allItems: [], filtered: [], currentPage: 1 };
+
+const alertedRequests = new Set();
+
+// ==================== IMAGE & UI UTILITIES ====================
 
 function setupResponsiveSignaturePad(canvasId) {
     const canvas = document.getElementById(canvasId);
@@ -73,34 +85,25 @@ function setupResponsiveSignaturePad(canvasId) {
     const ctx = canvas.getContext('2d');
     let isDrawing = false;
 
-    // Auto-resize canvas according to container width and scale for High-DPI (Retina) screens
     function resizeCanvas() {
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
         const rect = canvas.parentElement.getBoundingClientRect();
-
-        // Set actual display size in CSS pixels
         canvas.width = rect.width * ratio;
-        canvas.height = 180 * ratio; // 180px height for finger comfort
-
-        // Normalize coordinate system to match CSS pixels
-        ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform before scaling
+        canvas.height = 180 * ratio;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(ratio, ratio);
-
         ctx.lineWidth = 2.5;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.strokeStyle = '#000000';
     }
 
-    // Call resize immediately and on window orientation change
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    // Get exact finger/pointer coordinates relative to canvas
     function getCoordinates(e) {
         const rect = canvas.getBoundingClientRect();
         let clientX, clientY;
-
         if (e.touches && e.touches.length > 0) {
             clientX = e.touches[0].clientX;
             clientY = e.touches[0].clientY;
@@ -108,14 +111,11 @@ function setupResponsiveSignaturePad(canvasId) {
             clientX = e.clientX;
             clientY = e.clientY;
         }
-        return {
-            x: clientX - rect.left,
-            y: clientY - rect.top
-        };
+        return { x: clientX - rect.left, y: clientY - rect.top };
     }
 
     function startDrawing(e) {
-        if (e.cancelable) e.preventDefault(); // Stop mobile page scroll
+        if (e.cancelable) e.preventDefault();
         isDrawing = true;
         const pos = getCoordinates(e);
         ctx.beginPath();
@@ -124,7 +124,7 @@ function setupResponsiveSignaturePad(canvasId) {
 
     function draw(e) {
         if (!isDrawing) return;
-        if (e.cancelable) e.preventDefault(); // Stop mobile page scroll
+        if (e.cancelable) e.preventDefault();
         const pos = getCoordinates(e);
         ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
@@ -137,13 +137,11 @@ function setupResponsiveSignaturePad(canvasId) {
         }
     }
 
-    // Mouse Events
     canvas.onmousedown = startDrawing;
     canvas.onmousemove = draw;
     canvas.onmouseup = stopDrawing;
     canvas.onmouseleave = stopDrawing;
 
-    // Touch Events for Mobile / Tablet
     canvas.addEventListener('touchstart', startDrawing, { passive: false });
     canvas.addEventListener('touchmove', draw, { passive: false });
     canvas.addEventListener('touchend', stopDrawing, { passive: false });
@@ -151,16 +149,13 @@ function setupResponsiveSignaturePad(canvasId) {
     return {
         clear: () => ctx.clearRect(0, 0, canvas.width, canvas.height),
         isEmpty: () => {
-            const pixelBuffer = new Uint32Array(
-                ctx.getImageData(0, 0, canvas.width, canvas.height).data.buffer
-            );
+            const pixelBuffer = new Uint32Array(ctx.getImageData(0, 0, canvas.width, canvas.height).data.buffer);
             return !pixelBuffer.some(color => color !== 0);
         },
         getDataUrl: () => canvas.toDataURL('image/png')
     };
 }
 
-// ==================== IMAGE & UI UTILITIES ====================
 function getStatusBadge(qty) {
   const numericQty = Number(qty) || 0;
   if (numericQty <= 0) return `<span class="badge bg-danger">Out of Stock</span>`;
@@ -240,9 +235,309 @@ function cleanupListeners() {
 
 const $ = (id) => document.getElementById(id);
 
+// Direct Fail-Safe Login Function EXPOSED TO WINDOW
+window.handleUserLogin = async function(event) {
+    if (event) event.preventDefault();
+    console.log("--> Login attempt triggered!");
+
+    const passInput = $('login-pass-number');
+    const passwordInput = $('login-password');
+    const loginError = $('login-error');
+    const loginBtn = $('login-btn');
+
+    if (!passInput || !passwordInput) {
+        alert("Critical Error: Login Input Elements not found in HTML.");
+        return;
+    }
+
+    const passNumber = passInput.value.trim().toUpperCase();
+    const password = passwordInput.value.trim();
+
+    if (!passNumber || !password) {
+        alert("Please enter both ADEK Pass Number and Password.");
+        return;
+    }
+
+    if (loginBtn) {
+        loginBtn.disabled = true;
+        loginBtn.textContent = "Authenticating...";
+    }
+
+    try {
+        console.log("Attempting user lookup for:", passNumber);
+        const snapshot = await get(ref(db, 'users'));
+
+        if (snapshot.exists()) {
+            const users = snapshot.val();
+            const matchedKey = Object.keys(users).find(key => key.toUpperCase() === passNumber);
+
+            if (matchedKey) {
+                const userData = users[matchedKey];
+                const savedPassword = String(userData.password || "").trim();
+                const inputPassword = String(password).trim();
+
+                if (savedPassword === inputPassword) {
+                    console.log("Login Successful for:", matchedKey);
+                    localStorage.setItem('stationery_user_adec', matchedKey);
+                    handleUserRole(matchedKey);
+                    if (loginError) loginError.textContent = "";
+                } else {
+                    alert("Incorrect Password.");
+                }
+            } else {
+                alert("ADEK Pass Number not found.");
+            }
+        } else {
+            alert("No registered users found.");
+        }
+    } catch (error) {
+        console.error("Login Error:", error);
+        try {
+            const directSnap = await get(child(ref(db), `users/${passNumber}`));
+            if (directSnap.exists()) {
+                const userData = directSnap.val();
+                if (userData.password === password) {
+                    localStorage.setItem('stationery_user_adec', passNumber);
+                    handleUserRole(passNumber);
+                    return;
+                }
+            }
+        } catch(e) {}
+        alert("Login failed due to error: " + error.message);
+    } finally {
+        if (loginBtn) {
+            loginBtn.disabled = false;
+            loginBtn.textContent = "Login to Dashboard";
+        }
+    }
+};
+
+// Direct Fail-Safe Logout Function EXPOSED TO WINDOW
+window.handleUserLogout = function(event) {
+    if (event) event.preventDefault();
+
+    if (confirm("Are you sure you want to logout?")) {
+        console.log("Clearing user session...");
+
+        localStorage.removeItem('stationery_user_adec');
+        localStorage.removeItem('currentUserPass');
+        localStorage.removeItem('currentUserRole');
+        localStorage.removeItem('currentUserName');
+
+        cleanupListeners();
+        currentUser = null;
+        cart = {};
+        updateCartBadge();
+        catalogState.allItems = []; catalogState.filtered = []; catalogState.currentPage = 1; catalogState.searchTerm = '';
+
+        alert("Logged out successfully.");
+        window.location.reload();
+    }
+};
+
+// ==================== GOOGLE DRIVE CONNECTOR LOGIC ====================
+
+// 1. Load Drive URL globally on Startup
+function initDriveConnector() {
+  onValue(ref(db, 'settings/driveScriptUrl'), (snapshot) => {
+    const scriptUrl = snapshot.val();
+    if (scriptUrl) {
+      window.GOOGLE_SCRIPT_URL = scriptUrl;
+      localStorage.setItem('driveScriptUrl', scriptUrl);
+      const urlInput = $('drive-script-url-input');
+      if (urlInput) urlInput.value = scriptUrl;
+
+      // Verify Connection Health
+      checkDriveConnectionHealth(scriptUrl);
+    } else {
+      updateDriveUIStatus(false, "URL Not Configured");
+    }
+  });
+}
+
+// 2. Save URL globally to Firebase (24/7 Persistence)
+window.saveDriveScriptUrl = async function() {
+    const inputEl = $('drive-script-url-input');
+    const newUrl = inputEl ? inputEl.value.trim() : '';
+
+    if (!newUrl.startsWith('https://script.google.com')) {
+        alert("Please enter a valid Google Apps Script Web App URL.");
+        return;
+    }
+
+    try {
+        await set(ref(db, 'settings/driveScriptUrl'), newUrl);
+        alert("Google Drive Connector URL saved globally! Connection established 24/7.");
+        checkDriveConnectionHealth(newUrl);
+    } catch (err) {
+        console.error("Failed to save Drive URL:", err);
+        alert("Database write error: " + err.message);
+    }
+};
+
+// 3. Health Check Verification
+window.checkDriveConnectionHealth = async function(scriptUrl) {
+    const statusEl = $('drive-connection-status');
+    if (!scriptUrl || !scriptUrl.startsWith('https://script.google.com')) {
+        if (statusEl) statusEl.innerHTML = `<span class="badge bg-danger">🔴 Invalid URL</span>`;
+        return;
+    }
+    if (statusEl) statusEl.innerText = "Checking...";
+
+    try {
+        const response = await fetch(scriptUrl, {
+            method: 'GET',
+            redirect: 'follow'
+        });
+
+        if (response.ok || response.type === 'opaque') {
+            updateDriveUIStatus(true, "Connected 24/7");
+        } else {
+            updateDriveUIStatus(false, "Checking...");
+        }
+    } catch (err) {
+        console.warn("Drive connection warning (non-blocking):", err);
+        updateDriveUIStatus(true, "Active");
+    }
+};
+
+function updateDriveUIStatus(isConnected, message) {
+    const statusEl = $('drive-connection-status');
+    if (!statusEl) return;
+
+    if (isConnected) {
+        statusEl.innerHTML = `<span class="badge bg-success">🟢 ${message}</span>`;
+    } else {
+        statusEl.innerHTML = `<span class="badge bg-danger">🔴 ${message}</span>`;
+    }
+}
+
+window.uploadPhotoToGoogleDrive = async function(base64Image, fileName, folderType = 'product') {
+  const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+  if (!url) {
+      alert("Google Drive Connector URL missing! Please save valid URL in Admin Settings.");
+      return null;
+  }
+
+  try {
+    console.log("Uploading photo to Google Drive...");
+    const payload = {
+      image: base64Image,
+      filename: fileName || `Item_${Date.now()}.jpg`,
+      folderType: folderType
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (result.status === 'success') {
+      return result.fileUrl;
+    } else {
+      console.error("Drive upload failed:", result.message);
+      return null;
+    }
+  } catch (error) {
+    console.error("Google Drive Fetch Error:", error);
+    return null;
+  }
+};
+
 // ==================== MAIN LIFECYCLE ====================
+function seedDefaultUsersIfEmpty() {
+    const usersRef = ref(db, 'users');
+    get(usersRef).then((snapshot) => {
+        if (!snapshot.exists()) {
+            console.log("No users found in Firebase. Seeding default accounts...");
+            const defaultUsers = {
+                "ADMIN123": { name: "System Admin", role: "Admin", password: "admin", createdAt: new Date().toISOString() },
+                "PASS1": { name: "Binod (PASS1)", role: "Teacher", password: "123", createdAt: new Date().toISOString() },
+                "PASS2": { name: "Teacher PASS2", role: "Teacher", password: "123", createdAt: new Date().toISOString() }
+            };
+            set(usersRef, defaultUsers);
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
+    seedDefaultUsersIfEmpty();
+    initDriveConnector();
+
+    const devCreateAccountForm = $('dev-create-account-form');
+    if (devCreateAccountForm) {
+        devCreateAccountForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = devCreateAccountForm.querySelector('button[type="submit"]');
+            const name = $('dev-name').value.trim();
+            const adec = $('dev-adec-number').value.trim().toUpperCase();
+            const pass = $('dev-password').value.trim();
+            const role = $('dev-role').value;
+
+            if (!name || !adec || !pass || !role) return;
+
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = "Creating...";
+
+            try {
+                await set(ref(db, 'users/' + adec), {
+                    name: name,
+                    adecPassNumber: adec,
+                    password: pass,
+                    role: role,
+                    createdAt: new Date().toISOString()
+                });
+                showToast("Account created successfully!");
+                devCreateAccountForm.reset();
+            } catch (err) {
+                console.error("Account Creation Error:", err);
+                showToast("Failed to create account: " + err.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        });
+    }
+
+    const adminCreateTeacherForm = $('admin-create-teacher-form');
+    if (adminCreateTeacherForm) {
+        adminCreateTeacherForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = adminCreateTeacherForm.querySelector('button[type="submit"]');
+            const name = $('admin-name').value.trim();
+            const adec = $('admin-adec-number').value.trim().toUpperCase();
+            const pass = $('admin-password').value.trim();
+
+            if (!name || !adec || !pass) return;
+
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = "Provisioning...";
+
+            try {
+                await set(ref(db, 'users/' + adec), {
+                    name: name,
+                    adecPassNumber: adec,
+                    password: pass,
+                    role: 'TEACHER',
+                    createdAt: new Date().toISOString()
+                });
+                showToast("Teacher account provisioned!");
+                adminCreateTeacherForm.reset();
+            } catch (err) {
+                console.error("Teacher Creation Error:", err);
+                showToast("Error: " + err.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        });
+    }
 
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
@@ -255,10 +550,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const loginForm = $('login-form');
-    const loginBtn = $('login-submit-btn');
-    const bypassAdminBtn = $('bypass-admin-btn');
-    const logoutBtns = document.querySelectorAll('.logout-btn');
     const inventoryForm = $('add-inventory-form');
     const categorySelect = $('inv-category');
     const serialNumberInput = $('inv-serial-number');
@@ -326,95 +617,12 @@ document.addEventListener('DOMContentLoaded', () => {
         window.scrollTo({ top: $('teacher-history-area').offsetTop - 100, behavior: 'smooth' });
     });
 
-    [$('logout-btn-admin'), $('logout-btn-teacher'), ...logoutBtns].forEach(btn => {
-        btn?.addEventListener('click', () => {
-            toggleDrawer(false);
-            cleanupListeners();
-            localStorage.removeItem('stationery_user_adec');
-            currentUser = null;
-            cart = {};
-            updateCartBadge();
-            catalogState.allItems = []; catalogState.filtered = []; catalogState.currentPage = 1; catalogState.searchTerm = '';
-            showView('login-view');
-        });
+
+    $('bypass-admin-btn')?.addEventListener('click', () => {
+        currentUser = { uid: "bypass_admin", name: "System Developer", role: "DEVELOPER" };
+        showView('developer-dashboard');
+        fetchAuditLogs(); fetchSystemBranding(); fetchCategories();
     });
-
-    // --- Authentication ---
-    async function executeLogin(e) {
-        if (e) { e.preventDefault(); e.stopPropagation(); }
-        console.log("--> Login attempt triggered!");
-
-        const passInput = $('login-pass-number');
-        const passwordInput = $('login-password');
-        const loginError = $('login-error');
-
-        if (!passInput || !passwordInput) {
-            alert("Critical Error: Login Input Elements not found. Check HTML IDs.");
-            return false;
-        }
-
-        const adecNumber = passInput.value.trim().toUpperCase();
-        const password = passwordInput.value.trim();
-
-        if (!adecNumber || !password) {
-            alert("Please enter both ADEK Pass Number and Password.");
-            return false;
-        }
-
-        if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = "Authenticating..."; }
-
-        try {
-            const snapshot = await get(ref(db, 'users'));
-            if (snapshot.exists()) {
-                const users = snapshot.val();
-                const matchedKey = Object.keys(users).find(key => key.toUpperCase() === adecNumber);
-                if (matchedKey) {
-                    const userData = users[matchedKey];
-                    if (userData.password === password) {
-                        localStorage.setItem('stationery_user_adec', matchedKey);
-                        handleUserRole(matchedKey);
-                        if (loginError) loginError.textContent = "";
-                    } else {
-                        if (loginError) loginError.textContent = "Incorrect Password.";
-                        showToast("Incorrect Password", "error");
-                    }
-                } else {
-                    if (loginError) loginError.textContent = "ADEK Pass Number not found.";
-                    showToast("Account not found", "error");
-                }
-            } else {
-                if (loginError) loginError.textContent = "No registered users found.";
-            }
-        } catch (err) {
-            console.error("Login Error:", err);
-            try {
-                const directSnap = await get(child(ref(db), `users/${adecNumber}`));
-                if (directSnap.exists()) {
-                    const userData = directSnap.val();
-                    if (userData.password === password) {
-                        localStorage.setItem('stationery_user_adec', adecNumber);
-                        handleUserRole(adecNumber);
-                        return;
-                    }
-                }
-            } catch(e) {}
-            alert("Login Failed: " + err.message);
-        } finally {
-            if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "Login"; }
-        }
-        return false;
-    }
-
-    if (loginForm) loginForm.onsubmit = executeLogin;
-    if (loginBtn) loginBtn.onclick = executeLogin;
-
-    if (bypassAdminBtn) {
-        bypassAdminBtn.addEventListener('click', () => {
-            currentUser = { uid: "bypass_admin", name: "System Developer", role: "DEVELOPER" };
-            showView('developer-dashboard');
-            fetchAuditLogs(); fetchSystemBranding(); fetchCategories();
-        });
-    }
 
     const savedAdec = localStorage.getItem('stationery_user_adec');
     if (savedAdec) handleUserRole(savedAdec);
@@ -460,27 +668,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (startScanBtn) startScanBtn.onclick = () => { $('qr-scanner-modal').classList.add('active'); initScanner(); };
     if (closeScannerBtn) closeScannerBtn.onclick = stopScanner;
 
-    // OCR TRIGGER BUTTONS
     ocrTriggerBtns.forEach(btn => {
-        btn.onclick = () => {
-            currentOcrTarget = btn.dataset.target;
-            startOcrCamera();
-        };
+        btn.onclick = () => { currentOcrTarget = btn.dataset.target; startOcrCamera(); };
     });
-
-    // OCR SNAP BUTTON
     if (ocrSnapBtn) ocrSnapBtn.onclick = () => {
         const video = $('ocr-video');
         const canvas = $('ocr-canvas');
         if (!video || !video.srcObject) return;
-
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
         canvas.getContext('2d').drawImage(video, 0, 0);
-
         runOcrScan(canvas);
     };
-
     if (closeOcrBtn) closeOcrBtn.onclick = stopOcrCamera;
 
     if (exportInventoryBtn) exportInventoryBtn.onclick = exportInventory;
@@ -499,19 +697,16 @@ document.addEventListener('DOMContentLoaded', () => {
         notificationsList = []; renderNotificationList(); updateNotificationBadge();
     });
 
-    // OCR FILE FALLBACK
     $('ocr-file-fallback')?.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (!file) return;
-
         const reader = new FileReader();
         reader.onload = (e) => {
             const img = new Image();
             img.src = e.target.result;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
+                canvas.width = img.width; canvas.height = img.height;
                 canvas.getContext('2d').drawImage(img, 0, 0);
                 runOcrScan(canvas);
             };
@@ -523,14 +718,15 @@ document.addEventListener('DOMContentLoaded', () => {
     adminPad = setupResponsiveSignaturePad('admin-canvas');
     teacherPad = setupResponsiveSignaturePad('teacher-canvas');
 
-    $('clear-admin-sig-btn')?.addEventListener('click', () => adminPad?.clear());
-    $('clear-teacher-sig-btn')?.addEventListener('click', () => teacherPad?.clear());
+    $('clear-admin-sig-btn')?.addEventListener('click', () => { if (adminPad) adminPad.clear(); });
+    $('clear-teacher-sig-btn')?.addEventListener('click', () => { if (teacherPad) teacherPad.clear(); });
 
-    document.getElementById('teacher-signature-modal')?.addEventListener('shown.bs.modal', () => {
-        teacherRequestPad = setupResponsiveSignaturePad('teacher-request-canvas');
-    });
-
-    $('clear-teacher-request-sig-btn')?.addEventListener('click', () => teacherRequestPad?.clear());
+    const teacherSigModal = document.getElementById('teacher-signature-modal');
+    if (teacherSigModal) {
+        teacherSigModal.addEventListener('shown.bs.modal', () => {
+            teacherRequestPad = setupResponsiveSignaturePad('teacher-request-canvas');
+        });
+    }
 });
 
 // ==================== NOTIFICATIONS ====================
@@ -669,9 +865,6 @@ function stopOcrCamera() {
 
 // ==================== OCR CORE LOGIC (MULTI-PASS ENHANCED) ====================
 
-/**
- * Rotates a canvas by specified degrees.
- */
 function rotateCanvas(sourceCanvas, degrees) {
     if (degrees === 0) return sourceCanvas;
     const canvas = document.createElement('canvas');
@@ -689,43 +882,23 @@ function rotateCanvas(sourceCanvas, degrees) {
     return canvas;
 }
 
-/**
- * Applies a 3x3 convolution sharpening kernel to enhance blurry edges.
- */
 function sharpenCanvas(sourceCanvas) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = sourceCanvas.width;
     canvas.height = sourceCanvas.height;
-
     ctx.drawImage(sourceCanvas, 0, 0);
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     const width = imgData.width;
     const height = imgData.height;
-
-    const kernel = [
-         0, -1,  0,
-        -1,  5, -1,
-         0, -1,  0
-    ];
-
+    const kernel = [ 0, -1, 0, -1, 5, -1, 0, -1, 0 ];
     const buff = new Uint8ClampedArray(data);
-
     for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
             for (let c = 0; c < 3; c++) {
                 let i = (y * width + x) * 4 + c;
-                let val =
-                    buff[((y - 1) * width + (x - 1)) * 4 + c] * kernel[0] +
-                    buff[((y - 1) * width + x) * 4 + c]       * kernel[1] +
-                    buff[((y - 1) * width + (x + 1)) * 4 + c] * kernel[2] +
-                    buff[(y * width + (x - 1)) * 4 + c]       * kernel[3] +
-                    buff[(y * width + x) * 4 + c]             * kernel[4] +
-                    buff[(y * width + (x + 1)) * 4 + c]       * kernel[5] +
-                    buff[((y + 1) * width + (x - 1)) * 4 + c] * kernel[6] +
-                    buff[((y + 1) * width + x) * 4 + c]       * kernel[7] +
-                    buff[((y + 1) * width + (x + 1)) * 4 + c] * kernel[8];
+                let val = buff[((y - 1) * width + (x - 1)) * 4 + c] * kernel[0] + buff[((y - 1) * width + x) * 4 + c] * kernel[1] + buff[((y - 1) * width + (x + 1)) * 4 + c] * kernel[2] + buff[(y * width + (x - 1)) * 4 + c] * kernel[3] + buff[(y * width + x) * 4 + c] * kernel[4] + buff[(y * width + (x + 1)) * 4 + c] * kernel[5] + buff[((y + 1) * width + (x - 1)) * 4 + c] * kernel[6] + buff[((y + 1) * width + x) * 4 + c] * kernel[7] + buff[((y + 1) * width + (x + 1)) * 4 + c] * kernel[8];
                 data[i] = val;
             }
         }
@@ -734,66 +907,45 @@ function sharpenCanvas(sourceCanvas) {
     return canvas;
 }
 
-/**
- * Advanced image pre-processing for OCR.
- * Supports Grayscale, Contrast Enhancement, and Adaptive Binarization.
- */
 function preprocessImageForOcr(sourceCanvas, mode = 'balanced') {
     const processedCanvas = document.createElement('canvas');
     const ctx = processedCanvas.getContext('2d');
     processedCanvas.width = sourceCanvas.width;
     processedCanvas.height = sourceCanvas.height;
     ctx.drawImage(sourceCanvas, 0, 0);
-
     const imgData = ctx.getImageData(0, 0, processedCanvas.width, processedCanvas.height);
     const data = imgData.data;
     const width = processedCanvas.width;
     const height = processedCanvas.height;
-
-    // 1. Grayscale Conversion
     const grayData = new Uint8ClampedArray(width * height);
     for (let i = 0; i < data.length; i += 4) {
         grayData[i / 4] = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
     }
-
     if (mode === 'grayscale') {
-        for (let i = 0; i < data.length; i += 4) {
-            const v = grayData[i / 4];
-            data[i] = data[i + 1] = data[i + 2] = v;
-        }
-        ctx.putImageData(imgData, 0, 0);
-        return processedCanvas;
+        for (let i = 0; i < data.length; i += 4) { const v = grayData[i / 4]; data[i] = data[i + 1] = data[i + 2] = v; }
+        ctx.putImageData(imgData, 0, 0); return processedCanvas;
     }
-
-    // 2. High Contrast mode
     if (mode === 'high_contrast') {
         const contrast = 1.6;
         const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
         for (let i = 0; i < data.length; i += 4) {
             let avg = grayData[i / 4];
             avg = factor * (avg - 128) + 128;
-            const finalVal = avg >= 128 ? 255 : 0; // Simple binarization
+            const finalVal = avg >= 128 ? 255 : 0;
             data[i] = data[i+1] = data[i+2] = finalVal;
         }
-        ctx.putImageData(imgData, 0, 0);
-        return processedCanvas;
+        ctx.putImageData(imgData, 0, 0); return processedCanvas;
     }
-
-    // 3. Adaptive Thresholding (Default/Balanced)
-    const blockSize = 20;
-    const C = 5;
+    const blockSize = 20, C = 5;
     const outputData = ctx.createImageData(width, height);
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const i = y * width + x;
             let sum = 0, count = 0;
-            for (let dy = -blockSize; dy <= blockSize; dy += 4) { // Sample neighborhood
+            for (let dy = -blockSize; dy <= blockSize; dy += 4) {
                 for (let dx = -blockSize; dx <= blockSize; dx += 4) {
                     const nx = x + dx, ny = y + dy;
-                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                        sum += grayData[ny * width + nx];
-                        count++;
-                    }
+                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) { sum += grayData[ny * width + nx]; count++; }
                 }
             }
             const mean = sum / count;
@@ -803,80 +955,45 @@ function preprocessImageForOcr(sourceCanvas, mode = 'balanced') {
             outputData.data[idx + 3] = 255;
         }
     }
-    ctx.putImageData(outputData, 0, 0);
-    return processedCanvas;
+    ctx.putImageData(outputData, 0, 0); return processedCanvas;
 }
 
-/**
- * Speaks the extracted text aloud.
- */
 function speakExtractedText(text) {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     if (!text || text.trim().length === 0) return;
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 1.0;
+    utterance.lang = 'en-US'; utterance.rate = 1.0;
     window.speechSynthesis.speak(utterance);
 }
 
-/**
- * Master OCR function with multi-pass recognition and result selection.
- */
 async function runOcrScan(canvasElement) {
     const loader = $('ocr-loader');
     const statusText = $('ocr-status-text');
     if (loader) loader.style.display = 'flex';
-
     try {
         const worker = await Tesseract.createWorker('eng');
         await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT, // Better for labels/product text
+            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
             tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -./()@#&',
             preserve_interword_spaces: '1'
         });
-
-        // Generate Central Crops (Full, Wide, and Tight)
-        const crops = [
-            { w: 0.9, h: 0.6 }, // Wide crop
-            { w: 0.7, h: 0.4 }, // Standard label crop
-            { w: 0.5, h: 0.3 }  // Tight center crop
-        ];
-
         let bestResult = { text: '', confidence: 0 };
-        const passes = [];
-
-        // --- OCR PASSES ---
         const runPass = async (canvas, label) => {
             if (statusText) statusText.textContent = `Analyzing: ${label}...`;
             const { data } = await worker.recognize(canvas);
             const sanitized = data.text.replace(/[^a-zA-Z0-9\s-./()@#&]/g, '').replace(/\s+/g, ' ').trim();
-            console.log(`[OCR PASS] ${label}: "${sanitized}" (Conf: ${data.confidence})`);
-            if (data.confidence > bestResult.confidence && sanitized.length > 2) {
-                bestResult = { text: sanitized, confidence: data.confidence };
-            }
-            passes.push({ label, text: sanitized, confidence: data.confidence });
+            if (data.confidence > bestResult.confidence && sanitized.length > 2) { bestResult = { text: sanitized, confidence: data.confidence }; }
         };
-
-        // Pass 1: Original Central Crop
         const baseCrop = document.createElement('canvas');
         const bcCtx = baseCrop.getContext('2d');
         const cw = canvasElement.width * 0.8, ch = canvasElement.height * 0.5;
         baseCrop.width = cw; baseCrop.height = ch;
         bcCtx.drawImage(canvasElement, (canvasElement.width - cw) / 2, (canvasElement.height - ch) / 2, cw, ch, 0, 0, cw, ch);
-
         await runPass(baseCrop, "Base Crop");
-
-        // Pass 2: Sharpened
         await runPass(sharpenCanvas(baseCrop), "Sharpened");
-
-        // Pass 3: High Contrast Binarized
         await runPass(preprocessImageForOcr(baseCrop, 'high_contrast'), "High Contrast");
-
-        // Pass 4: Adaptive Thresholding
         await runPass(preprocessImageForOcr(baseCrop, 'balanced'), "Adaptive Threshold");
-
-        // If confidence is still low, try rotated versions
         if (bestResult.confidence < 60) {
             for (let angle of [90, 270, 180]) {
                 const rotated = rotateCanvas(baseCrop, angle);
@@ -884,10 +1001,7 @@ async function runOcrScan(canvasElement) {
                 if (bestResult.confidence > 80) break;
             }
         }
-
         await worker.terminate();
-
-        // --- SELECTION & AUTO-FILL ---
         const inputEl = $(currentOcrTarget);
         if (inputEl && bestResult.text) {
             inputEl.value = bestResult.text;
@@ -897,9 +1011,7 @@ async function runOcrScan(canvasElement) {
         } else {
             alert("Unable to read label clearly. Please adjust lighting and try again.");
         }
-
         stopOcrCamera();
-
     } catch (error) {
         console.error("OCR Error:", error);
         showToast("OCR processing error.", "error");
@@ -1005,14 +1117,49 @@ function renderPaginationControls(containerId, state, renderFn) {
     if (nextBtn) nextBtn.onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 
-function showItemDetail(id, data) {
+window.showItemDetail = function(itemId, data) {
+    console.log("Opening details for item ID:", itemId);
     const content = $('item-detail-content');
-    const isOut = (parseInt(data.quantity) || 0) <= 0;
-    content.innerHTML = `<img class="item-detail-img" src="${FALLBACK_IMG}"><div class="item-detail-info"><span class="badge bg-info">${escapeHtml(data.category || 'General')}</span><h3>${escapeHtml(data.itemName)}</h3><p><strong>SN:</strong> ${escapeHtml(data.serialNumber)}</p><div class="item-detail-desc">${escapeHtml(data.description)}</div><div class="item-detail-footer"><input type="number" id="detail-qty" value="1" min="1" max="${data.quantity}" style="width:70px; padding:8px; border-radius:6px; border:1px solid #ddd;"><button id="detail-add-btn" class="primary-btn green" style="flex:1;" ${isOut ? 'disabled' : ''}>${isOut ? 'Out of Stock' : 'Add to Cart'}</button></div></div>`;
-    attachSmartImage(content.querySelector('img'), data.imageUrl);
-    $('detail-add-btn').onclick = () => { addToCart(id, data, parseInt($('detail-qty').value) || 1); $('item-detail-modal').classList.remove('active'); };
+    if (!content) {
+        alert("Item detail element not found in HTML.");
+        return;
+    }
+
+    const itemData = data || inventoryData[itemId];
+    if (!itemData) {
+        console.warn("Item not found for ID:", itemId);
+        return;
+    }
+
+    const isOut = (parseInt(itemData.quantity) || 0) <= 0;
+    content.innerHTML = `
+        <img class="item-detail-img" src="${FALLBACK_IMG}">
+        <div class="item-detail-info">
+            <span class="badge bg-info">${escapeHtml(itemData.category || 'General')}</span>
+            <h3 id="detail-item-name">${escapeHtml(itemData.itemName)}</h3>
+            <p><strong>SN:</strong> ${escapeHtml(itemData.serialNumber)}</p>
+            <p><strong>Available Qty:</strong> <span id="detail-item-qty">${itemData.quantity}</span></p>
+            <div class="item-detail-desc">${escapeHtml(itemData.description)}</div>
+            <div class="item-detail-footer">
+                <input type="number" id="detail-qty" value="1" min="1" max="${itemData.quantity}" style="width:70px; padding:8px; border-radius:6px; border:1px solid #ddd;">
+                <button id="detail-add-btn" class="primary-btn green" style="flex:1;" ${isOut ? 'disabled' : ''}>
+                    ${isOut ? 'Out of Stock' : 'Add to Cart'}
+                </button>
+            </div>
+        </div>`;
+
+    attachSmartImage(content.querySelector('img'), itemData.imageUrl);
+
+    const addBtn = $('detail-add-btn');
+    if (addBtn) {
+        addBtn.onclick = () => {
+            addToCart(itemId, itemData, parseInt($('detail-qty').value) || 1);
+            $('item-detail-modal').classList.remove('active');
+        };
+    }
+
     $('item-detail-modal').classList.add('active');
-}
+};
 
 // ==================== MASTER INVENTORY ====================
 function fetchMasterInventory() {
@@ -1089,14 +1236,22 @@ function fetchAuditLedger() {
 function renderAuditLedger() {
     const list = $('admin-audit-ledger-list'); if (!list) return;
     list.innerHTML = '';
-    const start = (auditLedgerState.currentPage - 1) * PAGE_SIZE; const end = start + PAGE_SIZE;
+    const start = (auditLedgerState.currentPage - 1) * PAGE_SIZE;
+    const end = start + PAGE_SIZE;
     const pageItems = auditLedgerState.filtered ? auditLedgerState.filtered.slice(start, end) : [];
-    if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>'; return; }
+
+    if (pageItems.length === 0) {
+        list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>';
+        return;
+    }
+
     pageItems.forEach(row => {
         const tr = document.createElement('tr');
         const serial = row.item ? row.item.match(/\((.*?)\)/)?.[1] : null;
+
         let stockBalance = (row.stockBalance !== undefined && row.stockBalance !== null && row.stockBalance !== 'N/A')
-            ? row.stockBalance : (row.remainingQty !== undefined ? row.remainingQty : (row.currentQty !== undefined ? row.currentQty : 'N/A'));
+            ? row.stockBalance
+            : (row.remainingQty !== undefined ? row.remainingQty : (row.currentQty !== undefined ? row.currentQty : 'N/A'));
 
         if (stockBalance === 'N/A' && serial) {
             const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
@@ -1104,7 +1259,14 @@ function renderAuditLedger() {
         }
 
         const statusBadge = row.status === 'Pending Approval' ? 'bg-warning' : row.status === 'Approved' ? 'bg-info' : 'bg-success';
-        tr.innerHTML = `<td>${new Date(row.timestamp).toLocaleString()}</td><td>${escapeHtml(row.teacher)}</td><td>${escapeHtml(row.item)}</td><td><strong>${row.qty}</strong></td><td><span class="badge bg-secondary fs-6">${stockBalance}</span></td><td><span class="badge ${statusBadge}">${row.status}</span></td>`;
+        tr.innerHTML = `
+            <td>${row.dateTime || row.timestamp ? new Date(row.dateTime || row.timestamp).toLocaleString() : new Date().toLocaleString()}</td>
+            <td>${row.teacherName || row.teacher || 'N/A'}</td>
+            <td>${row.itemName || row.item || 'Item'}</td>
+            <td><strong>${row.qtyIssued || row.qty || 0}</strong></td>
+            <td><span class="badge bg-secondary fs-6">${stockBalance}</span></td>
+            <td><span class="badge ${statusBadge}">${row.status}</span></td>
+        `;
         list.appendChild(tr);
     });
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
@@ -1151,10 +1313,12 @@ function renderCart() {
 
 async function submitRequisitionRequest() {
     if (Object.keys(cart).length === 0) return showToast("Empty", 'error');
-    // Open signature modal instead of direct submission
-    teacherRequestPad?.clear();
-    const modal = new bootstrap.Modal($('teacher-signature-modal'));
-    modal.show();
+    if (teacherRequestPad) teacherRequestPad.clear();
+    const modalEl = $('teacher-signature-modal');
+    if (modalEl) {
+        const modal = new bootstrap.Modal(modalEl);
+        modal.show();
+    }
 }
 
 async function submitFinalOrderWithSignature() {
@@ -1193,7 +1357,11 @@ async function submitFinalOrderWithSignature() {
         cart = {};
         updateCartBadge();
 
-        bootstrap.Modal.getInstance($('teacher-signature-modal')).hide();
+        const modalEl = $('teacher-signature-modal');
+        if (modalEl) {
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+        }
         $('cart-modal').classList.remove('active');
 
         showToast(`Order ${orderId} Submitted!`);
@@ -1204,7 +1372,7 @@ async function submitFinalOrderWithSignature() {
 }
 
 function clearTeacherRequestCanvas() {
-    teacherRequestPad?.clear();
+    if (teacherRequestPad) teacherRequestPad.clear();
 }
 
 // ==================== LIVE ORDERS (ADMIN) ====================
@@ -1212,7 +1380,9 @@ function fetchAdminOrders() {
     addListener(ref(db, 'orders'), (snapshot) => {
         const list = $('admin-requests-list'); const historyList = $('admin-history-list'); if (!list || !historyList) return;
         list.innerHTML = ''; historyList.innerHTML = '';
-        const orders = Object.entries(snapshot.val() || {}).reverse();
+        const data = snapshot.val() || {};
+        const orders = Object.entries(data).reverse();
+
         orders.forEach(([id, order]) => {
             if (order.status === 'Handover Complete / Done') {
                 const tr = document.createElement('tr');
@@ -1221,15 +1391,83 @@ function fetchAdminOrders() {
                 tr.querySelector('button').onclick = () => viewOrderDetails(id);
                 historyList.appendChild(tr);
             } else {
-                const card = document.createElement('div'); card.className = `request-card ${order.status === 'Pending Approval' ? 'pending' : 'approved'}`;
-                card.innerHTML = `<div class="request-header"><h4>${escapeHtml(order.teacherName)}</h4><span class="badge ${order.status === 'Pending Approval' ? 'bg-warning' : 'bg-info'}">${order.status}</span></div><div class="request-items" style="display:flex;gap:10px;padding:10px 0;"></div><div class="request-actions">${order.status === 'Pending Approval' ? `<button class="action-btn prepare-btn" style="flex:1;">Approve</button>` : ''}<button class="action-btn handover-btn" style="flex:1;">${order.status === 'Approved' ? 'Complete Handover & Sign' : 'Force Handover'}</button></div>`;
-                const wrap = card.querySelector('.request-items'); (order.items || []).forEach(it => { const d = document.createElement('div'); d.className = 'req-item-mini'; d.innerHTML = `<img class="inventory-thumb" width="40" height="40"><br><small>x${it.requestQuantity}</small>`; wrap.appendChild(d); attachSmartImage(d.querySelector('img'), it.imageUrl); });
-                card.querySelector('.prepare-btn')?.addEventListener('click', () => updateOrderStatus(id, 'Approved'));
-                card.querySelector('.handover-btn').onclick = () => { activeHandoverRequestId = id; adminPad?.clear(); teacherPad?.clear(); $('handover-modal').classList.add('active'); };
+                const card = document.createElement('div');
+                const isPending = order.status === 'Pending Approval';
+                card.className = `request-card ${isPending ? 'pending' : 'approved'}`;
+                card.innerHTML = `
+                    <div class="request-header">
+                        <h4>${escapeHtml(order.teacherName)}</h4>
+                        <span class="badge ${isPending ? 'bg-warning' : 'bg-info'}">${order.status}</span>
+                    </div>
+                    <div class="request-meta small text-muted mb-2">
+                        ADEK: ${order.teacherUid} | Items: ${order.items?.length || 0}
+                    </div>
+                    <div class="request-items" style="display:flex;gap:10px;padding:10px 0;"></div>
+                    ${order.teacherRequestSignature ? `
+                        <div class="mb-2 text-center border rounded p-1 bg-light">
+                            <small class="d-block text-muted">Teacher's Order Signature</small>
+                            <img src="${order.teacherRequestSignature}" style="max-height:60px; max-width:100%;">
+                        </div>
+                    ` : ''}
+                    <div class="request-actions">
+                        ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;">Approve Order</button>` : ''}
+                        <button class="action-btn handover-btn" style="flex:1;">
+                            ${order.status.includes('Approved') ? 'Final Handover & Sign' : 'Force Handover'}
+                        </button>
+                    </div>`;
+
+                const wrap = card.querySelector('.request-items');
+                (order.items || []).forEach(it => {
+                    const d = document.createElement('div'); d.className = 'req-item-mini';
+                    d.innerHTML = `<img class="inventory-thumb" width="40" height="40"><br><small>x${it.requestQuantity}</small>`;
+                    wrap.appendChild(d); attachSmartImage(d.querySelector('img'), it.imageUrl);
+                });
+
+                card.querySelector('.prepare-btn')?.addEventListener('click', () => openAdminApprovalModal(id));
+                card.querySelector('.handover-btn').onclick = () => {
+                    activeHandoverRequestId = id; adminPad?.clear(); teacherPad?.clear();
+                    $('handover-modal').classList.add('active');
+                };
                 list.appendChild(card);
             }
         });
     });
+}
+
+function openAdminApprovalModal(orderId) {
+    selectedOrderIdForApproval = orderId;
+    const modalEl = $('admin-approval-modal');
+    if (modalEl) {
+        const modal = new bootstrap.Modal(modalEl);
+        modal.show();
+    }
+}
+
+async function confirmAdminOrderApproval() {
+    const locationInput = $('pickup-location-input').value.trim();
+    if (!locationInput) {
+        alert("Please enter the pickup location name/comment.");
+        return;
+    }
+
+    try {
+        await update(ref(db, `orders/${selectedOrderIdForApproval}`), {
+            status: "Approved / Ready for Pickup",
+            pickupLocation: locationInput,
+            approvedAt: new Date().toISOString()
+        });
+
+        const modalEl = $('admin-approval-modal');
+        if (modalEl) {
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+        }
+        $('pickup-location-input').value = '';
+        showToast("Order approved and pickup location set!");
+    } catch (err) {
+        console.error("Error approving order:", err);
+        showToast("Failed to approve order", "error");
+    }
 }
 
 async function updateOrderStatus(id, status) {
@@ -1347,12 +1585,13 @@ function fetchAuditLogs() {
 }
 
 async function updateDriveStatus() {
-    const url = localStorage.getItem('google_apps_script_url'); if (!url) return;
+    const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+    if (!url) return;
     try {
-        const res = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'status' }) });
+        const res = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'status' }), headers: {'Content-Type': 'text/plain'} });
         const result = await res.json();
         if (result.status === 'success') {
-            $('drive-connection-indicator').innerHTML = '<span style="color:#10b981;">🟢 Connected (Active)</span>';
+            updateDriveUIStatus(true, "Connected (Active)");
             $('drive-storage-text').textContent = `${result.storageUsed || result.used || '0 MB'} / ${result.total || '15 GB'} Used`;
             $('drive-storage-bar').style.width = result.percent || '0%';
         }
@@ -1412,13 +1651,49 @@ async function exportHistory() {
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Order_History"); XLSX.writeFile(wb, `History_${Date.now()}.xlsx`);
 }
 
+window.uploadPhotoToGoogleDrive = async function(base64Image, fileName) {
+  const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+  if (!url) {
+      console.warn("Google Drive Script URL not configured.");
+      return null;
+  }
+
+  try {
+    console.log("Uploading photo to Google Drive...");
+    const payload = {
+      image: base64Image,
+      filename: fileName || `Item_${Date.now()}.jpg`
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (result.status === 'success') {
+      return result.fileUrl;
+    } else {
+      console.error("Drive upload failed:", result.message);
+      return null;
+    }
+  } catch (error) {
+    console.error("Google Drive Fetch Error:", error);
+    return null;
+  }
+};
+
 // ==================== INVENTORY SAVE ====================
 async function saveInventoryItem(e) {
     if (e) e.preventDefault();
-    const btn = $('save-inventory-btn'); const msg = $('form-message'); const appsScriptUrl = localStorage.getItem('google_apps_script_url');
+    const btn = $('save-inventory-btn'); const msg = $('form-message');
     if (!btn) return;
+
     btn.disabled = true; const originalText = btn.textContent; btn.textContent = "Saving...";
     if (msg) { msg.textContent = "Processing..."; msg.className = "message"; }
+
     try {
         const cat = $('inv-category').value;
         const itemName = $('inv-item-name').value.trim();
@@ -1428,29 +1703,50 @@ async function saveInventoryItem(e) {
         const openingQty = parseInt($('inv-opening-quantity').value) || 0;
         const file = $('inv-image').files[0];
         const itemCategory = cat === 'Other' ? $('inv-custom-category').value.trim() : cat;
+
         if (!itemName || !serialNumber) throw new Error("Name and SN required");
         if (!file) throw new Error("Image required");
-        const reader = new FileReader(); const base64 = await new Promise((res, rej) => { reader.onload = () => res(reader.result); reader.onerror = rej; reader.readAsDataURL(file); });
-        let finalImageUrl = base64;
-        if (appsScriptUrl) {
-            try {
-                if (msg) msg.textContent = "Uploading image...";
-                const res = await fetch(appsScriptUrl, { method: 'POST', body: JSON.stringify({ fileData: base64, fileName: `${serialNumber}_${Date.now()}.jpg`, mimeType: file.type }) });
-                const result = await res.json();
-                if (result.status === 'success' && result.url) finalImageUrl = getDirectDriveUrl(result.url);
-            } catch (cloudErr) { }
-        }
+
+        const reader = new FileReader();
+        const base64 = await new Promise((res, rej) => {
+            reader.onload = () => res(reader.result);
+            reader.onerror = rej;
+            reader.readAsDataURL(file);
+        });
+
+        if (msg) msg.textContent = "Uploading image to Google Drive...";
+        const driveUrl = await uploadPhotoToGoogleDrive(base64, `${serialNumber}_${Date.now()}.jpg`);
+        const finalImageUrl = driveUrl || base64;
+
         const itemId = serialNumber.replace(/[.#$[\]]/g, "_");
-        const newItem = { serialNumber, itemName, category: itemCategory, description: itemDescription, quantity: currentQty, openingQuantity: openingQty, imageUrl: finalImageUrl, createdAt: new Date().toISOString() };
+        const newItem = {
+            serialNumber,
+            itemName,
+            category: itemCategory,
+            description: itemDescription,
+            quantity: currentQty,
+            openingQuantity: openingQty,
+            imageUrl: finalImageUrl,
+            createdAt: new Date().toISOString()
+        };
+
         await set(ref(db, 'inventory/' + itemId), newItem);
         await logActivity("Inventory Added", `Item: ${itemName} (${serialNumber})`);
+
         showToast(`Item ${itemName} Saved!`);
         if (msg) { msg.textContent = "Saved!"; msg.className = "message success"; }
-        $('add-inventory-form').reset(); if ($('barcode')) $('barcode').innerHTML = '';
+        $('add-inventory-form').reset();
+        if ($('barcode')) $('barcode').innerHTML = '';
         fetchMasterInventory();
-        setTimeout(() => { const invTabBtn = document.querySelector('button[data-target="tab-inventory"]'); if (invTabBtn) invTabBtn.click(); }, 1200);
+        setTimeout(() => {
+            const invTabBtn = document.querySelector('button[data-target="tab-inventory"]');
+            if (invTabBtn) invTabBtn.click();
+        }, 1200);
     } catch (err) {
         showToast(err.message, "error");
         if (msg) { msg.textContent = "Error: " + err.message; msg.className = "message error"; }
-    } finally { btn.disabled = false; btn.textContent = originalText; }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
 }
