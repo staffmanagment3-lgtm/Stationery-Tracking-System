@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.0.2";
+const APP_VERSION = "1.0.4";
 
 // Auto Cache Purge Logic
 (function checkAppVersion() {
@@ -12,14 +12,12 @@ const APP_VERSION = "1.0.2";
     if (savedVersion !== APP_VERSION) {
         console.log(`Version change detected: ${savedVersion} -> ${APP_VERSION}. Clearing old caches...`);
 
-        // Clear Cache Storage
         if ('caches' in window) {
             caches.keys().then(names => {
                 for (let name of names) caches.delete(name);
             });
         }
 
-        // Unregister Old Service Workers
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(registrations => {
                 for (let registration of registrations) registration.unregister();
@@ -27,7 +25,6 @@ const APP_VERSION = "1.0.2";
         }
 
         localStorage.setItem('app_installed_version', APP_VERSION);
-        // Hard reload bypass cache
         window.location.reload(true);
     }
 })();
@@ -69,85 +66,47 @@ let activeHandoverRequestId = null;
 let unsubscribeListeners = [];
 let html5QrCode = null;
 let ocrStream = null;
-let currentOcrTarget = null; // Global target for OCR extraction
+let currentOcrTarget = null;
 let notificationsList = [];
 
-const catalogState = {
-    allItems: [],
-    filtered: [],
-    currentPage: 1,
-    searchTerm: '',
-    prefetchCache: new Map(),
-};
-
-const adminInventoryState = {
-    allItems: [],
-    filtered: [],
-    currentPage: 1,
-    searchTerm: '',
-};
-
-const auditLedgerState = {
-    allItems: [],
-    filtered: [],
-    currentPage: 1,
-};
-
-const teacherOrdersState = {
-    allItems: [],
-    filtered: [],
-    currentPage: 1,
-};
+const catalogState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
+const adminInventoryState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
+const auditLedgerState = { allItems: [], filtered: [], currentPage: 1 };
+const teacherOrdersState = { allItems: [], filtered: [], currentPage: 1 };
 
 const alertedRequests = new Set();
 
-// ==================== IMAGE UTILITIES ====================
+// ==================== IMAGE & UI UTILITIES ====================
 function getStatusBadge(qty) {
-    const numericQty = Number(qty) || 0;
-    if (numericQty <= 0) {
-        return `<span class="badge bg-danger">Out of Stock</span>`;
-    } else if (numericQty <= 5) {
-        return `<span class="badge bg-warning text-dark">Low Stock (${numericQty})</span>`;
-    } else {
-        return `<span class="badge bg-success">In Stock</span>`;
-    }
+  const numericQty = Number(qty) || 0;
+  if (numericQty <= 0) return `<span class="badge bg-danger">Out of Stock</span>`;
+  if (numericQty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${numericQty})</span>`;
+  return `<span class="badge bg-success">In Stock</span>`;
 }
 
 function getDirectDriveUrl(url, endpointIndex = 0) {
     if (!url) return FALLBACK_IMG;
     if (url.startsWith('data:image')) return url;
-
     const match = url.match(/(?:id=|\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})/);
     if (!match || !match[1]) return url;
-
     const fileId = match[1];
     const endpoints = [
         `https://lh3.googleusercontent.com/d/${fileId}`,
         `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`,
         `https://drive.google.com/uc?export=view&id=${fileId}`
     ];
-
     return endpoints[endpointIndex % endpoints.length];
 }
 
 window.handleImageError = function(imgElement, originalUrl) {
     let retries = parseInt(imgElement.getAttribute('data-retries') || '0');
-    const maxRetries = 3;
-
-    if (retries < maxRetries) {
+    if (retries < 3) {
         retries++;
         imgElement.setAttribute('data-retries', retries);
-
-        const newUrl = getDirectDriveUrl(originalUrl, retries) + (originalUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
-        console.log(`Retrying image load (${retries}/${maxRetries}) with alternate endpoint: ${newUrl}`);
-
-        setTimeout(() => {
-            imgElement.src = newUrl;
-        }, 800 * retries);
+        const newUrl = getDirectDriveUrl(originalUrl, retries) + '?t=' + Date.now();
+        setTimeout(() => { imgElement.src = newUrl; }, 800 * retries);
     } else {
-        console.warn('Max retries reached for image:', originalUrl);
         imgElement.src = FALLBACK_IMG;
-        imgElement.classList.add('img-fallback');
         imgElement.onerror = null;
     }
 };
@@ -156,18 +115,15 @@ function attachSmartImage(imgEl, rawUrl) {
     const url = getDirectDriveUrl(rawUrl, 0);
     imgEl.classList.add('lazy-load');
     imgEl.setAttribute('data-retries', '0');
-
     imgEl.onload = () => {
         imgEl.classList.remove('lazy-load');
         imgEl.classList.add('loaded');
         imgEl.parentElement?.classList.remove('skeleton');
     };
-
     imgEl.onerror = () => handleImageError(imgEl, rawUrl);
     imgEl.src = url;
 }
 
-// ==================== UTILITIES ====================
 function escapeHtml(text) {
     if (text === null || text === undefined) return '';
     const div = document.createElement('div');
@@ -211,11 +167,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.log('SW Registered successfully:', reg.scope);
                     reg.update();
                 })
-                .catch(err => console.warn('ServiceWorker registration skipped/failed:', err));
+                .catch(err => console.warn('ServiceWorker registration failed:', err));
         });
     }
 
     const loginForm = $('login-form');
+    const loginBtn = $('login-submit-btn');
     const bypassAdminBtn = $('bypass-admin-btn');
     const logoutBtns = document.querySelectorAll('.logout-btn');
     const inventoryForm = $('add-inventory-form');
@@ -262,14 +219,12 @@ document.addEventListener('DOMContentLoaded', () => {
     closeDrawerBtn?.addEventListener('click', () => toggleDrawer(false));
     drawerOverlay?.addEventListener('click', () => toggleDrawer(false));
 
-    const drawerItems = document.querySelectorAll('.drawer-item[data-target]');
-    drawerItems.forEach(item => {
+    document.querySelectorAll('.drawer-item[data-target]').forEach(item => {
         item.addEventListener('click', () => {
             const targetId = item.dataset.target;
-            drawerItems.forEach(i => i.classList.remove('active'));
+            document.querySelectorAll('.drawer-item').forEach(i => i.classList.remove('active'));
             item.classList.add('active');
-            const adminTabs = document.querySelectorAll('.admin-tab');
-            adminTabs.forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.admin-tab').forEach(tab => tab.classList.remove('active'));
             const targetTab = $(targetId);
             if (targetTab) targetTab.classList.add('active');
             toggleDrawer(false);
@@ -284,10 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     $('drawer-history-btn')?.addEventListener('click', () => {
         toggleDrawer(false);
-        window.scrollTo({
-            top: $('teacher-history-area').offsetTop - 100,
-            behavior: 'smooth'
-        });
+        window.scrollTo({ top: $('teacher-history-area').offsetTop - 100, behavior: 'smooth' });
     });
 
     [$('logout-btn-admin'), $('logout-btn-teacher'), ...logoutBtns].forEach(btn => {
@@ -298,57 +250,22 @@ document.addEventListener('DOMContentLoaded', () => {
             currentUser = null;
             cart = {};
             updateCartBadge();
-            catalogState.allItems = [];
-            catalogState.filtered = [];
-            catalogState.currentPage = 1;
-            catalogState.searchTerm = '';
+            catalogState.allItems = []; catalogState.filtered = []; catalogState.currentPage = 1; catalogState.searchTerm = '';
             showView('login-view');
         });
     });
 
-    // --- Tab Navigation ---
-    const adminNavButtons = document.querySelectorAll('.admin-nav button[data-target]');
-    adminNavButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const targetId = btn.dataset.target;
-            adminNavButtons.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const adminTabs = document.querySelectorAll('.admin-tab');
-            adminTabs.forEach(tab => tab.classList.remove('active'));
-            const targetTab = document.getElementById(targetId);
-            if (targetTab) targetTab.classList.add('active');
-        });
-    });
-
-    // --- Google Drive Connector ---
-    const appsScriptInput = $('apps-script-url');
-    const saveAppsScriptBtn = $('save-apps-script-url');
-    if (appsScriptInput) appsScriptInput.value = localStorage.getItem('google_apps_script_url') || '';
-    if (saveAppsScriptBtn) {
-        saveAppsScriptBtn.addEventListener('click', () => {
-            const url = appsScriptInput.value.trim();
-            if (!url) return showToast("Please enter a valid URL", 'error');
-            localStorage.setItem('google_apps_script_url', url);
-            showToast("Google Apps Script URL saved!");
-            updateDriveStatus();
-        });
-    }
-
-    // --- Bulletproof Login Form Handler ---
+    // --- Authentication ---
     async function executeLogin(e) {
-        if (e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-
+        if (e) { e.preventDefault(); e.stopPropagation(); }
         console.log("--> Login attempt triggered!");
-        const loginBtn = $('login-submit-btn');
+
         const passInput = $('login-pass-number');
         const passwordInput = $('login-password');
         const loginError = $('login-error');
 
         if (!passInput || !passwordInput) {
-            alert("Critical Error: Login Input Elements not found in HTML. Check element IDs.");
+            alert("Critical Error: Login Input Elements not found. Check HTML IDs.");
             return false;
         }
 
@@ -360,17 +277,13 @@ document.addEventListener('DOMContentLoaded', () => {
             return false;
         }
 
-        if (loginBtn) {
-            loginBtn.disabled = true;
-            loginBtn.textContent = "Authenticating...";
-        }
+        if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = "Authenticating..."; }
 
         try {
             const snapshot = await get(ref(db, 'users'));
             if (snapshot.exists()) {
                 const users = snapshot.val();
                 const matchedKey = Object.keys(users).find(key => key.toUpperCase() === adecNumber);
-
                 if (matchedKey) {
                     const userData = users[matchedKey];
                     if (userData.password === password) {
@@ -386,10 +299,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     showToast("Account not found", "error");
                 }
             } else {
-                if (loginError) loginError.textContent = "No registered staff users found.";
+                if (loginError) loginError.textContent = "No registered users found.";
             }
         } catch (err) {
-            console.error("Login Exception Caught:", err);
+            console.error("Login Error:", err);
             try {
                 const directSnap = await get(child(ref(db), `users/${adecNumber}`));
                 if (directSnap.exists()) {
@@ -403,23 +316,19 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch(e) {}
             alert("Login Failed: " + err.message);
         } finally {
-            if (loginBtn) {
-                loginBtn.disabled = false;
-                loginBtn.textContent = "Login";
-            }
+            if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "Login"; }
         }
         return false;
     }
 
     if (loginForm) loginForm.onsubmit = executeLogin;
+    if (loginBtn) loginBtn.onclick = executeLogin;
 
     if (bypassAdminBtn) {
         bypassAdminBtn.addEventListener('click', () => {
             currentUser = { uid: "bypass_admin", name: "System Developer", role: "DEVELOPER" };
             showView('developer-dashboard');
-            fetchAuditLogs();
-            fetchSystemBranding();
-            fetchCategories();
+            fetchAuditLogs(); fetchSystemBranding(); fetchCategories();
         });
     }
 
@@ -427,149 +336,104 @@ document.addEventListener('DOMContentLoaded', () => {
     if (savedAdec) handleUserRole(savedAdec);
     else showView('login-view');
 
-    // --- Forms ---
+    // --- UI Listeners ---
     if (inventoryForm) inventoryForm.addEventListener('submit', saveInventoryItem);
-    if (categorySelect) {
-        categorySelect.addEventListener('change', () => {
-            const customGroup = $('custom-category-group');
-            if (customGroup) customGroup.style.display = categorySelect.value === 'Other' ? 'block' : 'none';
-        });
-    }
-    if (serialNumberInput) {
-        serialNumberInput.addEventListener('input', () => {
-            const serial = serialNumberInput.value.trim();
-            if (serial) {
-                try { JsBarcode("#barcode", serial, { format: "CODE128", displayValue: true, fontSize: 16 }); } catch (e) { }
-            } else $('barcode').innerHTML = '';
-        });
-    }
+    if (categorySelect) categorySelect.onchange = () => {
+        const customGroup = $('custom-category-group');
+        if (customGroup) customGroup.style.display = categorySelect.value === 'Other' ? 'block' : 'none';
+    };
+    if (serialNumberInput) serialNumberInput.oninput = () => {
+        const serial = serialNumberInput.value.trim();
+        if (serial) { try { JsBarcode("#barcode", serial, { format: "CODE128", displayValue: true, fontSize: 16 }); } catch (e) { } }
+        else $('barcode').innerHTML = '';
+    };
 
-    if (cartBtn) cartBtn.addEventListener('click', () => { $('cart-modal').classList.add('active'); renderCart(); });
-    if (closeCartBtn) closeCartBtn.addEventListener('click', () => $('cart-modal').classList.remove('active'));
-    if (submitRequisitionBtn) submitRequisitionBtn.addEventListener('click', submitRequisitionRequest);
+    if (cartBtn) cartBtn.onclick = () => { $('cart-modal').classList.add('active'); renderCart(); };
+    if (closeCartBtn) closeCartBtn.onclick = () => $('cart-modal').classList.remove('active');
+    if (submitRequisitionBtn) submitRequisitionBtn.onclick = submitRequisitionRequest;
 
     if (stationerySearch) {
         let t;
-        stationerySearch.addEventListener('input', (e) => {
+        stationerySearch.oninput = (e) => {
             clearTimeout(t);
             t = setTimeout(() => {
                 catalogState.searchTerm = e.target.value.toLowerCase().trim();
-                catalogState.currentPage = 1;
-                resetCatalog();
+                catalogState.currentPage = 1; resetCatalog();
             }, 250);
-        });
+        };
     }
-    if (adminInventorySearch) {
-        adminInventorySearch.addEventListener('input', (e) => {
-            adminInventoryState.searchTerm = e.target.value.toLowerCase().trim();
-            adminInventoryState.currentPage = 1;
-            renderMasterInventory();
-        });
-    }
+    if (adminInventorySearch) adminInventorySearch.oninput = (e) => {
+        adminInventoryState.searchTerm = e.target.value.toLowerCase().trim();
+        adminInventoryState.currentPage = 1; renderMasterInventory();
+    };
 
-    if (closeNotificationBtn) closeNotificationBtn.addEventListener('click', () => $('notification-modal').classList.remove('active'));
-    if (closeHandoverModalBtn) closeHandoverModalBtn.addEventListener('click', () => $('handover-modal').classList.remove('active'));
-    if (completeOrderBtn) completeOrderBtn.addEventListener('click', completeHandoverAction);
-    if (closeOrderDetailBtn) closeOrderDetailBtn.addEventListener('click', () => $('order-detail-modal').classList.remove('active'));
-    if (closeItemDetailBtn) closeItemDetailBtn.addEventListener('click', () => $('item-detail-modal').classList.remove('active'));
+    if (closeNotificationBtn) closeNotificationBtn.onclick = () => $('notification-modal').classList.remove('active');
+    if (closeHandoverModalBtn) closeHandoverModalBtn.onclick = () => $('handover-modal').classList.remove('active');
+    if (completeOrderBtn) completeOrderBtn.onclick = completeHandoverAction;
+    if (closeOrderDetailBtn) closeOrderDetailBtn.onclick = () => $('order-detail-modal').classList.remove('active');
+    if (closeItemDetailBtn) closeItemDetailBtn.onclick = () => $('item-detail-modal').classList.remove('active');
+
+    if (startScanBtn) startScanBtn.onclick = () => { $('qr-scanner-modal').classList.add('active'); initScanner(); };
+    if (closeScannerBtn) closeScannerBtn.onclick = stopScanner;
+
+    // OCR TRIGGER BUTTONS
+    ocrTriggerBtns.forEach(btn => {
+        btn.onclick = () => {
+            currentOcrTarget = btn.dataset.target;
+            startOcrCamera();
+        };
+    });
+
+    // OCR SNAP BUTTON
+    if (ocrSnapBtn) ocrSnapBtn.onclick = () => {
+        const video = $('ocr-video');
+        const canvas = $('ocr-canvas');
+        if (!video || !video.srcObject) return;
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+
+        runOcrScan(canvas);
+    };
+
+    if (closeOcrBtn) closeOcrBtn.onclick = stopOcrCamera;
+
+    if (exportInventoryBtn) exportInventoryBtn.onclick = exportInventory;
+    if (exportHistoryBtn) exportHistoryBtn.onclick = exportHistory;
+    if (exportAuditBtn) exportAuditBtn.onclick = exportAuditLedger;
 
     $('notification-bell')?.addEventListener('click', () => {
         renderNotificationList();
         const notifModal = new bootstrap.Modal($('notificationModal'));
         notifModal.show();
-
         const badgeEl = $('notif-badge');
-        if (badgeEl) {
-            badgeEl.textContent = '0';
-            badgeEl.classList.add('d-none');
-        }
+        if (badgeEl) { badgeEl.textContent = '0'; badgeEl.classList.add('d-none'); }
     });
 
     $('clear-all-notifications-btn')?.addEventListener('click', () => {
-        notificationsList = [];
-        renderNotificationList();
-        updateNotificationBadge();
+        notificationsList = []; renderNotificationList(); updateNotificationBadge();
     });
 
-    $('ocr-file-fallback')?.addEventListener('change', handleOcrFileFallback);
+    // OCR FILE FALLBACK
+    $('ocr-file-fallback')?.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
 
-    if (startScanBtn) startScanBtn.addEventListener('click', () => { $('qr-scanner-modal').classList.add('active'); initScanner(); });
-    if (closeScannerBtn) closeScannerBtn.addEventListener('click', stopScanner);
-
-    ocrTriggerBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            currentOcrTarget = btn.dataset.target;
-            startOcrCamera();
-        });
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.src = e.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                canvas.getContext('2d').drawImage(img, 0, 0);
+                runOcrScan(canvas);
+            };
+        };
+        reader.readAsDataURL(file);
     });
-    if (ocrSnapBtn) ocrSnapBtn.addEventListener('click', captureAndRecognize);
-    if (closeOcrBtn) closeOcrBtn.addEventListener('click', stopOcrCamera);
-
-    if (exportInventoryBtn) exportInventoryBtn.addEventListener('click', exportInventory);
-    if (exportHistoryBtn) exportHistoryBtn.addEventListener('click', exportHistory);
-    if (exportAuditBtn) exportAuditBtn.addEventListener('click', exportAuditLedger);
-
-    $('upload-branding-btn')?.addEventListener('click', () => {
-        const file = $('branding-logo-upload').files[0];
-        if (file) uploadLogo(file);
-    });
-    $('add-category-btn')?.addEventListener('click', () => {
-        const name = $('new-category-name').value.trim();
-        if (name) addCategory(name);
-    });
-
-    adminPad = setupSignaturePad('admin-canvas');
-    teacherPad = setupSignaturePad('teacher-canvas');
-    $('clear-admin-sig-btn')?.addEventListener('click', () => adminPad?.clear());
-    $('clear-teacher-sig-btn')?.addEventListener('click', () => teacherPad?.clear());
-
-    const btnShowProvision = $('btn-show-provision');
-    const btnShowDirectory = $('btn-show-directory');
-    const provisionView = $('staff-provision-view');
-    const directoryView = $('staff-list-view');
-    if (btnShowProvision && btnShowDirectory) {
-        btnShowProvision.addEventListener('click', () => {
-            btnShowProvision.classList.add('active'); btnShowDirectory.classList.remove('active');
-            provisionView.style.display = 'block'; directoryView.style.display = 'none';
-        });
-        btnShowDirectory.addEventListener('click', () => {
-            btnShowDirectory.classList.add('active'); btnShowProvision.classList.remove('active');
-            provisionView.style.display = 'none'; directoryView.style.display = 'block';
-        });
-    }
-
-    const devCreateAccountForm = $('dev-create-account-form');
-    if (devCreateAccountForm) {
-        devCreateAccountForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const name = $('dev-name').value.trim();
-            const adec = $('dev-adec-number').value.trim();
-            const pass = $('dev-password').value;
-            const role = $('dev-role').value;
-            if (!name || !adec || !pass || !role) return;
-            try {
-                await set(ref(db, 'users/' + adec), { name, adecPassNumber: adec, password: pass, role, createdAt: new Date().toISOString() });
-                showToast("Account created!");
-                devCreateAccountForm.reset();
-            } catch (err) { showToast(err.message, "error"); }
-        });
-    }
-
-    const adminCreateTeacherForm = $('admin-create-teacher-form');
-    if (adminCreateTeacherForm) {
-        adminCreateTeacherForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const name = $('admin-name').value.trim();
-            const adec = $('admin-adec-number').value.trim();
-            const pass = $('admin-password').value;
-            if (!name || !adec || !pass) return;
-            try {
-                await set(ref(db, 'users/' + adec), { name, adecPassNumber: adec, password: pass, role: 'TEACHER', createdAt: new Date().toISOString() });
-                showToast("Teacher account created!");
-                adminCreateTeacherForm.reset();
-            } catch (err) { showToast(err.message, "error"); }
-        });
-    }
 });
 
 // ==================== NOTIFICATIONS ====================
@@ -620,12 +484,10 @@ function updateNotificationBadge() {
 function renderNotificationList() {
     const container = $('notification-list-container');
     if (!container) return;
-
     if (notificationsList.length === 0) {
         container.innerHTML = `<li class="list-group-item text-center text-muted py-4">No notifications yet</li>`;
         return;
     }
-
     container.innerHTML = notificationsList.map(n => `
         <li class="list-group-item d-flex justify-content-between align-items-start p-3">
             <div>
@@ -664,27 +526,21 @@ async function stopScanner() {
 }
 
 async function startOcrCamera() {
-    stopOcrCamera(); // Always release previous active tracks first
-
+    stopOcrCamera();
     const videoEl = $('ocr-video');
     const fallbackInput = $('ocr-file-fallback');
-
     const constraintsList = [
         { video: { facingMode: "environment" } },
         { video: { facingMode: "user" } },
         { video: true }
     ];
-
     let activeStream = null;
     for (const constraints of constraintsList) {
         try {
             activeStream = await navigator.mediaDevices.getUserMedia(constraints);
             if (activeStream) break;
-        } catch (e) {
-            console.warn("Camera attempt failed:", constraints, e);
-        }
+        } catch (e) { }
     }
-
     if (activeStream && videoEl) {
         ocrStream = activeStream;
         videoEl.srcObject = activeStream;
@@ -693,70 +549,11 @@ async function startOcrCamera() {
     } else {
         console.log("Live stream failed. Opening native camera...");
         if (fallbackInput) {
-            alert("Live browser camera blocked. Opening device camera app...");
+            alert("Live camera failed. Opening device camera app...");
             fallbackInput.click();
         } else {
-            alert("Could not access camera. Please check Chrome camera permissions.");
+            showToast("Camera error", "error");
         }
-    }
-}
-
-async function handleOcrFileFallback(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const loader = $('ocr-loader');
-    if (loader) loader.style.display = 'flex';
-
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-        const img = new Image();
-        img.src = e.target.result;
-        img.onload = async () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-
-            preprocessCanvasForOcr(canvas);
-            await processOcrFromCanvas(canvas);
-        };
-    };
-    reader.readAsDataURL(file);
-}
-
-async function processOcrFromCanvas(canvas) {
-    const loader = $('ocr-loader');
-    if (loader) loader.style.display = 'flex';
-    $('ocr-status-text').textContent = "Reading label text...";
-
-    try {
-        const worker = await Tesseract.createWorker('eng');
-        await worker.setParameters({
-            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$-_./&()%+= ',
-            preserve_interword_spaces: '1',
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OR_LINE
-        });
-
-        const result = await worker.recognize(canvas);
-        const rawText = result.data.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-
-        await worker.terminate();
-
-        const inputEl = document.getElementById(currentOcrTarget);
-        if (inputEl && rawText.length > 0) {
-            inputEl.value = rawText;
-            inputEl.dispatchEvent(new Event('input'));
-            alert(`Text Captured: "${rawText}"`);
-        } else {
-            alert("Unable to read text clearly.");
-        }
-        stopOcrCamera();
-    } catch (err) {
-        console.error("OCR Error:", err);
-        showToast("OCR Failed", "error");
-        if (loader) loader.style.display = 'none';
     }
 }
 
@@ -773,65 +570,203 @@ function stopOcrCamera() {
     if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
 }
 
-function preprocessCanvasForOcr(canvas) {
-    const ctx = canvas.getContext('2d');
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
+// ==================== OCR CORE LOGIC (SHARPEN + TTS) ====================
 
-    for (let i = 0; i < data.length; i += 4) {
-        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        const threshold = avg > 115 ? 255 : 0;
-        data[i] = threshold;
-        data[i + 1] = threshold;
-        data[i + 2] = threshold;
+/**
+ * Applies a 3x3 convolution sharpening kernel to enhance blurry edges.
+ */
+function sharpenCanvas(sourceCanvas) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = sourceCanvas.width;
+  canvas.height = sourceCanvas.height;
+
+  ctx.drawImage(sourceCanvas, 0, 0);
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  const width = imgData.width;
+  const height = imgData.height;
+
+  // 3x3 Sharpening Kernel Filter
+  const kernel = [
+     0, -1,  0,
+    -1,  5, -1,
+     0, -1,  0
+  ];
+
+  const buff = new Uint8ClampedArray(data);
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      for (let c = 0; c < 3; c++) { // Red, Green, Blue
+        let i = (y * width + x) * 4 + c;
+        let val =
+          buff[((y - 1) * width + (x - 1)) * 4 + c] * kernel[0] +
+          buff[((y - 1) * width + x) * 4 + c]       * kernel[1] +
+          buff[((y - 1) * width + (x + 1)) * 4 + c] * kernel[2] +
+          buff[(y * width + (x - 1)) * 4 + c]       * kernel[3] +
+          buff[(y * width + x) * 4 + c]             * kernel[4] +
+          buff[(y * width + (x + 1)) * 4 + c]       * kernel[5] +
+          buff[((y + 1) * width + (x - 1)) * 4 + c] * kernel[6] +
+          buff[((y + 1) * width + x) * 4 + c]       * kernel[7] +
+          buff[((y + 1) * width + (x + 1)) * 4 + c] * kernel[8];
+
+        data[i] = val;
+      }
     }
-    ctx.putImageData(imgData, 0, 0);
-    return canvas;
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return canvas;
 }
 
-async function captureAndRecognize() {
-    const video = $('ocr-video');
-    const canvas = $('ocr-canvas');
+/**
+ * Preprocesses an image canvas for OCR using adaptive thresholding.
+ * This is much better for complex backgrounds and glare.
+ */
+function preprocessImageForOcr(sourceCanvas) {
+    const processedCanvas = document.createElement('canvas');
+    const ctx = processedCanvas.getContext('2d');
+
+    processedCanvas.width = sourceCanvas.width;
+    processedCanvas.height = sourceCanvas.height;
+
+    ctx.drawImage(sourceCanvas, 0, 0);
+
+    const imgData = ctx.getImageData(0, 0, processedCanvas.width, processedCanvas.height);
+    const data = imgData.data;
+    const width = processedCanvas.width;
+    const height = processedCanvas.height;
+
+    // 1. Convert to Grayscale
+    const grayData = new Uint8ClampedArray(width * height);
+    for (let i = 0; i < data.length; i += 4) {
+        grayData[i / 4] = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    }
+
+    // 2. Adaptive Thresholding (Mean of local neighborhood)
+    const blockSize = 15;
+    const C = 2;
+    const outputData = ctx.createImageData(width, height);
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = y * width + x;
+
+            let sum = 0;
+            let count = 0;
+            for (let dy = -blockSize; dy <= blockSize; dy++) {
+                for (let dx = -blockSize; dx <= blockSize; dx++) {
+                    const nx = x + dx;
+                    const ny = y + dy;
+                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                        sum += grayData[ny * width + nx];
+                        count++;
+                    }
+                }
+            }
+            const mean = sum / count;
+            const pixelValue = grayData[i] > mean - C ? 255 : 0;
+
+            const idx = i * 4;
+            outputData.data[idx] = pixelValue;
+            outputData.data[idx + 1] = pixelValue;
+            outputData.data[idx + 2] = pixelValue;
+            outputData.data[idx + 3] = 255;
+        }
+    }
+
+    ctx.putImageData(outputData, 0, 0);
+    return processedCanvas;
+}
+
+/**
+ * Speaks the extracted text aloud using SpeechSynthesis API.
+ */
+function speakExtractedText(text) {
+  if (!('speechSynthesis' in window)) return;
+
+  // Cancel any ongoing speech
+  window.speechSynthesis.cancel();
+
+  if (!text || text.trim().length === 0) return;
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'en-US'; // Or 'hi-IN' based on preference
+  utterance.rate = 0.95;    // Slightly slower for clear pronounciation
+  utterance.pitch = 1.0;
+
+  window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * Main OCR execution function with Cropping, Sharpening, Thresholding, and TTS.
+ */
+async function runOcrScan(canvasElement) {
     const loader = $('ocr-loader');
-    if (!video || !video.srcObject) return;
-    if (!currentOcrTarget) { showToast("No target input designated for OCR auto-fill.", "error"); return; }
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-
-    preprocessCanvasForOcr(canvas);
-
-    loader.style.display = 'flex';
-    $('ocr-status-text').textContent = "Scanning & Reading Text...";
+    const statusText = $('ocr-status-text');
+    if (loader) loader.style.display = 'flex';
+    if (statusText) statusText.textContent = "Sharpening & Reading...";
 
     try {
+        // --- STEP 1: CROP THE IMAGE (Central Area) ---
+        const cropCanvas = document.createElement('canvas');
+        const cropCtx = cropCanvas.getContext('2d');
+
+        const cropWidth = canvasElement.width * 0.7;
+        const cropHeight = canvasElement.height * 0.4;
+        const cropX = (canvasElement.width - cropWidth) / 2;
+        const cropY = (canvasElement.height - cropHeight) / 2;
+
+        cropCanvas.width = cropWidth;
+        cropCanvas.height = cropHeight;
+        cropCtx.drawImage(canvasElement, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+        // --- STEP 2: SHARPEN THE IMAGE ---
+        const sharpenedCanvas = sharpenCanvas(cropCanvas);
+
+        // --- STEP 3: ADAPTIVE THRESHOLDING ---
+        const cleanCanvas = preprocessImageForOcr(sharpenedCanvas);
+
+        // --- STEP 4: RUN TESSERACT ---
         const worker = await Tesseract.createWorker('eng');
         await worker.setParameters({
-            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$-_./&()%+= ',
-            preserve_interword_spaces: '1',
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OR_LINE
+            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -',
         });
 
-        const result = await worker.recognize(canvas);
-        const rawText = result.data.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-
+        const { data: { text } } = await worker.recognize(cleanCanvas);
         await worker.terminate();
 
-        const inputEl = document.getElementById(currentOcrTarget);
-        if (inputEl && rawText.length > 0) {
-            inputEl.value = rawText;
+        // --- STEP 5: CLEAN TEXT ---
+        const sanitizedText = text
+            .replace(/[^a-zA-Z0-9\s-]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        console.log("Cleaned OCR Result:", sanitizedText);
+
+        // --- STEP 6: AUTO-FILL INPUT & SPEAK ---
+        const inputEl = $(currentOcrTarget);
+        if (inputEl && sanitizedText) {
+            inputEl.value = sanitizedText;
             inputEl.dispatchEvent(new Event('input'));
-            alert(`Exact Text Captured: "${rawText}"`);
+
+            // Speak the text aloud
+            speakExtractedText(sanitizedText);
+
+            // Show visual confirmation
+            alert(`Text Captured:\n"${sanitizedText}"`);
         } else {
-            alert("Unable to read text clearly. Please adjust camera focus or lighting.");
+            alert("No text could be confidently extracted. Please try again with better lighting and focus.");
         }
 
         stopOcrCamera();
-    } catch (err) {
-        console.error("OCR Error:", err);
-        showToast("OCR Processing Failed", "error");
-        loader.style.display = 'none';
+
+    } catch (error) {
+        console.error("OCR Processing Error:", error);
+        showToast("OCR Failed to process label.", "error");
+        if (loader) loader.style.display = 'none';
     }
 }
 
@@ -842,8 +777,7 @@ async function handleUserRole(adecNumber) {
         if (snapshot.exists()) {
             const userData = snapshot.val();
             currentUser = { uid: adecNumber, ...userData };
-            fetchSystemBranding();
-            fetchCategories();
+            fetchSystemBranding(); fetchCategories();
             $('admin-menu').style.display = userData.role === 'ADMIN' ? 'flex' : 'none';
             $('teacher-menu').style.display = userData.role === 'TEACHER' ? 'flex' : 'none';
             if ("Notification" in window) Notification.requestPermission();
@@ -917,12 +851,7 @@ function renderCatalogPage() {
 function renderPaginationControls(containerId, state, renderFn) {
     const targetElement = $(containerId);
     if (!targetElement) return;
-
-    // Ensure state and filtered array exist
-    if (!state || !state.filtered) {
-        console.warn(`Pagination state or filtered data missing for ${containerId}`);
-        return;
-    }
+    if (!state || !state.filtered) return;
 
     let wrap = $(`${containerId}-pagination-wrap`);
     if (!wrap) {
@@ -935,7 +864,6 @@ function renderPaginationControls(containerId, state, renderFn) {
 
     const prevBtn = document.getElementById(`${containerId}-prev`);
     const nextBtn = document.getElementById(`${containerId}-next`);
-
     if (prevBtn) prevBtn.onclick = () => { state.currentPage--; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
     if (nextBtn) nextBtn.onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
@@ -962,94 +890,29 @@ function fetchMasterInventory() {
 function renderMasterInventory() {
     const container = $('inventory-container');
     if (!container) return;
-
     try {
         const term = adminInventoryState.searchTerm;
-        adminInventoryState.filtered = term
-            ? adminInventoryState.allItems.filter(i =>
-                (i.itemName || '').toLowerCase().includes(term) ||
-                (i.serialNumber || '').toLowerCase().includes(term))
-            : adminInventoryState.allItems.slice();
-
+        adminInventoryState.filtered = term ? adminInventoryState.allItems.filter(i => (i.itemName || '').toLowerCase().includes(term) || (i.serialNumber || '').toLowerCase().includes(term)) : adminInventoryState.allItems.slice();
         const start = (adminInventoryState.currentPage - 1) * PAGE_SIZE;
         const end = start + PAGE_SIZE;
         const pageItems = adminInventoryState.filtered.slice(start, end);
 
-        if (pageItems.length === 0) {
-            container.innerHTML = '<div class="text-center text-muted p-4">No inventory records found.</div>';
-            return;
-        }
+        if (pageItems.length === 0) { container.innerHTML = '<div class="text-center text-muted p-4">No records found.</div>'; return; }
 
-        // 1. Build Desktop Table Markup
-        const desktopTable = `
-            <div class="table-responsive d-none d-md-block">
-                <table class="table table-hover align-middle history-table">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Image</th><th>Serial No</th><th>Item Name</th>
-                            <th>Category</th><th>Description</th><th>Qty Available</th>
-                            <th>Status</th><th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${pageItems.map(item => {
-                            const qty = parseInt(item.quantity) || 0;
-                            const directUrl = getDirectDriveUrl(item.imageUrl);
-                            const openQty = item.openingQuantity !== undefined ? item.openingQuantity : '-';
-                            return `
-                            <tr class="${qty < 5 ? 'row-low-stock' : ''}">
-                                <td><img src="${directUrl}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
-                                <td><code>${item.serialNumber || 'N/A'}</code></td>
-                                <td><strong>${escapeHtml(item.itemName)}</strong></td>
-                                <td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td>
-                                <td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td>
-                                <td>${openQty}</td>
-                                <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
-                                <td>${getStatusBadge(qty)}</td>
-                                <td>
-                                    <button class="btn btn-sm btn-outline-primary" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button>
-                                </td>
-                            </tr>`;
-                        }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        `;
+        const desktopTable = `<div class="table-responsive d-none d-md-block"><table class="table table-hover align-middle history-table"><thead class="table-light"><tr><th>Image</th><th>Serial No</th><th>Item Name</th><th>Category</th><th>Description</th><th>Open Qty</th><th>Qty Available</th><th>Status</th><th>Actions</th></tr></thead><tbody>${pageItems.map(item => {
+            const qty = parseInt(item.quantity) || 0;
+            return `<tr class="${qty < 5 ? 'row-low-stock' : ''}"><td><img src="${getDirectDriveUrl(item.imageUrl)}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td><td><code>${item.serialNumber || 'N/A'}</code></td><td><strong>${escapeHtml(item.itemName)}</strong></td><td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td><td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td><td>${item.openingQuantity || '-'}</td><td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td><td>${getStatusBadge(qty)}</td><td><button class="btn btn-sm btn-outline-primary" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button></td></tr>`;
+        }).join('')}</tbody></table></div>`;
 
-        // 2. Mobile Cards Markup
-        const mobileCards = `
-            <div class="d-block d-md-none inventory-cards-wrapper">
-                ${pageItems.map(item => {
-                    const qty = parseInt(item.quantity) || 0;
-                    return `
-                    <div class="inventory-card-mobile">
-                        <div class="inventory-card-header">
-                            <img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')">
-                            <div style="flex:1;">
-                                <h6 class="mb-0">${escapeHtml(item.itemName)}</h6>
-                                <small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>
-                                ${getStatusBadge(qty)}
-                            </div>
-                        </div>
-                        <div class="mb-2">
-                            <span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span>
-                        </div>
-                        <p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description available.')}</p>
-                        <div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3">
-                            <span class="small text-muted">Current Quantity:</span>
-                            <span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span>
-                        </div>
-                        <button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button>
-                    </div>`;
-                }).join('')}
-            </div>
-        `;
+        const mobileCards = `<div class="d-block d-md-none inventory-cards-wrapper">${pageItems.map(item => {
+            const qty = parseInt(item.quantity) || 0;
+            return `<div class="inventory-card-mobile"><div class="inventory-card-header"><img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')"><div style="flex:1;"><h6 class="mb-0">${escapeHtml(item.itemName)}</h6><small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>${getStatusBadge(qty)}</div></div><div class="mb-2"><span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span></div><p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description.')}</p><div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3"><span class="small text-muted">Current Quantity:</span><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span></div><button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button></div>`;
+        }).join('')}</div>`;
 
         container.innerHTML = desktopTable + mobileCards;
         renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
     } catch (err) {
-        console.error("Error rendering Master Inventory:", err);
-        container.innerHTML = `<div class="alert alert-danger text-center">Failed to load inventory data: ${err.message}</div>`;
+        container.innerHTML = `<div class="alert alert-danger text-center">Failed to load data: ${err.message}</div>`;
     }
 }
 
@@ -1081,8 +944,7 @@ function fetchAuditLedger() {
                 ledgerData.push({ orderId: id, timestamp: order.timestamp, teacher: `${order.teacherName} (${order.teacherUid})`, item: `${item.itemName} (${item.serial})`, qty: item.requestQuantity, status: order.status });
             });
         });
-        auditLedgerState.allItems = ledgerData;
-        auditLedgerState.filtered = ledgerData;
+        auditLedgerState.allItems = auditLedgerState.filtered = ledgerData;
         renderAuditLedger();
     });
 }
@@ -1090,24 +952,14 @@ function fetchAuditLedger() {
 function renderAuditLedger() {
     const list = $('admin-audit-ledger-list'); if (!list) return;
     list.innerHTML = '';
-
-    const start = (auditLedgerState.currentPage - 1) * PAGE_SIZE;
-    const end = start + PAGE_SIZE;
+    const start = (auditLedgerState.currentPage - 1) * PAGE_SIZE; const end = start + PAGE_SIZE;
     const pageItems = auditLedgerState.filtered ? auditLedgerState.filtered.slice(start, end) : [];
-
-    if (pageItems.length === 0) {
-        list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>';
-        return;
-    }
-
+    if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>'; return; }
     pageItems.forEach(row => {
         const tr = document.createElement('tr');
         const serial = row.item ? row.item.match(/\((.*?)\)/)?.[1] : null;
-
-        // Safely detect stock balance field
         let stockBalance = (row.stockBalance !== undefined && row.stockBalance !== null && row.stockBalance !== 'N/A')
-            ? row.stockBalance
-            : (row.remainingQty !== undefined ? row.remainingQty : (row.currentQty !== undefined ? row.currentQty : 'N/A'));
+            ? row.stockBalance : (row.remainingQty !== undefined ? row.remainingQty : (row.currentQty !== undefined ? row.currentQty : 'N/A'));
 
         if (stockBalance === 'N/A' && serial) {
             const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
@@ -1115,14 +967,7 @@ function renderAuditLedger() {
         }
 
         const statusBadge = row.status === 'Pending Approval' ? 'bg-warning' : row.status === 'Approved' ? 'bg-info' : 'bg-success';
-        tr.innerHTML = `
-            <td>${row.dateTime || row.timestamp ? new Date(row.dateTime || row.timestamp).toLocaleString() : new Date().toLocaleString()}</td>
-            <td>${row.teacherName || row.teacher || 'N/A'}</td>
-            <td>${row.itemName || row.item || 'Item'}</td>
-            <td><strong>${row.qtyIssued || row.qty || 0}</strong></td>
-            <td><span class="badge bg-secondary fs-6">${stockBalance}</span></td>
-            <td><span class="badge ${statusBadge}">${row.status}</span></td>
-        `;
+        tr.innerHTML = `<td>${new Date(row.timestamp).toLocaleString()}</td><td>${escapeHtml(row.teacher)}</td><td>${escapeHtml(row.item)}</td><td><strong>${row.qty}</strong></td><td><span class="badge bg-secondary fs-6">${stockBalance}</span></td><td><span class="badge ${statusBadge}">${row.status}</span></td>`;
         list.appendChild(tr);
     });
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
@@ -1209,8 +1054,7 @@ async function updateOrderStatus(id, status) {
 function fetchTeacherOrderHistory(adec) {
     addListener(ref(db, 'orders'), (snap) => {
         const data = snap.val() || {}; const entries = Object.entries(data).reverse();
-        teacherOrdersState.allItems = entries.filter(([id, o]) => o.teacherUid === adec);
-        teacherOrdersState.filtered = teacherOrdersState.allItems;
+        teacherOrdersState.allItems = teacherOrdersState.filtered = entries.filter(([id, o]) => o.teacherUid === adec);
         renderTeacherOrderHistory();
     });
 }

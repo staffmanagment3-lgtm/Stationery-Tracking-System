@@ -1,7 +1,18 @@
 {
   "short_name": "StationeryApp",
   "name": "Stationery Tracker System",
-  "icons": [],
+  "icons": [
+    {
+      "src": "school.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "school.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
   "start_url": "./index.html",
   "background_color": "#ffffff",
   "theme_color": "#2c3e50",
