@@ -570,67 +570,82 @@ function stopOcrCamera() {
     if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
 }
 
-// ==================== OCR CORE LOGIC (SHARPEN + TTS) ====================
+// ==================== OCR CORE LOGIC (MULTI-PASS ENHANCED) ====================
+
+/**
+ * Rotates a canvas by specified degrees.
+ */
+function rotateCanvas(sourceCanvas, degrees) {
+    if (degrees === 0) return sourceCanvas;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (degrees === 90 || degrees === 270) {
+        canvas.width = sourceCanvas.height;
+        canvas.height = sourceCanvas.width;
+    } else {
+        canvas.width = sourceCanvas.width;
+        canvas.height = sourceCanvas.height;
+    }
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(degrees * Math.PI / 180);
+    ctx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
+    return canvas;
+}
 
 /**
  * Applies a 3x3 convolution sharpening kernel to enhance blurry edges.
  */
 function sharpenCanvas(sourceCanvas) {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = sourceCanvas.width;
-  canvas.height = sourceCanvas.height;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = sourceCanvas.width;
+    canvas.height = sourceCanvas.height;
 
-  ctx.drawImage(sourceCanvas, 0, 0);
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imgData.data;
-  const width = imgData.width;
-  const height = imgData.height;
+    ctx.drawImage(sourceCanvas, 0, 0);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+    const width = imgData.width;
+    const height = imgData.height;
 
-  // 3x3 Sharpening Kernel Filter
-  const kernel = [
-     0, -1,  0,
-    -1,  5, -1,
-     0, -1,  0
-  ];
+    const kernel = [
+         0, -1,  0,
+        -1,  5, -1,
+         0, -1,  0
+    ];
 
-  const buff = new Uint8ClampedArray(data);
+    const buff = new Uint8ClampedArray(data);
 
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      for (let c = 0; c < 3; c++) { // Red, Green, Blue
-        let i = (y * width + x) * 4 + c;
-        let val =
-          buff[((y - 1) * width + (x - 1)) * 4 + c] * kernel[0] +
-          buff[((y - 1) * width + x) * 4 + c]       * kernel[1] +
-          buff[((y - 1) * width + (x + 1)) * 4 + c] * kernel[2] +
-          buff[(y * width + (x - 1)) * 4 + c]       * kernel[3] +
-          buff[(y * width + x) * 4 + c]             * kernel[4] +
-          buff[(y * width + (x + 1)) * 4 + c]       * kernel[5] +
-          buff[((y + 1) * width + (x - 1)) * 4 + c] * kernel[6] +
-          buff[((y + 1) * width + x) * 4 + c]       * kernel[7] +
-          buff[((y + 1) * width + (x + 1)) * 4 + c] * kernel[8];
-
-        data[i] = val;
-      }
+    for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+            for (let c = 0; c < 3; c++) {
+                let i = (y * width + x) * 4 + c;
+                let val =
+                    buff[((y - 1) * width + (x - 1)) * 4 + c] * kernel[0] +
+                    buff[((y - 1) * width + x) * 4 + c]       * kernel[1] +
+                    buff[((y - 1) * width + (x + 1)) * 4 + c] * kernel[2] +
+                    buff[(y * width + (x - 1)) * 4 + c]       * kernel[3] +
+                    buff[(y * width + x) * 4 + c]             * kernel[4] +
+                    buff[(y * width + (x + 1)) * 4 + c]       * kernel[5] +
+                    buff[((y + 1) * width + (x - 1)) * 4 + c] * kernel[6] +
+                    buff[((y + 1) * width + x) * 4 + c]       * kernel[7] +
+                    buff[((y + 1) * width + (x + 1)) * 4 + c] * kernel[8];
+                data[i] = val;
+            }
+        }
     }
-  }
-
-  ctx.putImageData(imgData, 0, 0);
-  return canvas;
+    ctx.putImageData(imgData, 0, 0);
+    return canvas;
 }
 
 /**
- * Preprocesses an image canvas for OCR using adaptive thresholding.
- * This is much better for complex backgrounds and glare.
+ * Advanced image pre-processing for OCR.
+ * Supports Grayscale, Contrast Enhancement, and Adaptive Binarization.
  */
-function preprocessImageForOcr(sourceCanvas) {
+function preprocessImageForOcr(sourceCanvas, mode = 'balanced') {
     const processedCanvas = document.createElement('canvas');
     const ctx = processedCanvas.getContext('2d');
-
     processedCanvas.width = sourceCanvas.width;
     processedCanvas.height = sourceCanvas.height;
-
     ctx.drawImage(sourceCanvas, 0, 0);
 
     const imgData = ctx.getImageData(0, 0, processedCanvas.width, processedCanvas.height);
@@ -638,27 +653,46 @@ function preprocessImageForOcr(sourceCanvas) {
     const width = processedCanvas.width;
     const height = processedCanvas.height;
 
-    // 1. Convert to Grayscale
+    // 1. Grayscale Conversion
     const grayData = new Uint8ClampedArray(width * height);
     for (let i = 0; i < data.length; i += 4) {
         grayData[i / 4] = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
     }
 
-    // 2. Adaptive Thresholding (Mean of local neighborhood)
-    const blockSize = 15;
-    const C = 2;
-    const outputData = ctx.createImageData(width, height);
+    if (mode === 'grayscale') {
+        for (let i = 0; i < data.length; i += 4) {
+            const v = grayData[i / 4];
+            data[i] = data[i + 1] = data[i + 2] = v;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        return processedCanvas;
+    }
 
+    // 2. High Contrast mode
+    if (mode === 'high_contrast') {
+        const contrast = 1.6;
+        const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+        for (let i = 0; i < data.length; i += 4) {
+            let avg = grayData[i / 4];
+            avg = factor * (avg - 128) + 128;
+            const finalVal = avg >= 128 ? 255 : 0; // Simple binarization
+            data[i] = data[i+1] = data[i+2] = finalVal;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        return processedCanvas;
+    }
+
+    // 3. Adaptive Thresholding (Default/Balanced)
+    const blockSize = 20;
+    const C = 5;
+    const outputData = ctx.createImageData(width, height);
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const i = y * width + x;
-
-            let sum = 0;
-            let count = 0;
-            for (let dy = -blockSize; dy <= blockSize; dy++) {
-                for (let dx = -blockSize; dx <= blockSize; dx++) {
-                    const nx = x + dx;
-                    const ny = y + dy;
+            let sum = 0, count = 0;
+            for (let dy = -blockSize; dy <= blockSize; dy += 4) { // Sample neighborhood
+                for (let dx = -blockSize; dx <= blockSize; dx += 4) {
+                    const nx = x + dx, ny = y + dy;
                     if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                         sum += grayData[ny * width + nx];
                         count++;
@@ -667,105 +701,111 @@ function preprocessImageForOcr(sourceCanvas) {
             }
             const mean = sum / count;
             const pixelValue = grayData[i] > mean - C ? 255 : 0;
-
             const idx = i * 4;
-            outputData.data[idx] = pixelValue;
-            outputData.data[idx + 1] = pixelValue;
-            outputData.data[idx + 2] = pixelValue;
+            outputData.data[idx] = outputData.data[idx + 1] = outputData.data[idx + 2] = pixelValue;
             outputData.data[idx + 3] = 255;
         }
     }
-
     ctx.putImageData(outputData, 0, 0);
     return processedCanvas;
 }
 
 /**
- * Speaks the extracted text aloud using SpeechSynthesis API.
+ * Speaks the extracted text aloud.
  */
 function speakExtractedText(text) {
-  if (!('speechSynthesis' in window)) return;
-
-  // Cancel any ongoing speech
-  window.speechSynthesis.cancel();
-
-  if (!text || text.trim().length === 0) return;
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'en-US'; // Or 'hi-IN' based on preference
-  utterance.rate = 0.95;    // Slightly slower for clear pronounciation
-  utterance.pitch = 1.0;
-
-  window.speechSynthesis.speak(utterance);
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    if (!text || text.trim().length === 0) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = 1.0;
+    window.speechSynthesis.speak(utterance);
 }
 
 /**
- * Main OCR execution function with Cropping, Sharpening, Thresholding, and TTS.
+ * Master OCR function with multi-pass recognition and result selection.
  */
 async function runOcrScan(canvasElement) {
     const loader = $('ocr-loader');
     const statusText = $('ocr-status-text');
     if (loader) loader.style.display = 'flex';
-    if (statusText) statusText.textContent = "Sharpening & Reading...";
 
     try {
-        // --- STEP 1: CROP THE IMAGE (Central Area) ---
-        const cropCanvas = document.createElement('canvas');
-        const cropCtx = cropCanvas.getContext('2d');
-
-        const cropWidth = canvasElement.width * 0.7;
-        const cropHeight = canvasElement.height * 0.4;
-        const cropX = (canvasElement.width - cropWidth) / 2;
-        const cropY = (canvasElement.height - cropHeight) / 2;
-
-        cropCanvas.width = cropWidth;
-        cropCanvas.height = cropHeight;
-        cropCtx.drawImage(canvasElement, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-
-        // --- STEP 2: SHARPEN THE IMAGE ---
-        const sharpenedCanvas = sharpenCanvas(cropCanvas);
-
-        // --- STEP 3: ADAPTIVE THRESHOLDING ---
-        const cleanCanvas = preprocessImageForOcr(sharpenedCanvas);
-
-        // --- STEP 4: RUN TESSERACT ---
         const worker = await Tesseract.createWorker('eng');
         await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -',
+            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT, // Better for labels/product text
+            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -./()@#&',
+            preserve_interword_spaces: '1'
         });
 
-        const { data: { text } } = await worker.recognize(cleanCanvas);
+        // Generate Central Crops (Full, Wide, and Tight)
+        const crops = [
+            { w: 0.9, h: 0.6 }, // Wide crop
+            { w: 0.7, h: 0.4 }, // Standard label crop
+            { w: 0.5, h: 0.3 }  // Tight center crop
+        ];
+
+        let bestResult = { text: '', confidence: 0 };
+        const passes = [];
+
+        // --- OCR PASSES ---
+        const runPass = async (canvas, label) => {
+            if (statusText) statusText.textContent = `Analyzing: ${label}...`;
+            const { data } = await worker.recognize(canvas);
+            const sanitized = data.text.replace(/[^a-zA-Z0-9\s-./()@#&]/g, '').replace(/\s+/g, ' ').trim();
+            console.log(`[OCR PASS] ${label}: "${sanitized}" (Conf: ${data.confidence})`);
+            if (data.confidence > bestResult.confidence && sanitized.length > 2) {
+                bestResult = { text: sanitized, confidence: data.confidence };
+            }
+            passes.push({ label, text: sanitized, confidence: data.confidence });
+        };
+
+        // Pass 1: Original Central Crop
+        const baseCrop = document.createElement('canvas');
+        const bcCtx = baseCrop.getContext('2d');
+        const cw = canvasElement.width * 0.8, ch = canvasElement.height * 0.5;
+        baseCrop.width = cw; baseCrop.height = ch;
+        bcCtx.drawImage(canvasElement, (canvasElement.width - cw) / 2, (canvasElement.height - ch) / 2, cw, ch, 0, 0, cw, ch);
+
+        await runPass(baseCrop, "Base Crop");
+
+        // Pass 2: Sharpened
+        await runPass(sharpenCanvas(baseCrop), "Sharpened");
+
+        // Pass 3: High Contrast Binarized
+        await runPass(preprocessImageForOcr(baseCrop, 'high_contrast'), "High Contrast");
+
+        // Pass 4: Adaptive Thresholding
+        await runPass(preprocessImageForOcr(baseCrop, 'balanced'), "Adaptive Threshold");
+
+        // If confidence is still low, try rotated versions
+        if (bestResult.confidence < 60) {
+            for (let angle of [90, 270, 180]) {
+                const rotated = rotateCanvas(baseCrop, angle);
+                await runPass(rotated, `Rotated ${angle}°`);
+                if (bestResult.confidence > 80) break;
+            }
+        }
+
         await worker.terminate();
 
-        // --- STEP 5: CLEAN TEXT ---
-        const sanitizedText = text
-            .replace(/[^a-zA-Z0-9\s-]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        console.log("Cleaned OCR Result:", sanitizedText);
-
-        // --- STEP 6: AUTO-FILL INPUT & SPEAK ---
+        // --- SELECTION & AUTO-FILL ---
         const inputEl = $(currentOcrTarget);
-        if (inputEl && sanitizedText) {
-            inputEl.value = sanitizedText;
+        if (inputEl && bestResult.text) {
+            inputEl.value = bestResult.text;
             inputEl.dispatchEvent(new Event('input'));
-
-            // Speak the text aloud
-            speakExtractedText(sanitizedText);
-
-            // Show visual confirmation
-            alert(`Text Captured:\n"${sanitizedText}"`);
+            speakExtractedText(bestResult.text);
+            showToast(`Captured: ${bestResult.text}`, 'success');
         } else {
-            alert("No text could be confidently extracted. Please try again with better lighting and focus.");
+            alert("Unable to read label clearly. Please adjust lighting and try again.");
         }
 
         stopOcrCamera();
 
     } catch (error) {
-        console.error("OCR Processing Error:", error);
-        showToast("OCR Failed to process label.", "error");
+        console.error("OCR Error:", error);
+        showToast("OCR processing error.", "error");
         if (loader) loader.style.display = 'none';
     }
 }
