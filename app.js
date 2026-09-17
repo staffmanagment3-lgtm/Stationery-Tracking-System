@@ -60,21 +60,105 @@ const FALLBACK_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
 let currentUser = null;
 let cart = {};
 let inventoryData = {};
+// New Order Signature Pads
 let adminPad = null;
 let teacherPad = null;
-let activeHandoverRequestId = null;
-let unsubscribeListeners = [];
-let html5QrCode = null;
-let ocrStream = null;
-let currentOcrTarget = null;
-let notificationsList = [];
+let teacherRequestPad = null;
+let selectedOrderIdForApproval = null;
 
-const catalogState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
-const adminInventoryState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
-const auditLedgerState = { allItems: [], filtered: [], currentPage: 1 };
-const teacherOrdersState = { allItems: [], filtered: [], currentPage: 1 };
+function setupResponsiveSignaturePad(canvasId) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return null;
 
-const alertedRequests = new Set();
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+
+    // Auto-resize canvas according to container width and scale for High-DPI (Retina) screens
+    function resizeCanvas() {
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        const rect = canvas.parentElement.getBoundingClientRect();
+
+        // Set actual display size in CSS pixels
+        canvas.width = rect.width * ratio;
+        canvas.height = 180 * ratio; // 180px height for finger comfort
+
+        // Normalize coordinate system to match CSS pixels
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform before scaling
+        ctx.scale(ratio, ratio);
+
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#000000';
+    }
+
+    // Call resize immediately and on window orientation change
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // Get exact finger/pointer coordinates relative to canvas
+    function getCoordinates(e) {
+        const rect = canvas.getBoundingClientRect();
+        let clientX, clientY;
+
+        if (e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+        return {
+            x: clientX - rect.left,
+            y: clientY - rect.top
+        };
+    }
+
+    function startDrawing(e) {
+        if (e.cancelable) e.preventDefault(); // Stop mobile page scroll
+        isDrawing = true;
+        const pos = getCoordinates(e);
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        if (e.cancelable) e.preventDefault(); // Stop mobile page scroll
+        const pos = getCoordinates(e);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+    }
+
+    function stopDrawing(e) {
+        if (isDrawing) {
+            isDrawing = false;
+            ctx.closePath();
+        }
+    }
+
+    // Mouse Events
+    canvas.onmousedown = startDrawing;
+    canvas.onmousemove = draw;
+    canvas.onmouseup = stopDrawing;
+    canvas.onmouseleave = stopDrawing;
+
+    // Touch Events for Mobile / Tablet
+    canvas.addEventListener('touchstart', startDrawing, { passive: false });
+    canvas.addEventListener('touchmove', draw, { passive: false });
+    canvas.addEventListener('touchend', stopDrawing, { passive: false });
+
+    return {
+        clear: () => ctx.clearRect(0, 0, canvas.width, canvas.height),
+        isEmpty: () => {
+            const pixelBuffer = new Uint32Array(
+                ctx.getImageData(0, 0, canvas.width, canvas.height).data.buffer
+            );
+            return !pixelBuffer.some(color => color !== 0);
+        },
+        getDataUrl: () => canvas.toDataURL('image/png')
+    };
+}
 
 // ==================== IMAGE & UI UTILITIES ====================
 function getStatusBadge(qty) {
@@ -434,6 +518,19 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         reader.readAsDataURL(file);
     });
+
+    // Signature pads initialization
+    adminPad = setupResponsiveSignaturePad('admin-canvas');
+    teacherPad = setupResponsiveSignaturePad('teacher-canvas');
+
+    $('clear-admin-sig-btn')?.addEventListener('click', () => adminPad?.clear());
+    $('clear-teacher-sig-btn')?.addEventListener('click', () => teacherPad?.clear());
+
+    document.getElementById('teacher-signature-modal')?.addEventListener('shown.bs.modal', () => {
+        teacherRequestPad = setupResponsiveSignaturePad('teacher-request-canvas');
+    });
+
+    $('clear-teacher-request-sig-btn')?.addEventListener('click', () => teacherRequestPad?.clear());
 });
 
 // ==================== NOTIFICATIONS ====================
@@ -1054,12 +1151,60 @@ function renderCart() {
 
 async function submitRequisitionRequest() {
     if (Object.keys(cart).length === 0) return showToast("Empty", 'error');
+    // Open signature modal instead of direct submission
+    teacherRequestPad?.clear();
+    const modal = new bootstrap.Modal($('teacher-signature-modal'));
+    modal.show();
+}
+
+async function submitFinalOrderWithSignature() {
+    if (!teacherRequestPad || teacherRequestPad.isEmpty()) {
+        alert("Please provide your signature before submitting the request.");
+        return;
+    }
+
     const orderId = 'JYS-' + Math.floor(10000 + Math.random() * 90000);
+    const signatureDataUrl = teacherRequestPad.getDataUrl();
+
     try {
-        const items = Object.entries(cart).map(([id, item]) => ({ itemId: id, itemName: item.itemName, serial: item.serialNumber, requestQuantity: item.requestQuantity, imageUrl: item.imageUrl }));
-        await set(ref(db, 'orders/' + orderId), { orderId, teacherUid: currentUser.adecPassNumber || currentUser.uid, teacherName: currentUser.name, timestamp: new Date().toISOString(), items, status: 'Pending Approval' });
-        cart = {}; updateCartBadge(); $('cart-modal').classList.remove('active'); showToast(`Submitted ${orderId}`);
-    } catch (e) { showToast("Error", 'error'); }
+        const items = Object.entries(cart).map(([id, item]) => ({
+            itemId: id,
+            itemName: item.itemName,
+            serial: item.serialNumber,
+            requestQuantity: item.requestQuantity,
+            imageUrl: item.imageUrl
+        }));
+
+        const orderData = {
+            orderId,
+            teacherUid: currentUser.adecPassNumber || currentUser.uid,
+            teacherName: currentUser.name,
+            timestamp: new Date().toISOString(),
+            items,
+            status: 'Pending Approval',
+            teacherRequestSignature: signatureDataUrl,
+            pickupLocation: "Awaiting Admin Details",
+            requestedAt: new Date().toISOString()
+        };
+
+        await set(ref(db, 'orders/' + orderId), orderData);
+        await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
+
+        cart = {};
+        updateCartBadge();
+
+        bootstrap.Modal.getInstance($('teacher-signature-modal')).hide();
+        $('cart-modal').classList.remove('active');
+
+        showToast(`Order ${orderId} Submitted!`);
+    } catch (e) {
+        console.error(e);
+        showToast("Error submitting order request", 'error');
+    }
+}
+
+function clearTeacherRequestCanvas() {
+    teacherRequestPad?.clear();
 }
 
 // ==================== LIVE ORDERS (ADMIN) ====================
@@ -1104,18 +1249,46 @@ function renderTeacherOrderHistory() {
     list.innerHTML = ''; cards.innerHTML = '';
     const start = (teacherOrdersState.currentPage - 1) * PAGE_SIZE; const end = start + PAGE_SIZE;
     const pageItems = teacherOrdersState.filtered.slice(start, end);
-    if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="5" style="text-align:center;">No history</td></tr>'; cards.innerHTML = '<p style="text-align:center; padding:20px; color:#64748b;">No orders placed yet.</p>'; return; }
+    if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="4" style="text-align:center;">No history</td></tr>'; cards.innerHTML = '<p style="text-align:center; padding:20px; color:#64748b;">No orders placed yet.</p>'; return; }
+
     pageItems.forEach(([id, order]) => {
         const dateStr = new Date(order.timestamp).toLocaleDateString();
-        const statusBadge = order.status === 'Pending Approval' ? 'bg-warning' : order.status === 'Approved' ? 'bg-info' : 'bg-success';
+        const isApproved = order.status.includes("Approved") || order.status.includes("Ready");
+        const statusBadge = isApproved ? 'bg-success' : 'bg-warning text-dark';
+
+        const locationDisplay = isApproved
+            ? `<div class="bg-light-success text-success border border-success rounded p-1 small fw-bold" style="font-size:11px;">
+                 📍 ${order.pickupLocation || 'Main Store'}
+               </div>`
+            : `<span class="text-muted small"><em>Awaiting Admin...</em></span>`;
+
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${id}</td><td>${dateStr}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge ${statusBadge}">${order.status}</span></td><td><button class="view-details-btn">View</button></td>`;
-        const trWrap = tr.querySelector('.it-wrap'); (order.items || []).slice(0, 3).forEach(it => { const img = document.createElement('img'); img.className='inventory-thumb'; trWrap.appendChild(img); attachSmartImage(img, it.imageUrl); });
+        tr.innerHTML = `
+            <td>
+                <strong>${order.items ? order.items.map(i => i.itemName).join(', ') : 'Stationery'}</strong>
+                <br><small class="text-muted">ID: ${id} | ${dateStr}</small>
+            </td>
+            <td><span class="badge ${statusBadge}">${order.status}</span></td>
+            <td>${locationDisplay}</td>
+            <td><button class="view-details-btn">View Receipt</button></td>`;
+
         tr.querySelector('button').onclick = () => viewOrderDetails(id);
         list.appendChild(tr);
 
         const card = document.createElement('div'); card.className = 'order-mobile-card';
-        card.innerHTML = `<div class="omc-header"><span class="omc-id">${id}</span><span class="badge ${statusBadge}">${order.status}</span></div><div class="omc-body"><div class="omc-items"></div><div class="omc-info"><p><strong>Date:</strong> ${dateStr}</p><p><strong>Items:</strong> ${order.items?.length || 0}</p></div></div><button class="primary-btn blue omc-view-btn">View Details</button>`;
+        card.innerHTML = `
+            <div class="omc-header">
+                <span class="omc-id">${id}</span>
+                <span class="badge ${statusBadge}">${order.status}</span>
+            </div>
+            <div class="omc-body">
+                <div class="omc-items"></div>
+                <div class="omc-info">
+                    <p><strong>Date:</strong> ${dateStr}</p>
+                    <p><strong>Location:</strong> ${order.pickupLocation || 'Pending'}</p>
+                </div>
+            </div>
+            <button class="primary-btn blue omc-view-btn">View Details</button>`;
         const cardItemsWrap = card.querySelector('.omc-items'); (order.items || []).slice(0, 3).forEach(it => { const img = document.createElement('img'); img.className='inventory-thumb'; cardItemsWrap.appendChild(img); attachSmartImage(img, it.imageUrl); });
         card.querySelector('.omc-view-btn').onclick = () => viewOrderDetails(id);
         cards.appendChild(card);

@@ -576,16 +576,25 @@ img.lazy-load {
 
 /* ==================== SIGNATURE PADS ==================== */
 .signature-section { display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px; }
-.signature-pad-container label {
-    font-weight: 600; display: block; margin-bottom: 5px;
-    color: #475569; font-size: 13px;
+.signature-pad-container {
+    width: 100%;
+    max-width: 100%;
+    background: #f8f9fa;
+    border: 2px dashed #6c757d;
+    border-radius: 8px;
+    position: relative;
+    touch-action: none; /* Disables page scrolling while drawing on mobile */
+    margin-bottom: 10px;
 }
+
 .signature-pad-container canvas {
-    border: 2px dashed #cbd5e1; background-color: #fff;
-    cursor: crosshair; display: block; touch-action: none;
-    width: 100%; max-width: 100%; border-radius: 8px;
-    background-image: linear-gradient(transparent 95%, #f1f5f9 95%);
-    background-size: 100% 30px;
+    display: block;
+    width: 100% !important;
+    height: 180px !important; /* Larger comfortable drawing height for fingers */
+    background-color: #ffffff;
+    border-radius: 6px;
+    cursor: crosshair;
+    touch-action: none;
 }
 .clear-btn {
     background-color: #7f8c8d; color: white;

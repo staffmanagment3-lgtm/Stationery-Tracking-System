@@ -441,10 +441,15 @@
                     <div class="table-responsive desktop-only">
                         <table class="history-table">
                             <thead>
-                            <tr><th>Order ID</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr>
+                            <tr>
+                                <th>Item Details</th>
+                                <th>Status</th>
+                                <th>📍 Pickup Location</th>
+                                <th>Action</th>
+                            </tr>
                             </thead>
                             <tbody id="teacher-history-list">
-                            <tr><td colspan="5">Loading...</td></tr>
+                            <tr><td colspan="4">Loading...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -457,6 +462,7 @@
     </section>
 
     <!-- Cart Modal -->
+    <!-- Cart Modal -->
     <div id="cart-modal" class="modal">
         <div class="modal-content">
             <h3>Shopping Cart</h3>
@@ -465,6 +471,49 @@
             <div class="modal-actions">
                 <button id="submit-requisition-btn" class="primary-btn green">Submit Requisition</button>
                 <button id="close-cart-btn" class="secondary-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Teacher Order Signature Modal -->
+    <div class="modal fade" id="teacher-signature-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content rounded-4 shadow">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fs-6 fw-bold">Sign to Confirm Item Request</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center p-4">
+                    <p class="small text-muted mb-2">Please draw your signature below to authorize this stationery request.</p>
+                    <div class="border rounded-3 p-1 bg-light mb-2">
+                        <canvas id="teacher-request-canvas" width="340" height="150" style="touch-action: none; background: #fff; cursor: crosshair; width: 100%;"></canvas>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="clearTeacherRequestCanvas()">Clear Signature</button>
+                    <button type="button" class="btn btn-success w-100 py-2 fw-bold" onclick="submitFinalOrderWithSignature()">
+                        Submit Order Request
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Approval Modal -->
+    <div class="modal fade" id="admin-approval-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content rounded-4 shadow">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title fs-6 fw-bold">Approve Order Request</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label for="pickup-location-input" class="form-label small fw-bold">Pickup Location / Handover Comment</label>
+                        <textarea id="pickup-location-input" class="form-control" rows="3" placeholder="e.g. Collect from Main Office, Store Room 2"></textarea>
+                    </div>
+                    <button type="button" class="btn btn-success w-100 fw-bold py-2" onclick="confirmAdminOrderApproval()">
+                        Confirm Approval & Notify Teacher
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -492,7 +541,7 @@
         </div>
     </div>
 
-    <!-- Notification Modal -->
+    <!-- Notification Modal (Legacy/Custom) -->
     <div id="notification-modal" class="modal">
         <div class="modal-content" style="border-top:8px solid #f39c12;max-width:450px;">
             <h3>🔔 Notification Alert</h3>
@@ -528,7 +577,7 @@
         </div>
     </div>
 
-    <!-- Notification Modal -->
+    <!-- Notification Modal (Bootstrap) -->
     <div class="modal fade" id="notificationModal" tabindex="-1" aria-labelledby="notificationModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-scrollable">
         <div class="modal-content">
