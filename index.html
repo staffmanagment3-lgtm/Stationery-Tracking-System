@@ -28,6 +28,7 @@
         <nav id="admin-menu" class="drawer-nav" style="display: none;">
             <button data-target="tab-inventory" class="drawer-item active">📦 Master Inventory</button>
             <button data-target="tab-add-item" class="drawer-item">➕ Add New Item</button>
+            <button data-target="tab-audit-ledger" class="drawer-item">📑 Stock Audit Ledger</button>
             <button data-target="tab-google-drive" class="drawer-item">📁 Google Drive Assets</button>
             <button data-target="tab-orders" class="drawer-item">📋 Live Requisition Requests</button>
             <button data-target="tab-manage-staff" class="drawer-item">👥 Staff Management</button>
@@ -202,6 +203,7 @@
                                 </tbody>
                             </table>
                         </div>
+                        <div id="admin-inventory-pagination"></div>
                     </div>
                 </div>
 
@@ -345,6 +347,35 @@
                     </div>
                 </div>
 
+                <!-- Tab: Stock Movement Audit Ledger -->
+                <div id="tab-audit-ledger" class="admin-tab">
+                    <div class="admin-actions-area">
+                        <button id="export-audit-ledger-btn" class="action-btn btn-green">📥 Export Audit Ledger (Excel)</button>
+                    </div>
+                    <div id="admin-audit-ledger-area" style="margin-top:30px;">
+                        <h3>Stock Movement Audit Sheet</h3>
+                        <p style="font-size:13px; color:#64748b; margin-bottom:15px;">Real-time log of every issued item and inventory change.</p>
+                        <div class="table-responsive">
+                            <table class="history-table compact-table" id="audit-ledger-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date & Time</th>
+                                        <th>Teacher (ADEK)</th>
+                                        <th>Item (Serial)</th>
+                                        <th>Qty Issued</th>
+                                        <th>Stock Balance</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-audit-ledger-list">
+                                    <tr><td colspan="6" style="text-align:center;">Loading ledger data...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="admin-audit-pagination"></div>
+                    </div>
+                </div>
+
                 <!-- Tab: Orders & Requests -->
                 <div id="tab-orders" class="admin-tab">
                     <div class="admin-actions-area">
@@ -400,16 +431,21 @@
             </div>
             <div id="teacher-history-area" style="margin-top:40px;">
                 <h3>My Order History</h3>
-                <div class="table-responsive">
-                    <table class="history-table">
-                        <thead>
-                        <tr><th>Order ID</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr>
-                        </thead>
-                        <tbody id="teacher-history-list">
-                        <tr><td colspan="5">Loading...</td></tr>
-                        </tbody>
-                    </table>
+                <div id="teacher-orders-container">
+                    <div class="table-responsive desktop-only">
+                        <table class="history-table">
+                            <thead>
+                            <tr><th>Order ID</th><th>Date</th><th>Items</th><th>Status</th><th>Action</th></tr>
+                            </thead>
+                            <tbody id="teacher-history-list">
+                            <tr><td colspan="5">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- Mobile Card View -->
+                    <div id="teacher-history-cards" class="mobile-only"></div>
                 </div>
+                <div id="teacher-orders-pagination"></div>
             </div>
         </div>
     </section>
