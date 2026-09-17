@@ -915,6 +915,7 @@ img.lazy-load {
     justify-content: center;
     border: 2px solid #2c3e50;
 }
+.d-none { display: none !important; }
 
 .cart-btn-main {
     background: #f39c12;
@@ -982,7 +983,38 @@ img.lazy-load {
     font-size: 13px;
 }
 
-/* ==================== ORDER DETAILS ==================== */
+/* Desktop: Show Excel Table, Hide Mobile Cards */
+@media (min-width: 769px) {
+  .inventory-desktop-table { display: table !important; }
+  .inventory-mobile-cards { display: none !important; }
+}
+
+/* Mobile (iOS & Android): Hide Excel Table, Show Cards */
+@media (max-width: 768px) {
+  .inventory-desktop-table { display: none !important; }
+  .inventory-mobile-cards { display: flex !important; flex-direction: column; gap: 12px; }
+
+  .inventory-card-mobile {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    border: 1px solid #eef2f5;
+  }
+  .inventory-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .inventory-card-img {
+    width: 60px;
+    height: 60px;
+    object-fit: contain;
+    border-radius: 8px;
+    background: #f8f9fa;
+  }
+}
 .order-detail-signatures { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
 .signature-display-box {
     flex: 1; min-width: 200px;

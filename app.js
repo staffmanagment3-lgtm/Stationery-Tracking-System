@@ -41,6 +41,7 @@ let unsubscribeListeners = [];
 let html5QrCode = null;
 let ocrStream = null;
 let currentOcrTarget = null; // Global target for OCR extraction
+let notificationsList = [];
 
 const catalogState = {
     allItems: [],
@@ -392,6 +393,26 @@ document.addEventListener('DOMContentLoaded', () => {
     if (closeOrderDetailBtn) closeOrderDetailBtn.addEventListener('click', () => $('order-detail-modal').classList.remove('active'));
     if (closeItemDetailBtn) closeItemDetailBtn.addEventListener('click', () => $('item-detail-modal').classList.remove('active'));
 
+    $('notification-bell')?.addEventListener('click', () => {
+        renderNotificationList();
+        const notifModal = new bootstrap.Modal($('notificationModal'));
+        notifModal.show();
+
+        const badgeEl = $('notif-badge');
+        if (badgeEl) {
+            badgeEl.textContent = '0';
+            badgeEl.classList.add('d-none');
+        }
+    });
+
+    $('clear-all-notifications-btn')?.addEventListener('click', () => {
+        notificationsList = [];
+        renderNotificationList();
+        updateNotificationBadge();
+    });
+
+    $('ocr-file-fallback')?.addEventListener('change', handleOcrFileFallback);
+
     if (startScanBtn) startScanBtn.addEventListener('click', () => { $('qr-scanner-modal').classList.add('active'); initScanner(); });
     if (closeScannerBtn) closeScannerBtn.addEventListener('click', stopScanner);
 
@@ -478,10 +499,15 @@ function listenForNewOrders() {
         const data = snapshot.val() || {};
         const pendingCount = Object.values(data).filter(o => o.status === 'Pending Approval').length;
         const badge = $('notif-badge');
-        if (badge) { badge.textContent = pendingCount; badge.style.display = pendingCount > 0 ? 'flex' : 'none'; }
+        if (badge) {
+            badge.textContent = pendingCount;
+            badge.style.display = pendingCount > 0 ? 'flex' : 'none';
+            if (pendingCount > 0) badge.classList.remove('d-none');
+        }
         Object.entries(data).forEach(([id, order]) => {
             if (order.status === 'Pending Approval' && !alertedRequests.has(id)) {
                 alertedRequests.add(id);
+                addSystemNotification('New Order Received', `Order ID #${id} from ${order.teacherName}`);
                 if (Notification.permission === "granted") {
                     new Notification("New Requisition Request", { body: `From: ${order.teacherName}`, icon: 'school.png' });
                 }
@@ -510,19 +536,114 @@ async function stopScanner() {
 }
 
 async function startOcrCamera() {
-    const video = $('ocr-video');
+    const videoElement = $('ocr-video');
+    const fallbackInput = $('ocr-file-fallback');
+
+    const constraintList = [
+        { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
+        { video: { facingMode: "user" } },
+        { video: true }
+    ];
+
+    let streamSuccess = false;
+
+    stopOcrCamera(); // Always release previous active tracks first
+
+    for (const constraints of constraintList) {
+        try {
+            ocrStream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (videoElement && ocrStream) {
+                videoElement.srcObject = ocrStream;
+                await videoElement.play();
+                streamSuccess = true;
+                break;
+            }
+        } catch (err) {
+            console.warn("Camera constraint attempt failed:", constraints, err);
+        }
+    }
+
+    if (!streamSuccess) {
+        console.error("All getUserMedia attempts failed.");
+        if (fallbackInput) {
+            alert("Live camera failed. Opening device camera app...");
+            fallbackInput.click();
+        } else {
+            showToast("Could not access camera", "error");
+        }
+    }
+}
+
+async function handleOcrFileFallback(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const loader = $('ocr-loader');
+    if (loader) loader.style.display = 'flex';
+
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        const img = new Image();
+        img.src = e.target.result;
+        img.onload = async () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+
+            preprocessCanvasForOcr(canvas);
+            await processOcrFromCanvas(canvas);
+        };
+    };
+    reader.readAsDataURL(file);
+}
+
+async function processOcrFromCanvas(canvas) {
+    const loader = $('ocr-loader');
+    if (loader) loader.style.display = 'flex';
+    $('ocr-status-text').textContent = "Reading label text...";
+
     try {
-        if (ocrStream) stopOcrCamera();
-        ocrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
-        if (video) { video.srcObject = ocrStream; await video.play(); }
-    } catch (err) { showToast("Camera error", "error"); stopOcrCamera(); }
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$-_./&()%+= ',
+            preserve_interword_spaces: '1',
+            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OR_LINE
+        });
+
+        const result = await worker.recognize(canvas);
+        const rawText = result.data.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+        await worker.terminate();
+
+        const inputEl = document.getElementById(currentOcrTarget);
+        if (inputEl && rawText.length > 0) {
+            inputEl.value = rawText;
+            inputEl.dispatchEvent(new Event('input'));
+            alert(`Text Captured: "${rawText}"`);
+        } else {
+            alert("Unable to read text clearly.");
+        }
+        stopOcrCamera();
+    } catch (err) {
+        console.error("OCR Error:", err);
+        showToast("OCR Failed", "error");
+        if (loader) loader.style.display = 'none';
+    }
 }
 
 function stopOcrCamera() {
-    if (ocrStream) { ocrStream.getTracks().forEach(track => track.stop()); ocrStream = null; }
-    const video = $('ocr-video'); if (video) video.srcObject = null;
-    $('ocr-loader').style.display = 'none';
-    $('ocr-scanner-modal').classList.remove('active');
+    if (ocrStream) {
+        ocrStream.getTracks().forEach(track => track.stop());
+        ocrStream = null;
+    }
+    const videoElement = $('ocr-video');
+    if (videoElement) {
+        videoElement.srcObject = null;
+    }
+    if ($('ocr-loader')) $('ocr-loader').style.display = 'none';
+    if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
 }
 
 function preprocessCanvasForOcr(canvas) {
@@ -709,22 +830,93 @@ function fetchMasterInventory() {
 }
 
 function renderMasterInventory() {
-    const list = $('master-inventory-list'); if (!list) return;
+    const container = $('inventory-container');
+    if (!container) return;
+
     const term = adminInventoryState.searchTerm;
-    adminInventoryState.filtered = term ? adminInventoryState.allItems.filter(i => (i.itemName || '').toLowerCase().includes(term) || (i.serialNumber || '').toLowerCase().includes(term)) : adminInventoryState.allItems.slice();
-    list.innerHTML = '';
+    adminInventoryState.filtered = term
+        ? adminInventoryState.allItems.filter(i =>
+            (i.itemName || '').toLowerCase().includes(term) ||
+            (i.serialNumber || '').toLowerCase().includes(term))
+        : adminInventoryState.allItems.slice();
+
     const start = (adminInventoryState.currentPage - 1) * PAGE_SIZE;
     const end = start + PAGE_SIZE;
-    const pageItems = adminInventoryState.filtered.slice(start, end);
-    if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="7" style="text-align:center;">No items.</td></tr>'; return; }
-    pageItems.forEach(item => {
-        const tr = document.createElement('tr'); const qty = parseInt(item.quantity) || 0;
-        if (qty < 5) tr.className = 'row-low-stock';
-        tr.innerHTML = `<td>${escapeHtml(item.serialNumber)}</td><td>${escapeHtml(item.itemName)}</td><td>${escapeHtml(item.description)}</td><td>${item.openingQuantity || 0}</td><td>${qty} ${qty < 5 ? '<span class="badge-low-stock">Low</span>' : ''}</td><td><img class="inventory-thumb"></td><td><span class="badge ${qty > 0 ? 'bg-success' : 'bg-secondary'}">${qty > 0 ? 'In Stock' : 'Out'}</span></td>`;
-        attachSmartImage(tr.querySelector('img'), item.imageUrl);
-        list.appendChild(tr);
-    });
+    const items = adminInventoryState.filtered.slice(start, end);
+
+    if (items.length === 0) {
+        container.innerHTML = '<div class="alert alert-info text-center">No inventory items available.</div>';
+        return;
+    }
+
+    // 1. Build Desktop Table
+    let desktopHtml = `
+        <div class="table-responsive desktop-only">
+            <table class="table table-hover align-middle inventory-desktop-table w-100 history-table">
+                <thead class="table-light">
+                    <tr>
+                        <th>Image</th><th>Serial No</th><th>Item Name</th>
+                        <th>Description</th><th>Open Qty</th><th>Current Qty</th>
+                        <th>Status</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${items.map(item => {
+                        const qty = parseInt(item.quantity) || 0;
+                        const directUrl = getDirectDriveUrl(item.imageUrl);
+                        return `
+                        <tr class="${qty < 5 ? 'row-low-stock' : ''}">
+                            <td><img src="${directUrl}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
+                            <td><code>${item.serialNumber || 'N/A'}</code></td>
+                            <td><strong>${escapeHtml(item.itemName)}</strong></td>
+                            <td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td>
+                            <td>${item.openingQuantity || 0}</td>
+                            <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
+                            <td>${getStatusBadge(qty)}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary me-1" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    // 2. Build Mobile Cards
+    let mobileHtml = `
+        <div class="inventory-mobile-cards mobile-only">
+            ${items.map(item => {
+                const qty = parseInt(item.quantity) || 0;
+                return `
+                <div class="inventory-card-mobile">
+                    <div class="inventory-card-header">
+                        <img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')">
+                        <div style="flex:1;">
+                            <h6 class="mb-0">${escapeHtml(item.itemName)}</h6>
+                            <small class="text-muted d-block">SN: <code>${item.serialNumber || 'N/A'}</code></small>
+                            ${getStatusBadge(qty)}
+                        </div>
+                    </div>
+                    <p class="small text-secondary mb-2">${escapeHtml(item.description || 'No description.')}</p>
+                    <div class="d-flex justify-content-between mb-3">
+                        <small>Open Qty: <strong>${item.openingQuantity || 0}</strong></small>
+                        <small>Current Qty: <strong class="${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</strong></small>
+                    </div>
+                    <button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button>
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+
+    container.innerHTML = desktopHtml + mobileHtml;
     renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
+}
+
+function getStatusBadge(qty) {
+    if (qty <= 0) return '<span class="badge bg-danger">Out of Stock</span>';
+    if (qty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${qty})</span>`;
+    return '<span class="badge bg-success">Available</span>';
 }
 
 // ==================== ANALYTICS & LEDGER ====================
