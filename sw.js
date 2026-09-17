@@ -1,4 +1,4 @@
-const CACHE_NAME = 'jys-tracker-v1';
+const CACHE_NAME = 'stationery-app-v1.0.2';
 const ASSETS = [
   'index.html',
   'style.css',
@@ -15,6 +15,21 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS);
     })
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cache) => {
+          if (cache !== CACHE_NAME) {
+            console.log('Deleting old Service Worker Cache:', cache);
+            return caches.delete(cache);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
   );
 });
 

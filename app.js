@@ -3,6 +3,35 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebas
 import { getDatabase, ref, get, child, set, push, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
+// Define Current App Version
+const APP_VERSION = "1.0.2";
+
+// Auto Cache Purge Logic
+(function checkAppVersion() {
+    const savedVersion = localStorage.getItem('app_installed_version');
+    if (savedVersion !== APP_VERSION) {
+        console.log(`Version change detected: ${savedVersion} -> ${APP_VERSION}. Clearing old caches...`);
+
+        // Clear Cache Storage
+        if ('caches' in window) {
+            caches.keys().then(names => {
+                for (let name of names) caches.delete(name);
+            });
+        }
+
+        // Unregister Old Service Workers
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(registrations => {
+                for (let registration of registrations) registration.unregister();
+            });
+        }
+
+        localStorage.setItem('app_installed_version', APP_VERSION);
+        // Hard reload bypass cache
+        window.location.reload(true);
+    }
+})();
+
 const firebaseConfig = {
     apiKey: "AIzaSyC34JvIlqAC0Rqb9wBIed3kNdvrEpy16P8",
     authDomain: "stationery-control-system.firebaseapp.com",
@@ -60,17 +89,30 @@ const adminInventoryState = {
 
 const auditLedgerState = {
     allItems: [],
+    filtered: [],
     currentPage: 1,
 };
 
 const teacherOrdersState = {
     allItems: [],
+    filtered: [],
     currentPage: 1,
 };
 
 const alertedRequests = new Set();
 
 // ==================== IMAGE UTILITIES ====================
+function getStatusBadge(qty) {
+    const numericQty = Number(qty) || 0;
+    if (numericQty <= 0) {
+        return `<span class="badge bg-danger">Out of Stock</span>`;
+    } else if (numericQty <= 5) {
+        return `<span class="badge bg-warning text-dark">Low Stock (${numericQty})</span>`;
+    } else {
+        return `<span class="badge bg-success">In Stock</span>`;
+    }
+}
+
 function getDirectDriveUrl(url, endpointIndex = 0) {
     if (!url) return FALLBACK_IMG;
     if (url.startsWith('data:image')) return url;
@@ -96,7 +138,6 @@ window.handleImageError = function(imgElement, originalUrl) {
         retries++;
         imgElement.setAttribute('data-retries', retries);
 
-        // Cycle to next endpoint on each retry attempt
         const newUrl = getDirectDriveUrl(originalUrl, retries) + (originalUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
         console.log(`Retrying image load (${retries}/${maxRetries}) with alternate endpoint: ${newUrl}`);
 
@@ -165,9 +206,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('sw.js')
-                .then(reg => console.log('SW Registered'))
-                .catch(err => console.log('SW Registration failed', err));
+            navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
+                .then(reg => {
+                    console.log('SW Registered successfully:', reg.scope);
+                    reg.update();
+                })
+                .catch(err => console.warn('ServiceWorker registration skipped/failed:', err));
         });
     }
 
@@ -290,48 +334,84 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- Authentication ---
-    if (loginForm) {
-        loginForm.addEventListener('submit', async (e) => {
+    // --- Bulletproof Login Form Handler ---
+    async function executeLogin(e) {
+        if (e) {
             e.preventDefault();
-            const rawAdecNumber = $('adec-number').value.trim();
-            const password = $('password').value.trim();
-            const loginError = $('login-error');
-            const loginBtn = $('login-btn');
-            if (!rawAdecNumber || !password) return;
+            e.stopPropagation();
+        }
+
+        console.log("--> Login attempt triggered!");
+        const loginBtn = $('login-submit-btn');
+        const passInput = $('login-pass-number');
+        const passwordInput = $('login-password');
+        const loginError = $('login-error');
+
+        if (!passInput || !passwordInput) {
+            alert("Critical Error: Login Input Elements not found in HTML. Check element IDs.");
+            return false;
+        }
+
+        const adecNumber = passInput.value.trim().toUpperCase();
+        const password = passwordInput.value.trim();
+
+        if (!adecNumber || !password) {
+            alert("Please enter both ADEK Pass Number and Password.");
+            return false;
+        }
+
+        if (loginBtn) {
             loginBtn.disabled = true;
             loginBtn.textContent = "Authenticating...";
-            try {
-                const snapshot = await get(ref(db, 'users'));
-                if (snapshot.exists()) {
-                    const users = snapshot.val();
-                    const matchedKey = Object.keys(users).find(key => key.toLowerCase() === rawAdecNumber.toLowerCase());
-                    if (matchedKey) {
-                        const userData = users[matchedKey];
-                        if (userData.password === password) {
-                            localStorage.setItem('stationery_user_adec', matchedKey);
-                            handleUserRole(matchedKey);
-                            if (loginError) loginError.textContent = "";
-                        } else {
-                            if (loginError) loginError.textContent = "Incorrect Password.";
-                            showToast("Incorrect Password", "error");
-                        }
+        }
+
+        try {
+            const snapshot = await get(ref(db, 'users'));
+            if (snapshot.exists()) {
+                const users = snapshot.val();
+                const matchedKey = Object.keys(users).find(key => key.toUpperCase() === adecNumber);
+
+                if (matchedKey) {
+                    const userData = users[matchedKey];
+                    if (userData.password === password) {
+                        localStorage.setItem('stationery_user_adec', matchedKey);
+                        handleUserRole(matchedKey);
+                        if (loginError) loginError.textContent = "";
                     } else {
-                        if (loginError) loginError.textContent = "ADEK Pass Number not found.";
-                        showToast("Account not found", "error");
+                        if (loginError) loginError.textContent = "Incorrect Password.";
+                        showToast("Incorrect Password", "error");
                     }
                 } else {
-                    if (loginError) loginError.textContent = "Database error: No users found.";
+                    if (loginError) loginError.textContent = "ADEK Pass Number not found.";
+                    showToast("Account not found", "error");
                 }
-            } catch (err) {
-                console.error(err);
-                if (loginError) loginError.textContent = "Connection failed.";
-            } finally {
+            } else {
+                if (loginError) loginError.textContent = "No registered staff users found.";
+            }
+        } catch (err) {
+            console.error("Login Exception Caught:", err);
+            try {
+                const directSnap = await get(child(ref(db), `users/${adecNumber}`));
+                if (directSnap.exists()) {
+                    const userData = directSnap.val();
+                    if (userData.password === password) {
+                        localStorage.setItem('stationery_user_adec', adecNumber);
+                        handleUserRole(adecNumber);
+                        return;
+                    }
+                }
+            } catch(e) {}
+            alert("Login Failed: " + err.message);
+        } finally {
+            if (loginBtn) {
                 loginBtn.disabled = false;
                 loginBtn.textContent = "Login";
             }
-        });
+        }
+        return false;
     }
+
+    if (loginForm) loginForm.onsubmit = executeLogin;
 
     if (bypassAdminBtn) {
         bypassAdminBtn.addEventListener('click', () => {
@@ -419,7 +499,6 @@ document.addEventListener('DOMContentLoaded', () => {
     ocrTriggerBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             currentOcrTarget = btn.dataset.target;
-            $('ocr-scanner-modal').classList.add('active');
             startOcrCamera();
         });
     });
@@ -516,7 +595,74 @@ function listenForNewOrders() {
     });
 }
 
+function addSystemNotification(title, message, timestamp = new Date()) {
+    const notif = {
+        id: Date.now(),
+        title,
+        message,
+        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    notificationsList.unshift(notif);
+    updateNotificationBadge();
+}
+
+function updateNotificationBadge() {
+    const badgeEl = $('notif-badge');
+    if (badgeEl) {
+        badgeEl.textContent = notificationsList.length;
+        if (notificationsList.length > 0) {
+            badgeEl.classList.remove('d-none');
+            badgeEl.style.display = 'flex';
+        }
+    }
+}
+
+function renderNotificationList() {
+    const container = $('notification-list-container');
+    if (!container) return;
+
+    if (notificationsList.length === 0) {
+        container.innerHTML = `<li class="list-group-item text-center text-muted py-4">No notifications yet</li>`;
+        return;
+    }
+
+    container.innerHTML = notificationsList.map(n => `
+        <li class="list-group-item d-flex justify-content-between align-items-start p-3">
+            <div>
+                <strong class="d-block text-dark">${escapeHtml(n.title)}</strong>
+                <small class="text-secondary">${escapeHtml(n.message)}</small>
+            </div>
+            <span class="badge bg-light text-dark ms-2" style="font-size:10px;">${n.time}</span>
+        </li>
+    `).join('');
+}
+
 // ==================== SCANNER / OCR ====================
+async function initScanner() {
+    if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+    const config = { fps: 10, qrbox: { width: 250, height: 150 }, aspectRatio: 1.0 };
+    try {
+        await html5QrCode.start({ facingMode: "environment" }, config, (decodedText) => {
+            const input = $('inv-serial-number');
+            if (input) { input.value = decodedText; input.dispatchEvent(new Event('input')); }
+            showToast("Code Scanned!", "success");
+            stopScanner();
+        }, () => { });
+    } catch (err) { showToast("Camera error", "error"); stopScanner(); }
+}
+
+async function stopScanner() {
+    $('qr-scanner-modal').classList.remove('active');
+    if (html5QrCode && html5QrCode.isScanning) {
+        try {
+            await html5QrCode.stop();
+            console.log("Scanner stopped.");
+        } catch (e) {
+            console.warn("Scanner stop error:", e);
+        }
+    }
+}
+
 async function startOcrCamera() {
     stopOcrCamera(); // Always release previous active tracks first
 
@@ -545,7 +691,6 @@ async function startOcrCamera() {
         await videoEl.play();
         $('ocr-scanner-modal').classList.add('active');
     } else {
-        // Fallback to Native Mobile Camera App
         console.log("Live stream failed. Opening native camera...");
         if (fallbackInput) {
             alert("Live browser camera blocked. Opening device camera app...");
@@ -628,102 +773,17 @@ function stopOcrCamera() {
     if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
 }
 
-    if (!streamSuccess) {
-        console.error("All getUserMedia attempts failed.");
-        if (fallbackInput) {
-            alert("Live camera failed. Opening device camera app...");
-            fallbackInput.click();
-        } else {
-            showToast("Could not access camera", "error");
-        }
-    }
-}
-
-async function handleOcrFileFallback(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const loader = $('ocr-loader');
-    if (loader) loader.style.display = 'flex';
-
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-        const img = new Image();
-        img.src = e.target.result;
-        img.onload = async () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-
-            preprocessCanvasForOcr(canvas);
-            await processOcrFromCanvas(canvas);
-        };
-    };
-    reader.readAsDataURL(file);
-}
-
-async function processOcrFromCanvas(canvas) {
-    const loader = $('ocr-loader');
-    if (loader) loader.style.display = 'flex';
-    $('ocr-status-text').textContent = "Reading label text...";
-
-    try {
-        const worker = await Tesseract.createWorker('eng');
-        await worker.setParameters({
-            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$-_./&()%+= ',
-            preserve_interword_spaces: '1',
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OR_LINE
-        });
-
-        const result = await worker.recognize(canvas);
-        const rawText = result.data.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-
-        await worker.terminate();
-
-        const inputEl = document.getElementById(currentOcrTarget);
-        if (inputEl && rawText.length > 0) {
-            inputEl.value = rawText;
-            inputEl.dispatchEvent(new Event('input'));
-            alert(`Text Captured: "${rawText}"`);
-        } else {
-            alert("Unable to read text clearly.");
-        }
-        stopOcrCamera();
-    } catch (err) {
-        console.error("OCR Error:", err);
-        showToast("OCR Failed", "error");
-        if (loader) loader.style.display = 'none';
-    }
-}
-
-function stopOcrCamera() {
-    if (ocrStream) {
-        ocrStream.getTracks().forEach(track => track.stop());
-        ocrStream = null;
-    }
-    const videoElement = $('ocr-video');
-    if (videoElement) {
-        videoElement.srcObject = null;
-    }
-    if ($('ocr-loader')) $('ocr-loader').style.display = 'none';
-    if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
-}
-
 function preprocessCanvasForOcr(canvas) {
     const ctx = canvas.getContext('2d');
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
 
     for (let i = 0; i < data.length; i += 4) {
-        // Grayscale average
         const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        // High-contrast binarization threshold
         const threshold = avg > 115 ? 255 : 0;
-        data[i] = threshold;     // Red
-        data[i + 1] = threshold; // Green
-        data[i + 2] = threshold; // Blue
+        data[i] = threshold;
+        data[i + 1] = threshold;
+        data[i + 2] = threshold;
     }
     ctx.putImageData(imgData, 0, 0);
     return canvas;
@@ -736,20 +796,16 @@ async function captureAndRecognize() {
     if (!video || !video.srcObject) return;
     if (!currentOcrTarget) { showToast("No target input designated for OCR auto-fill.", "error"); return; }
 
-    // Capture Frame
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
 
-    // Apply High-Contrast Pre-processing
     preprocessCanvasForOcr(canvas);
 
-    // UI Loading State
     loader.style.display = 'flex';
     $('ocr-status-text').textContent = "Scanning & Reading Text...";
 
     try {
-        // Create specialized worker for high-precision alphanumeric reading
         const worker = await Tesseract.createWorker('eng');
         await worker.setParameters({
             tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$-_./&()%+= ',
@@ -758,10 +814,7 @@ async function captureAndRecognize() {
         });
 
         const result = await worker.recognize(canvas);
-        const rawText = result.data.text
-            .replace(/[\r\n]+/g, ' ')  // Replace line breaks with single space
-            .replace(/\s+/g, ' ')      // Clean multiple spaces to single space
-            .trim();
+        const rawText = result.data.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
 
         await worker.terminate();
 
@@ -862,7 +915,15 @@ function renderCatalogPage() {
 }
 
 function renderPaginationControls(containerId, state, renderFn) {
-    const targetElement = $(containerId); if (!targetElement) return;
+    const targetElement = $(containerId);
+    if (!targetElement) return;
+
+    // Ensure state and filtered array exist
+    if (!state || !state.filtered) {
+        console.warn(`Pagination state or filtered data missing for ${containerId}`);
+        return;
+    }
+
     let wrap = $(`${containerId}-pagination-wrap`);
     if (!wrap) {
         wrap = document.createElement('div'); wrap.id = `${containerId}-pagination-wrap`; wrap.className = 'catalog-pagination';
@@ -870,9 +931,13 @@ function renderPaginationControls(containerId, state, renderFn) {
     }
     const totalPages = Math.ceil(state.filtered.length / PAGE_SIZE) || 1;
     if (state.currentPage > totalPages) state.currentPage = totalPages;
-    wrap.innerHTML = `<button class="page-btn prev" ${state.currentPage === 1 ? 'disabled' : ''}>Prev</button><span class="page-info">Page <strong>${state.currentPage}</strong> of <strong>${totalPages}</strong></span><button class="page-btn next" ${state.currentPage >= totalPages ? 'disabled' : ''}>Next</button>`;
-    wrap.querySelector('.prev').onclick = () => { state.currentPage--; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-    wrap.querySelector('.next').onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+    wrap.innerHTML = `<button class="page-btn prev" ${state.currentPage === 1 ? 'disabled' : ''} id="${containerId}-prev">Prev</button><span class="page-info">Page <strong>${state.currentPage}</strong> of <strong>${totalPages}</strong></span><button class="page-btn next" ${state.currentPage >= totalPages ? 'disabled' : ''} id="${containerId}-next">Next</button>`;
+
+    const prevBtn = document.getElementById(`${containerId}-prev`);
+    const nextBtn = document.getElementById(`${containerId}-next`);
+
+    if (prevBtn) prevBtn.onclick = () => { state.currentPage--; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+    if (nextBtn) nextBtn.onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 
 function showItemDetail(id, data) {
@@ -894,132 +959,98 @@ function fetchMasterInventory() {
     });
 }
 
-function getStatusBadge(qty) {
-    if (qty <= 0) return '<span class="badge bg-danger">Out of Stock</span>';
-    if (qty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${qty})</span>`;
-    return '<span class="badge bg-success">In Stock</span>';
-}
-
 function renderMasterInventory() {
     const container = $('inventory-container');
     if (!container) return;
 
-    const term = adminInventoryState.searchTerm;
-    adminInventoryState.filtered = term
-        ? adminInventoryState.allItems.filter(i =>
-            (i.itemName || '').toLowerCase().includes(term) ||
-            (i.serialNumber || '').toLowerCase().includes(term))
-        : adminInventoryState.allItems.slice();
+    try {
+        const term = adminInventoryState.searchTerm;
+        adminInventoryState.filtered = term
+            ? adminInventoryState.allItems.filter(i =>
+                (i.itemName || '').toLowerCase().includes(term) ||
+                (i.serialNumber || '').toLowerCase().includes(term))
+            : adminInventoryState.allItems.slice();
 
-    const start = (adminInventoryState.currentPage - 1) * PAGE_SIZE;
-    const end = start + PAGE_SIZE;
-    const pageItems = adminInventoryState.filtered.slice(start, end);
+        const start = (adminInventoryState.currentPage - 1) * PAGE_SIZE;
+        const end = start + PAGE_SIZE;
+        const pageItems = adminInventoryState.filtered.slice(start, end);
 
-    if (pageItems.length === 0) {
-        container.innerHTML = '<div class="text-center text-muted p-4">No inventory records found.</div>';
-        return;
+        if (pageItems.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted p-4">No inventory records found.</div>';
+            return;
+        }
+
+        // 1. Build Desktop Table Markup
+        const desktopTable = `
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-hover align-middle history-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Image</th><th>Serial No</th><th>Item Name</th>
+                            <th>Category</th><th>Description</th><th>Qty Available</th>
+                            <th>Status</th><th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${pageItems.map(item => {
+                            const qty = parseInt(item.quantity) || 0;
+                            const directUrl = getDirectDriveUrl(item.imageUrl);
+                            const openQty = item.openingQuantity !== undefined ? item.openingQuantity : '-';
+                            return `
+                            <tr class="${qty < 5 ? 'row-low-stock' : ''}">
+                                <td><img src="${directUrl}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
+                                <td><code>${item.serialNumber || 'N/A'}</code></td>
+                                <td><strong>${escapeHtml(item.itemName)}</strong></td>
+                                <td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td>
+                                <td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td>
+                                <td>${openQty}</td>
+                                <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
+                                <td>${getStatusBadge(qty)}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button>
+                                </td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        // 2. Mobile Cards Markup
+        const mobileCards = `
+            <div class="d-block d-md-none inventory-cards-wrapper">
+                ${pageItems.map(item => {
+                    const qty = parseInt(item.quantity) || 0;
+                    return `
+                    <div class="inventory-card-mobile">
+                        <div class="inventory-card-header">
+                            <img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')">
+                            <div style="flex:1;">
+                                <h6 class="mb-0">${escapeHtml(item.itemName)}</h6>
+                                <small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>
+                                ${getStatusBadge(qty)}
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span>
+                        </div>
+                        <p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description available.')}</p>
+                        <div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3">
+                            <span class="small text-muted">Current Quantity:</span>
+                            <span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span>
+                        </div>
+                        <button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button>
+                    </div>`;
+                }).join('')}
+            </div>
+        `;
+
+        container.innerHTML = desktopTable + mobileCards;
+        renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
+    } catch (err) {
+        console.error("Error rendering Master Inventory:", err);
+        container.innerHTML = `<div class="alert alert-danger text-center">Failed to load inventory data: ${err.message}</div>`;
     }
-
-    // 1. Desktop Table Markup
-    const desktopTable = `
-        <div class="table-responsive d-none d-md-block">
-            <table class="table table-hover align-middle history-table">
-                <thead class="table-light">
-                    <tr>
-                        <th>Image</th><th>Serial No</th><th>Item Name</th>
-                        <th>Category</th><th>Description</th><th>Qty Available</th>
-                        <th>Status</th><th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${pageItems.map(item => {
-                        const qty = parseInt(item.quantity) || 0;
-                        return `
-                        <tr class="${qty < 5 ? 'row-low-stock' : ''}">
-                            <td><img src="${getDirectDriveUrl(item.imageUrl)}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
-                            <td><code>${item.serialNumber || 'N/A'}</code></td>
-                            <td><strong>${escapeHtml(item.itemName)}</strong></td>
-                            <td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td>
-                            <td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td>
-                            <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
-                            <td>${getStatusBadge(qty)}</td>
-                            <td>
-                                <button class="btn btn-sm btn-outline-primary" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button>
-                            </td>
-                        </tr>`;
-                    }).join('')}
-                </tbody>
-            </table>
-        </div>
-    `;
-
-    // 2. Mobile Cards Markup
-    const mobileCards = `
-        <div class="d-block d-md-none inventory-cards-wrapper">
-            ${pageItems.map(item => {
-                const qty = parseInt(item.quantity) || 0;
-                return `
-                <div class="inventory-card-mobile">
-                    <div class="inventory-card-header">
-                        <img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')">
-                        <div style="flex:1;">
-                            <h6 class="mb-0">${escapeHtml(item.itemName)}</h6>
-                            <small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>
-                            ${getStatusBadge(qty)}
-                        </div>
-                    </div>
-                    <div class="mb-2">
-                        <span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span>
-                    </div>
-                    <p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description available.')}</p>
-                    <div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3">
-                        <span class="small text-muted">Current Quantity:</span>
-                        <span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span>
-                    </div>
-                    <button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button>
-                </div>`;
-            }).join('')}
-        </div>
-    `;
-
-    container.innerHTML = desktopTable + mobileCards;
-    renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
-}
-
-    // 2. Build Mobile Cards
-    let mobileHtml = `
-        <div class="inventory-mobile-cards mobile-only">
-            ${items.map(item => {
-                const qty = parseInt(item.quantity) || 0;
-                return `
-                <div class="inventory-card-mobile">
-                    <div class="inventory-card-header">
-                        <img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')">
-                        <div style="flex:1;">
-                            <h6 class="mb-0">${escapeHtml(item.itemName)}</h6>
-                            <small class="text-muted d-block">SN: <code>${item.serialNumber || 'N/A'}</code></small>
-                            ${getStatusBadge(qty)}
-                        </div>
-                    </div>
-                    <p class="small text-secondary mb-2">${escapeHtml(item.description || 'No description.')}</p>
-                    <div class="d-flex justify-content-between mb-3">
-                        <small>Open Qty: <strong>${item.openingQuantity || 0}</strong></small>
-                        <small>Current Qty: <strong class="${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</strong></small>
-                    </div>
-                    <button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button>
-                </div>`;
-            }).join('')}
-        </div>
-    `;
-
-    container.innerHTML = desktopHtml + mobileHtml;
-    renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
-}
-
-function getStatusBadge(qty) {
-    if (qty <= 0) return '<span class="badge bg-danger">Out of Stock</span>';
-    if (qty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${qty})</span>`;
-    return '<span class="badge bg-success">Available</span>';
 }
 
 // ==================== ANALYTICS & LEDGER ====================
@@ -1050,22 +1081,48 @@ function fetchAuditLedger() {
                 ledgerData.push({ orderId: id, timestamp: order.timestamp, teacher: `${order.teacherName} (${order.teacherUid})`, item: `${item.itemName} (${item.serial})`, qty: item.requestQuantity, status: order.status });
             });
         });
-        auditLedgerState.allItems = ledgerData; renderAuditLedger();
+        auditLedgerState.allItems = ledgerData;
+        auditLedgerState.filtered = ledgerData;
+        renderAuditLedger();
     });
 }
 
 function renderAuditLedger() {
     const list = $('admin-audit-ledger-list'); if (!list) return;
     list.innerHTML = '';
-    const start = (auditLedgerState.currentPage - 1) * PAGE_SIZE; const end = start + PAGE_SIZE;
-    const pageItems = auditLedgerState.allItems.slice(start, end);
-    if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>'; return; }
+
+    const start = (auditLedgerState.currentPage - 1) * PAGE_SIZE;
+    const end = start + PAGE_SIZE;
+    const pageItems = auditLedgerState.filtered ? auditLedgerState.filtered.slice(start, end) : [];
+
+    if (pageItems.length === 0) {
+        list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>';
+        return;
+    }
+
     pageItems.forEach(row => {
         const tr = document.createElement('tr');
-        const serial = row.item.match(/\((.*?)\)/)?.[1];
-        let balance = 'N/A'; if (serial) { const it = Object.values(inventoryData).find(i => i.serialNumber === serial); if (it) balance = it.quantity; }
+        const serial = row.item ? row.item.match(/\((.*?)\)/)?.[1] : null;
+
+        // Safely detect stock balance field
+        let stockBalance = (row.stockBalance !== undefined && row.stockBalance !== null && row.stockBalance !== 'N/A')
+            ? row.stockBalance
+            : (row.remainingQty !== undefined ? row.remainingQty : (row.currentQty !== undefined ? row.currentQty : 'N/A'));
+
+        if (stockBalance === 'N/A' && serial) {
+            const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
+            if (it) stockBalance = it.quantity;
+        }
+
         const statusBadge = row.status === 'Pending Approval' ? 'bg-warning' : row.status === 'Approved' ? 'bg-info' : 'bg-success';
-        tr.innerHTML = `<td>${new Date(row.timestamp).toLocaleString()}</td><td>${escapeHtml(row.teacher)}</td><td>${escapeHtml(row.item)}</td><td><strong>${row.qty}</strong></td><td>${balance}</td><td><span class="badge ${statusBadge}">${row.status}</span></td>`;
+        tr.innerHTML = `
+            <td>${row.dateTime || row.timestamp ? new Date(row.dateTime || row.timestamp).toLocaleString() : new Date().toLocaleString()}</td>
+            <td>${row.teacherName || row.teacher || 'N/A'}</td>
+            <td>${row.itemName || row.item || 'Item'}</td>
+            <td><strong>${row.qtyIssued || row.qty || 0}</strong></td>
+            <td><span class="badge bg-secondary fs-6">${stockBalance}</span></td>
+            <td><span class="badge ${statusBadge}">${row.status}</span></td>
+        `;
         list.appendChild(tr);
     });
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
@@ -1152,7 +1209,9 @@ async function updateOrderStatus(id, status) {
 function fetchTeacherOrderHistory(adec) {
     addListener(ref(db, 'orders'), (snap) => {
         const data = snap.val() || {}; const entries = Object.entries(data).reverse();
-        teacherOrdersState.allItems = entries.filter(([id, o]) => o.teacherUid === adec); renderTeacherOrderHistory();
+        teacherOrdersState.allItems = entries.filter(([id, o]) => o.teacherUid === adec);
+        teacherOrdersState.filtered = teacherOrdersState.allItems;
+        renderTeacherOrderHistory();
     });
 }
 
@@ -1160,7 +1219,7 @@ function renderTeacherOrderHistory() {
     const list = $('teacher-history-list'); const cards = $('teacher-history-cards'); if (!list || !cards) return;
     list.innerHTML = ''; cards.innerHTML = '';
     const start = (teacherOrdersState.currentPage - 1) * PAGE_SIZE; const end = start + PAGE_SIZE;
-    const pageItems = teacherOrdersState.allItems.slice(start, end);
+    const pageItems = teacherOrdersState.filtered.slice(start, end);
     if (pageItems.length === 0) { list.innerHTML = '<tr><td colspan="5" style="text-align:center;">No history</td></tr>'; cards.innerHTML = '<p style="text-align:center; padding:20px; color:#64748b;">No orders placed yet.</p>'; return; }
     pageItems.forEach(([id, order]) => {
         const dateStr = new Date(order.timestamp).toLocaleDateString();

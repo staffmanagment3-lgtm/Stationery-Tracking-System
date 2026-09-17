@@ -1,15 +1,10 @@
 {
-  "short_name": "JYS App",
-  "name": "Jern Yafoor Stationery Tracker",
-  "icons": [
-    {
-      "src": "school.png",
-      "sizes": "192x192 512x512",
-      "type": "image/png"
-    }
-  ],
+  "short_name": "StationeryApp",
+  "name": "Stationery Tracker System",
+  "icons": [],
   "start_url": "./index.html",
-  "background_color": "#2b3e50",
-  "theme_color": "#2b3e50",
-  "display": "standalone"
+  "background_color": "#ffffff",
+  "theme_color": "#2c3e50",
+  "display": "standalone",
+  "orientation": "portrait"
 }
