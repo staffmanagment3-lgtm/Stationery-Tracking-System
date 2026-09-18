@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.1.9";
+const APP_VERSION = "1.2.0";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -346,7 +346,7 @@ window.loginWithBiometrics = async function() {
 
     if (!credIdStr || !adecNumber) {
         showToast("Biometric data missing. Please login manually first.", "error");
-        return;
+        return Promise.reject("Missing data");
     }
 
     try {
@@ -372,10 +372,43 @@ window.loginWithBiometrics = async function() {
             localStorage.setItem('stationery_user_adec', adecNumber);
             handleUserRole(adecNumber);
             showToast(`Welcome back!`, "success");
+            return Promise.resolve();
         }
     } catch (err) {
         console.error("Biometric Login Error:", err);
         showToast("Biometric authentication failed or canceled.", "error");
+        return Promise.reject(err);
+    }
+};
+
+window.toggleBiometricAuth = async function(event) {
+    const isChecked = event.target.checked;
+    if (isChecked) {
+        const supported = await window.checkBiometricSupport();
+        if (!supported) {
+            alert("Biometric authentication is not supported on this device/browser.");
+            event.target.checked = false;
+            return;
+        }
+
+        const adec = localStorage.getItem('stationery_user_adec');
+        if (!adec) {
+            alert("Please login manually first to link your device lock.");
+            event.target.checked = false;
+            return;
+        }
+
+        await window.enrollBiometrics(adec);
+
+        if (window.isBiometricEnrolled()) {
+            localStorage.setItem('biometricEnabled', 'true');
+            showToast("Biometric lock enabled!");
+        } else {
+            event.target.checked = false;
+        }
+    } else {
+        localStorage.setItem('biometricEnabled', 'false');
+        showToast("Biometric lock disabled.");
     }
 };
 
@@ -1417,7 +1450,25 @@ document.addEventListener('DOMContentLoaded', () => {
     $('bypass-admin-btn')?.addEventListener('click', handleDirectAdminOpen);
 
     const savedAdec = localStorage.getItem('stationery_user_adec');
-    if (savedAdec) handleUserRole(savedAdec);
+    const bioEnabled = localStorage.getItem('biometricEnabled') === 'true';
+
+    // Sync Biometric Toggles with saved state
+    const adminToggle = $('biometric-toggle-admin');
+    const teacherToggle = $('biometric-toggle-drawer');
+    if (adminToggle) adminToggle.checked = bioEnabled;
+    if (teacherToggle) teacherToggle.checked = bioEnabled;
+
+    if (savedAdec) {
+        if (bioEnabled) {
+            // Require biometric to unlock the app
+            window.loginWithBiometrics().catch(err => {
+                console.warn("Initial biometric unlock failed/canceled. Keeping user in view for manual override.");
+                handleUserRole(savedAdec);
+            });
+        } else {
+            handleUserRole(savedAdec);
+        }
+    }
     else showView('login-view');
 
     // --- UI Listeners ---
