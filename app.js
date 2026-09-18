@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.0.4";
+const APP_VERSION = "1.0.5";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -551,6 +551,17 @@ window.fetchCategories = function() {
   });
 };
 
+// 1. Remove lingering passive scroll blockers
+window.addEventListener('wheel', function(e) {
+  // Allow standard vertical mouse wheel scrolling everywhere
+  e.stopPropagation();
+}, { passive: true });
+
+window.addEventListener('touchmove', function(e) {
+  // Allow touch scrolling on mobile
+  e.stopPropagation();
+}, { passive: true });
+
 // Global Master Unlocker for Touch & Scroll
 window.forceGlobalScrollUnlock = function() {
     // 1. Clear Inline Styles & Body Lock Classes
@@ -585,6 +596,11 @@ window.wipeScrollLocks = function() {
     if (!document.querySelector('.modal.show')) {
         backdrops.forEach(b => b.remove());
     }
+
+    // Explicitly force scroll events to work
+    document.documentElement.style.overflowY = 'auto';
+    document.body.style.overflowY = 'auto';
+    document.body.style.pointerEvents = 'auto';
 };
 
 // Ensure unlock fires after opening Admin Panel
@@ -738,15 +754,6 @@ document.addEventListener('DOMContentLoaded', () => {
     seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
-
-    // Force Allow Vertical Touch Scroll on Mobile
-    document.addEventListener('touchmove', function(e) {
-        // Allow normal page scrolling gesture
-        e.stopPropagation();
-    }, { passive: true });
-
-    document.body.style.touchAction = 'pan-y';
-    document.documentElement.style.touchAction = 'pan-y';
 
     window.addEventListener('resize', window.forceGlobalScrollUnlock);
     document.addEventListener('DOMContentLoaded', window.forceGlobalScrollUnlock);
