@@ -597,7 +597,7 @@
                 <div class="modal-body p-4">
                     <!-- Alert Message for Wrong Password -->
                     <div id="admin-auth-error" class="alert alert-danger d-none" role="alert"></div>
-                    <form id="admin-login-form" onsubmit="verifyAdminCredentials(event)">
+                    <form id="admin-login-form" onsubmit="verifyAdminCredentials(event); return false;">
                         <div class="mb-3">
                             <label for="admin-username-input" class="form-label fw-bold">Username</label>
                             <input type="text" id="admin-username-input" class="form-control" placeholder="Enter Admin Username" required>

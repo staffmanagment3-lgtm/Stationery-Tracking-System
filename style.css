@@ -1158,13 +1158,14 @@ html, body {
     width: 100% !important;
     min-height: 100vh !important;
     overflow-x: hidden !important;
-    background-color: #f8fafc !important; /* Prevents pure white stark background */
+    background-color: #f1f5f9 !important; /* Soft grey fallback prevents stark white screen */
 }
 
 /* 2. Force Admin & Developer Dashboards to Be Visible on Mobile when active */
 #admin-dashboard-container.active,
 #developer-dashboard-container.active,
-#user-view-container.active {
+#user-view-container.active,
+#login-view.active {
     display: flex !important;
     width: 100% !important;
     min-height: 100vh !important;
@@ -1180,6 +1181,12 @@ html, body {
 .modal-backdrop {
     z-index: 1050 !important;
     background-color: rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Fix Bootstrap body lock issue on mobile screens */
+body.modal-open {
+    overflow: auto !important;
+    padding-right: 0 !important;
 }
 
 @media (max-width: 768px) {

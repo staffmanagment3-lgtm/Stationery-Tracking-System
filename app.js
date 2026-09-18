@@ -419,37 +419,92 @@ window.handleUserLogout = function(event) {
     }
 };
 
+// Safe View Switcher - Prevents Empty/White Screen
+window.safeShowView = function(viewIdToShow) {
+    const allViews = document.querySelectorAll('.view, .dashboard-view');
+
+    let targetFound = false;
+    allViews.forEach(view => {
+        if (view) {
+            if (view.id === viewIdToShow) {
+                view.classList.add('active');
+                view.classList.remove('d-none');
+                view.style.display = 'flex';
+                view.style.visibility = 'visible';
+                view.style.opacity = '1';
+                targetFound = true;
+            } else {
+                view.classList.remove('active');
+                view.classList.add('d-none');
+                view.style.display = 'none';
+            }
+        }
+    });
+
+    // FALLBACK SAFETY: If target view doesn't exist, default to main login or user view instead of white screen
+    if (!targetFound) {
+        console.warn(`Target view #${viewIdToShow} not found! Fallback to login-view`);
+        const fallbackView = $('login-view');
+        if (fallbackView) {
+            fallbackView.classList.add('active');
+            fallbackView.style.display = 'flex';
+        }
+    }
+};
+
+// Catch Unhandled Background Errors that cause white screen
+window.addEventListener('error', function(e) {
+    console.error("Global JS Error caught:", e.error);
+    const userView = $('user-view-container');
+    if (userView && (userView.classList.contains('d-none') || userView.style.display === 'none')) {
+        // If app crashed and went white, try to force-show the portal
+        window.safeShowView('user-view-container');
+    }
+});
+
 // --- Admin Direct Access Security ---
 
-window.handleDirectAdminOpen = function(event) {
-    if (event) {
-        event.preventDefault();
-        event.stopPropagation();
+window.handleDirectAdminOpen = function(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
     }
     console.log("Direct Admin Button Triggered on Mobile/Desktop");
 
-    const isAuthenticated = sessionStorage.getItem('isAdminAuthenticated');
+    try {
+        const isAuthenticated = sessionStorage.getItem('isAdminAuthenticated');
 
-    if (isAuthenticated === 'true') {
-        openAdminPanelDirectly();
-    } else {
-        // Clean up any lingering backdrop or hidden elements on mobile
-        document.body.classList.remove('modal-open');
-        const existingBackdrops = document.querySelectorAll('.modal-backdrop');
-        existingBackdrops.forEach(el => el.remove());
-
-        // Reset form
-        if ($('admin-login-form')) $('admin-login-form').reset();
-        if ($('admin-auth-error')) $('admin-auth-error').classList.add('d-none');
-
-        // Open Modal safely
-        const authModalEl = $('adminAuthModal');
-        if (authModalEl) {
-            const authModal = bootstrap.Modal.getOrCreateInstance(authModalEl);
-            authModal.show();
+        if (isAuthenticated === 'true') {
+            openAdminPanelDirectly();
         } else {
-            console.error("Error: #adminAuthModal element not found in DOM!");
+            // Keep background user view visible while showing modal on mobile
+            const loginView = $('login-view');
+            if (loginView) {
+                loginView.classList.add('active');
+                loginView.style.display = 'flex';
+            }
+
+            // Clean up any lingering backdrop or hidden elements on mobile
+            document.body.classList.remove('modal-open');
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+            // Reset form
+            if ($('admin-login-form')) $('admin-login-form').reset();
+            if ($('admin-auth-error')) $('admin-auth-error').classList.add('d-none');
+
+            // Open Modal safely
+            const authModalEl = $('adminAuthModal');
+            if (authModalEl) {
+                const authModal = bootstrap.Modal.getOrCreateInstance(authModalEl);
+                authModal.show();
+            } else {
+                console.error("Error: #adminAuthModal element not found in DOM!");
+            }
         }
+    } catch (err) {
+        console.error("Error in handleDirectAdminOpen:", err);
+        // Ensure app never turns white on error
+        window.safeShowView('login-view');
     }
 };
 
@@ -1329,8 +1384,7 @@ async function handleUserRole(adecNumber) {
 }
 
 function showView(viewId) {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    const target = $(viewId); if (target) target.classList.add('active');
+    window.safeShowView(viewId);
     window.scrollTo(0, 0);
 }
 
