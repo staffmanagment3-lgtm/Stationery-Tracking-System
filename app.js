@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.0.6";
+const APP_VERSION = "1.0.3";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -551,28 +551,58 @@ window.fetchCategories = function() {
   });
 };
 
-function openAdminPanelDirectly() {
-    // Remove focus from input to prevent aria-hidden accessibility warning
-    if (document.activeElement) {
-        document.activeElement.blur();
+// Global Master Unlocker for Touch & Scroll
+window.forceGlobalScrollUnlock = function() {
+    // 1. Clear Inline Styles & Body Lock Classes
+    document.documentElement.style.overflow = 'auto';
+    document.body.style.overflow = 'auto';
+    document.body.style.overflowY = 'auto';
+    document.body.style.position = 'relative';
+    document.body.style.height = 'auto';
+    document.body.style.touchAction = 'pan-y';
+    document.body.classList.remove('modal-open');
+
+    // 2. Remove lingering backdrops if no modal is visible
+    const openModals = document.querySelectorAll('.modal.show');
+    if (openModals.length === 0) {
+        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
     }
+};
 
-    const asifKey = "ASIF";
-    // Update Asif to DEVELOPER role to restore full access to system tools
-    const asifData = { name: "Asif", role: "DEVELOPER" };
+// Force Wipe Inline Lock Styles
+window.wipeScrollLocks = function() {
+    document.documentElement.removeAttribute('style');
+    document.body.classList.remove('modal-open');
 
-    console.log("Access Granted: Logging in as Asif (Super Admin)...");
-    localStorage.setItem('stationery_user_adec', asifKey);
-    currentUser = { uid: asifKey, ...asifData };
+    // Inline style cleanup
+    ['overflow', 'overflow-y', 'position', 'height', 'max-height', 'touch-action'].forEach(prop => {
+        document.body.style.removeProperty(prop);
+        document.documentElement.style.removeProperty(prop);
+    });
 
-    fetchSystemBranding();
-    window.fetchCategories();
+    // Clean lingering backdrops
+    const backdrops = document.querySelectorAll('.modal-backdrop');
+    if (!document.querySelector('.modal.show')) {
+        backdrops.forEach(b => b.remove());
+    }
+};
 
-    // Redirect based on role
-    window.renderDashboardForRole(asifData.role, asifKey);
+// Ensure unlock fires after opening Admin Panel
+const originalOpenAdminPanelDirectly = window.openAdminPanelDirectly;
+window.openAdminPanelDirectly = function() {
+    if (typeof originalOpenAdminPanelDirectly === 'function') {
+        try { originalOpenAdminPanelDirectly(); } catch (e) { console.error(e); }
+    }
+    setTimeout(window.wipeScrollLocks, 100);
+    setTimeout(window.wipeScrollLocks, 500);
+};
 
-    showToast("Super Admin access verified. Welcome Asif!", "success");
-}
+// Global periodic scroll integrity check
+setInterval(() => {
+    if (!document.querySelector('.modal.show') && document.body.classList.contains('modal-open')) {
+        window.wipeScrollLocks();
+    }
+}, 1000);
 
 // ==================== GOOGLE DRIVE CONNECTOR LOGIC ====================
 
@@ -708,6 +738,9 @@ document.addEventListener('DOMContentLoaded', () => {
     seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
+
+    window.addEventListener('resize', window.forceGlobalScrollUnlock);
+    document.addEventListener('DOMContentLoaded', window.forceGlobalScrollUnlock);
 
     // Bind event listeners for both click and touchstart on Direct Admin button
     const directAdminBtn = $('direct-admin-btn') || document.querySelector('.quick-access-btn');

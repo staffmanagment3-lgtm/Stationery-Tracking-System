@@ -1152,25 +1152,59 @@ img.lazy-load {
     .modal-actions, header, .logout-btn, .dev-tools { display: none !important; }
 }
 
-/* ==================== RESPONSIVE ==================== */
-/* 1. Ensure Body & Main Containers Don't Collapse to Blank/White on Mobile */
+/* ==================== RESPONSIVE & SCROLL FIXES ==================== */
+/* Force root and body elements to allow natural scrolling */
 html, body {
-    width: 100% !important;
-    min-height: 100vh !important;
+    height: auto !important;
+    min-height: 100% !important;
+    max-height: none !important;
+    position: static !important; /* Removes fixed position trap */
+    overflow-y: auto !important;
     overflow-x: hidden !important;
+    touch-action: auto !important;
+    -webkit-overflow-scrolling: touch !important;
     background-color: #f1f5f9 !important; /* Soft grey fallback prevents stark white screen */
 }
 
-/* 2. Force Admin & Developer Dashboards to Be Visible on Mobile when active */
+/* Force Bootstrap modal-open state to scrollable */
+body.modal-open {
+    overflow-y: auto !important;
+    position: static !important;
+    padding-right: 0 !important;
+}
+
+/* Main View Containers Override */
+#user-view-container,
+#admin-dashboard-container,
+#developer-dashboard-container,
+.view,
+.dashboard-view,
+.main-wrapper,
+main,
+.container,
+.container-fluid {
+    height: auto !important;
+    min-height: 100vh !important;
+    max-height: none !important;
+    position: relative !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    pointer-events: auto !important;
+    width: 100% !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
 #admin-dashboard-container.active,
 #developer-dashboard-container.active,
 #user-view-container.active,
 #login-view.active {
     display: flex !important;
-    width: 100% !important;
-    min-height: 100vh !important;
-    visibility: visible !important;
-    opacity: 1 !important;
+}
+
+/* Kill any invisible full-screen overlays locking touch events */
+.modal-backdrop:not(.show) {
+    display: none !important;
 }
 
 /* 3. Fix Bootstrap Modal & Backdrop Overlays for Mobile Touch Screens */
@@ -1181,12 +1215,6 @@ html, body {
 .modal-backdrop {
     z-index: 1050 !important;
     background-color: rgba(0, 0, 0, 0.5) !important;
-}
-
-/* Fix Bootstrap body lock issue on mobile screens */
-body.modal-open {
-    overflow: auto !important;
-    padding-right: 0 !important;
 }
 
 @media (max-width: 768px) {
