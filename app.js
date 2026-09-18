@@ -421,16 +421,35 @@ window.handleUserLogout = function(event) {
 
 // --- Admin Direct Access Security ---
 
-window.handleDirectAdminOpen = function() {
+window.handleDirectAdminOpen = function(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    console.log("Direct Admin Button Triggered on Mobile/Desktop");
+
     const isAuthenticated = sessionStorage.getItem('isAdminAuthenticated');
 
     if (isAuthenticated === 'true') {
         openAdminPanelDirectly();
     } else {
+        // Clean up any lingering backdrop or hidden elements on mobile
+        document.body.classList.remove('modal-open');
+        const existingBackdrops = document.querySelectorAll('.modal-backdrop');
+        existingBackdrops.forEach(el => el.remove());
+
+        // Reset form
         if ($('admin-login-form')) $('admin-login-form').reset();
         if ($('admin-auth-error')) $('admin-auth-error').classList.add('d-none');
-        const authModal = new bootstrap.Modal($('adminAuthModal'));
-        authModal.show();
+
+        // Open Modal safely
+        const authModalEl = $('adminAuthModal');
+        if (authModalEl) {
+            const authModal = bootstrap.Modal.getOrCreateInstance(authModalEl);
+            authModal.show();
+        } else {
+            console.error("Error: #adminAuthModal element not found in DOM!");
+        }
     }
 };
 
@@ -634,6 +653,16 @@ document.addEventListener('DOMContentLoaded', () => {
     seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
+
+    // Bind event listeners for both click and touchstart on Direct Admin button
+    const directAdminBtn = $('direct-admin-btn') || document.querySelector('.quick-access-btn');
+    if (directAdminBtn) {
+        directAdminBtn.addEventListener('click', window.handleDirectAdminOpen);
+        directAdminBtn.addEventListener('touchstart', function(e) {
+            // Prevents ghost clicks on mobile
+            window.handleDirectAdminOpen(e);
+        }, { passive: false });
+    }
 
     const devCreateAccountForm = $('dev-create-account-form');
     if (devCreateAccountForm) {

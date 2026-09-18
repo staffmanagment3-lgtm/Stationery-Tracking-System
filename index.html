@@ -93,7 +93,9 @@
                 </button>
             </form>
             <div class="dev-tools">
-                <button id="bypass-admin-btn" class="quick-access-btn">⚡ Direct Open Admin Panel</button>
+                <button type="button" id="direct-admin-btn" class="quick-access-btn direct-admin-btn" onclick="handleDirectAdminOpen(event)">
+                    ⚡ Direct Open Admin Panel
+                </button>
             </div>
             <p id="login-error" class="error-message"></p>
         </div>
