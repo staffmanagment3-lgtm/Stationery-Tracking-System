@@ -219,56 +219,48 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
 .quick-access-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #5e2c74; }
 
 /* ==================== HEADER & TOP NAVBAR ==================== */
-.top-navbar {
+.top-navbar, .navbar, .header-container, header {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 8px !important;
+    padding: 10px 15px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
     background-color: #ffffff !important;
     min-height: 70px;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
-    border-radius: 10px;
-    margin-bottom: 16px;
-    padding: 14px 18px;
     border-bottom: 1px solid #e2e8f0 !important;
     z-index: 100;
 }
 
-/* Ensure Left and Right Controls Stay Interactive Above Center Logo */
-.header-left-content,
-.header-right-content {
-    position: relative;
-    z-index: 10;
+/* Logo Image Sizing & Spacing */
+.navbar-brand, .logo-container, .header-brand-logo, .centered-school-logo, header img {
+    max-height: 45px !important;
+    max-width: 150px !important;
+    object-fit: contain !important;
+    flex-shrink: 1 !important;
 }
 
-/* Centered Enlarged Logo Container */
-.header-center-logo {
-    z-index: 5;
-    max-width: 45%;
-    text-align: center;
-    pointer-events: none; /* Allows clicks to pass through if necessary, though it's absolute centered */
+/* Bell Icon Spacing */
+.notification-bell, .bell-icon, #bell-icon-container {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 8px !important;
+    flex-shrink: 0 !important;
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
 }
 
-/* Zoomed & Scaled School Logo */
-.centered-school-logo {
-    max-height: 55px;
-    width: auto;
-    object-fit: contain;
-    transform: scale(1.35); /* Enlarge and crop whitespace around the logo */
-    transition: transform 0.3s ease;
-}
-
-/* Responsive Scaling for Mobile Screens */
-@media (max-width: 576px) {
-    .centered-school-logo {
-        max-height: 40px;
-        transform: scale(1.1);
-    }
-    /* On very small screens, avoid title overlap with centered logo */
-    .header-left-content span {
-        display: none !important;
-    }
-}
-
-/* Dark Text Contrasts for White Navbar */
-.top-navbar .text-dark {
-    color: #1e293b !important;
+/* Logout Button Compact Layout for Mobile */
+header .btn-danger, header .logout-btn, header .btn-sm {
+    padding: 6px 12px !important;
+    font-size: 0.85rem !important;
+    flex-shrink: 0 !important;
+    height: auto !important;
+    min-height: 32px !important;
 }
 
 /* Adjust White Cards and Tables over the new background */
@@ -1153,17 +1145,21 @@ img.lazy-load {
 }
 
 /* ==================== RESPONSIVE & SCROLL FIXES ==================== */
-/* Force root and body elements to allow natural scrolling */
-html, body {
+/* Explicit Vertical Pan Swipe Enable for Mobile Browsers */
+html, body, main, .dashboard-view, #admin-dashboard-container, #developer-dashboard-container, #user-view-container, #login-view {
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch !important;
+    overflow-y: auto !important;
     height: auto !important;
-    min-height: 100% !important;
+    min-height: 100vh !important;
     max-height: none !important;
     position: static !important; /* Removes fixed position trap */
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    touch-action: auto !important;
-    -webkit-overflow-scrolling: touch !important;
     background-color: #f1f5f9 !important; /* Soft grey fallback prevents stark white screen */
+}
+
+/* Disable Pointer Event Lock on Hidden Canvas / Modal Overlay Elements */
+canvas, .chart-container {
+    touch-action: pan-y !important;
 }
 
 /* Force Bootstrap modal-open state to scrollable */
@@ -1171,28 +1167,6 @@ body.modal-open {
     overflow-y: auto !important;
     position: static !important;
     padding-right: 0 !important;
-}
-
-/* Main View Containers Override */
-#user-view-container,
-#admin-dashboard-container,
-#developer-dashboard-container,
-.view,
-.dashboard-view,
-.main-wrapper,
-main,
-.container,
-.container-fluid {
-    height: auto !important;
-    min-height: 100vh !important;
-    max-height: none !important;
-    position: relative !important;
-    overflow: visible !important;
-    overflow-y: visible !important;
-    pointer-events: auto !important;
-    width: 100% !important;
-    opacity: 1 !important;
-    visibility: visible !important;
 }
 
 #admin-dashboard-container.active,

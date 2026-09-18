@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.0.3";
+const APP_VERSION = "1.0.4";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -738,6 +738,15 @@ document.addEventListener('DOMContentLoaded', () => {
     seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
+
+    // Force Allow Vertical Touch Scroll on Mobile
+    document.addEventListener('touchmove', function(e) {
+        // Allow normal page scrolling gesture
+        e.stopPropagation();
+    }, { passive: true });
+
+    document.body.style.touchAction = 'pan-y';
+    document.documentElement.style.touchAction = 'pan-y';
 
     window.addEventListener('resize', window.forceGlobalScrollUnlock);
     document.addEventListener('DOMContentLoaded', window.forceGlobalScrollUnlock);
