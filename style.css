@@ -8,7 +8,7 @@
 }
 html { -webkit-text-size-adjust: 100%; }
 body {
-    background-color: #f4f7f6;
+    background-color: #f4f6f9 !important; /* Replaces plain flat white for better card elevation */
     color: #333;
     line-height: 1.6;
     overflow-x: hidden;
@@ -218,22 +218,68 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
 .quick-access-btn:hover { background-color: #8e44ad; }
 .quick-access-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #5e2c74; }
 
-/* ==================== HEADER ==================== */
-header {
-    background-color: #2c3e50;
-    color: white;
-    padding: 14px 18px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+/* ==================== HEADER & TOP NAVBAR ==================== */
+.top-navbar {
+    background-color: #ffffff !important;
+    min-height: 70px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
     border-radius: 10px;
     margin-bottom: 16px;
-    flex-wrap: wrap;
-    gap: 10px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 14px 18px;
+    border-bottom: 1px solid #e2e8f0 !important;
+    z-index: 100;
 }
-header h1 { font-size: 18px; }
-.header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Ensure Left and Right Controls Stay Interactive Above Center Logo */
+.header-left-content,
+.header-right-content {
+    position: relative;
+    z-index: 10;
+}
+
+/* Centered Enlarged Logo Container */
+.header-center-logo {
+    z-index: 5;
+    max-width: 45%;
+    text-align: center;
+    pointer-events: none; /* Allows clicks to pass through if necessary, though it's absolute centered */
+}
+
+/* Zoomed & Scaled School Logo */
+.centered-school-logo {
+    max-height: 55px;
+    width: auto;
+    object-fit: contain;
+    transform: scale(1.35); /* Enlarge and crop whitespace around the logo */
+    transition: transform 0.3s ease;
+}
+
+/* Responsive Scaling for Mobile Screens */
+@media (max-width: 576px) {
+    .centered-school-logo {
+        max-height: 40px;
+        transform: scale(1.1);
+    }
+    /* On very small screens, avoid title overlap with centered logo */
+    .header-left-content span {
+        display: none !important;
+    }
+}
+
+/* Dark Text Contrasts for White Navbar */
+.top-navbar .text-dark {
+    color: #1e293b !important;
+}
+
+/* Adjust White Cards and Tables over the new background */
+.card, .table-container, .analytics-card, .content, .form-container {
+    background-color: #ffffff !important;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 .logout-btn {
     background-color: #e74c3c;
@@ -760,12 +806,25 @@ img.lazy-load {
 }
 .delete-cat-btn:hover { background: #ee3845; }
 
-.view-details-btn {
-    background-color: #3498db; color: white; border: none;
-    padding: 8px 14px; border-radius: 8px; cursor: pointer;
-    font-size: 13px; font-weight: 700; min-height: 40px;
+/* Prevent Action buttons from wrapping or hiding on mobile */
+.table td.action-column,
+.table th.action-column {
+    white-space: nowrap !important;
+    min-width: 180px;
 }
-.view-details-btn:hover { background-color: #2980b9; }
+
+/* Ensure buttons remain visible and styled cleanly on mobile */
+.action-btn-group {
+    display: inline-flex !important;
+    gap: 4px;
+    align-items: center;
+}
+
+.action-btn-group .btn {
+    padding: 4px 8px !important;
+    font-size: 0.82rem !important;
+    display: inline-block !important; /* Forces visibility */
+}
 
 /* ==================== ITEM DETAIL MODAL ==================== */
 .item-detail-img {
@@ -841,20 +900,48 @@ img.lazy-load {
 }
 .drawer-overlay.active { display: block; opacity: 1; }
 
-.drawer-header {
-    padding: 20px;
-    background: #2c3e50;
+/* 1. Full White Header Bar */
+.sidebar-header {
+    background-color: #ffffff !important;
+    min-height: 75px;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    color: white;
+    position: relative;
+    padding: 8px;
+    border-bottom: 1px solid #e2e8f0;
 }
-.drawer-header .close-btn {
-    background: none;
-    border: none;
-    color: white;
-    font-size: 32px;
-    cursor: pointer;
+
+/* 2. Expanded & Zoomed Logo */
+.sidebar-logo-container {
+    overflow: hidden;
+    padding: 5px 35px 5px 10px; /* Space reserved on right for close button */
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-logo-img {
+    max-height: 60px;
+    width: 100%;
+    object-fit: contain;
+    transform: scale(1.35); /* Crops excess padding & makes logo text significantly larger */
+}
+
+/* 3. Fixed Visible Close Button */
+.sidebar-close-btn {
+    position: absolute !important;
+    right: 12px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    z-index: 1000 !important;
+    filter: none !important; /* Ensures crisp dark icon over white background */
+    opacity: 0.8;
+}
+
+.sidebar-close-btn:hover {
+    opacity: 1;
+    color: #dc3545;
 }
 
 .drawer-nav {

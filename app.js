@@ -76,6 +76,12 @@ const teacherOrdersState = { allItems: [], filtered: [], currentPage: 1 };
 
 const alertedRequests = new Set();
 
+// Admin Credentials for Direct Access Popup
+const ADMIN_CREDENTIALS = {
+    username: "Asif",
+    password: "Asif8013@#$"
+};
+
 // ==================== IMAGE & UI UTILITIES ====================
 
 function setupResponsiveSignaturePad(canvasId) {
@@ -203,6 +209,83 @@ function attachSmartImage(imgEl, rawUrl) {
     imgEl.src = url;
 }
 
+// ==================== IMAGE PROCESSING UTILITIES ====================
+
+// 1. Smart Compressor (100KB-200KB with Crisp HD Clarity)
+window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (e) => {
+      const img = new Image();
+      img.src = e.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+    };
+  });
+};
+
+// 2. Amazon-Style Studio Photo Generator (Pure White Canvas + Auto Centering)
+window.generateStudioProductPhoto = async function(base64OrFile) {
+  try {
+    console.log("🤖 Processing AI Background Removal for Studio Look...");
+
+    // Remove background using client-side AI library
+    // The library exposes imglyRemoveBackground as a global or needs initialization
+    // Assuming imglyRemoveBackground is available via CDN
+    const blob = await imglyRemoveBackground(base64OrFile);
+    const transparentUrl = URL.createObjectURL(blob);
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = transparentUrl;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 800; // Square Ratio for E-Commerce
+        canvas.height = 800;
+        const ctx = canvas.getContext('2d');
+
+        // Pure Amazon White Background
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Center & Scale Product with Padding
+        const padding = 80;
+        const maxDim = 800 - (padding * 2);
+        const scale = Math.min(maxDim / img.width, maxDim / img.height);
+        const x = (canvas.width - img.width * scale) / 2;
+        const y = (canvas.height - img.height * scale) / 2;
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+
+        // Clean up URL object
+        URL.revokeObjectURL(transparentUrl);
+
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+    });
+  } catch (err) {
+    console.warn("AI Processing Warning, falling back to compressed photo:", err);
+    return typeof base64OrFile === 'string' ? base64OrFile : await window.compressAndScaleImage(base64OrFile);
+  }
+};
+
 function escapeHtml(text) {
     if (text === null || text === undefined) return '';
     const div = document.createElement('div');
@@ -323,6 +406,7 @@ window.handleUserLogout = function(event) {
         localStorage.removeItem('currentUserPass');
         localStorage.removeItem('currentUserRole');
         localStorage.removeItem('currentUserName');
+        sessionStorage.removeItem('isAdminAuthenticated');
 
         cleanupListeners();
         currentUser = null;
@@ -334,6 +418,87 @@ window.handleUserLogout = function(event) {
         window.location.reload();
     }
 };
+
+// --- Admin Direct Access Security ---
+
+window.handleDirectAdminOpen = function() {
+    const isAuthenticated = sessionStorage.getItem('isAdminAuthenticated');
+
+    if (isAuthenticated === 'true') {
+        openAdminPanelDirectly();
+    } else {
+        if ($('admin-login-form')) $('admin-login-form').reset();
+        if ($('admin-auth-error')) $('admin-auth-error').classList.add('d-none');
+        const authModal = new bootstrap.Modal($('adminAuthModal'));
+        authModal.show();
+    }
+};
+
+window.verifyAdminCredentials = function(event) {
+    if (event) event.preventDefault();
+
+    const usernameInput = $('admin-username-input').value.trim();
+    const passwordInput = $('admin-password-input').value.trim();
+    const errorAlert = $('admin-auth-error');
+
+    if (usernameInput === ADMIN_CREDENTIALS.username && passwordInput === ADMIN_CREDENTIALS.password) {
+        sessionStorage.setItem('isAdminAuthenticated', 'true');
+        const modalElement = $('adminAuthModal');
+        const modalInstance = bootstrap.Modal.getInstance(modalElement);
+        if (modalInstance) modalInstance.hide();
+        openAdminPanelDirectly();
+    } else {
+        if (errorAlert) {
+            errorAlert.innerText = "❌ Invalid Username or Password. Please try again.";
+            errorAlert.classList.remove('d-none');
+        }
+    }
+};
+
+// 1. Global fetchCategories function definition
+window.fetchCategories = function() {
+  if (typeof window.listenAndPopulateCategories === 'function') {
+    window.listenAndPopulateCategories();
+    return;
+  }
+
+  // Fallback Firebase category fetcher
+  onValue(ref(db, 'settings/categories'), (snapshot) => {
+      const dropdowns = document.querySelectorAll('#item-category-dropdown, .category-select-element');
+      let options = '<option value="" disabled selected>Select Category</option>';
+      if (snapshot.exists()) {
+          const data = snapshot.val();
+          Object.values(data).forEach(name => {
+              options += `<option value="${name}">${name}</option>`;
+          });
+      }
+      options += '<option value="Other">Other (Custom)</option>';
+      dropdowns.forEach(el => { if (el) el.innerHTML = options; });
+  });
+};
+
+function openAdminPanelDirectly() {
+    // Remove focus from input to prevent aria-hidden accessibility warning
+    if (document.activeElement) {
+        document.activeElement.blur();
+    }
+
+    const asifKey = "ASIF";
+    // Update Asif to DEVELOPER role to restore full access to system tools
+    const asifData = { name: "Asif", role: "DEVELOPER" };
+
+    console.log("Access Granted: Logging in as Asif (Super Admin)...");
+    localStorage.setItem('stationery_user_adec', asifKey);
+    currentUser = { uid: asifKey, ...asifData };
+
+    fetchSystemBranding();
+    window.fetchCategories();
+
+    // Redirect based on role
+    window.renderDashboardForRole(asifData.role, asifKey);
+
+    showToast("Super Admin access verified. Welcome Asif!", "success");
+}
 
 // ==================== GOOGLE DRIVE CONNECTOR LOGIC ====================
 
@@ -454,6 +619,7 @@ function seedDefaultUsersIfEmpty() {
         if (!snapshot.exists()) {
             console.log("No users found in Firebase. Seeding default accounts...");
             const defaultUsers = {
+                "ASIF": { name: "Asif (Super Admin)", role: "Developer", password: "Asif8013@#$", createdAt: new Date().toISOString() },
                 "ADMIN123": { name: "System Admin", role: "Admin", password: "admin", createdAt: new Date().toISOString() },
                 "PASS1": { name: "Binod (PASS1)", role: "Teacher", password: "123", createdAt: new Date().toISOString() },
                 "PASS2": { name: "Teacher PASS2", role: "Teacher", password: "123", createdAt: new Date().toISOString() }
@@ -467,6 +633,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
     seedDefaultUsersIfEmpty();
     initDriveConnector();
+    listenAndPopulateCategories();
 
     const devCreateAccountForm = $('dev-create-account-form');
     if (devCreateAccountForm) {
@@ -551,7 +718,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const inventoryForm = $('add-inventory-form');
-    const categorySelect = $('inv-category');
+    const categorySelect = $('item-category-dropdown');
     const serialNumberInput = $('inv-serial-number');
     const cartBtn = $('cart-btn');
     const closeCartBtn = $('close-cart-btn');
@@ -618,17 +785,62 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
 
-    $('bypass-admin-btn')?.addEventListener('click', () => {
-        currentUser = { uid: "bypass_admin", name: "System Developer", role: "DEVELOPER" };
-        showView('developer-dashboard');
-        fetchAuditLogs(); fetchSystemBranding(); fetchCategories();
-    });
+    $('bypass-admin-btn')?.addEventListener('click', handleDirectAdminOpen);
 
     const savedAdec = localStorage.getItem('stationery_user_adec');
     if (savedAdec) handleUserRole(savedAdec);
     else showView('login-view');
 
     // --- UI Listeners ---
+    const editInventoryForm = $('edit-inventory-form');
+    if (editInventoryForm) {
+        editInventoryForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const itemId = $('edit-item-id').value;
+            const itemName = $('edit-item-name').value.trim();
+            const itemCategory = $('edit-item-category').value.trim();
+            const openingQuantity = parseInt($('edit-item-opening-qty').value) || 0;
+            const quantity = parseInt($('edit-item-available-qty').value) || 0;
+            const description = $('edit-item-description').value.trim();
+
+            const submitBtn = editInventoryForm.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+
+            try {
+                await update(ref(db, 'inventory/' + itemId), {
+                    itemName,
+                    category: itemCategory,
+                    openingQuantity,
+                    quantity,
+                    description
+                });
+                await logActivity("Inventory Updated", `Item: ${itemName} (${itemId})`);
+                showToast("Item updated successfully!");
+                bootstrap.Modal.getInstance($('editItemModal')).hide();
+            } catch (err) {
+                showToast("Update failed: " + err.message, "error");
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
+    }
+
+    // Staff Management Sub-tab Logic
+    $('btn-show-provision')?.addEventListener('click', () => {
+        $('staff-provision-view').style.display = 'block';
+        $('staff-list-view').style.display = 'none';
+        $('btn-show-provision').classList.add('active');
+        $('btn-show-directory').classList.remove('active');
+    });
+
+    $('btn-show-directory')?.addEventListener('click', () => {
+        $('staff-provision-view').style.display = 'none';
+        $('staff-list-view').style.display = 'block';
+        $('btn-show-provision').classList.remove('active');
+        $('btn-show-directory').classList.add('active');
+        fetchStaffList();
+    });
+
     if (inventoryForm) inventoryForm.addEventListener('submit', saveInventoryItem);
     if (categorySelect) categorySelect.onchange = () => {
         const customGroup = $('custom-category-group');
@@ -683,7 +895,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (exportInventoryBtn) exportInventoryBtn.onclick = exportInventory;
     if (exportHistoryBtn) exportHistoryBtn.onclick = exportHistory;
-    if (exportAuditBtn) exportAuditBtn.onclick = exportAuditLedger;
+    if (exportAuditBtn) exportAuditBtn.onclick = exportAuditLedgerToExcel;
 
     $('notification-bell')?.addEventListener('click', () => {
         renderNotificationList();
@@ -1020,6 +1232,49 @@ async function runOcrScan(canvasElement) {
 }
 
 // ==================== ROLE / DASHBOARD ====================
+// Function to switch dashboard views based on User Role
+window.renderDashboardForRole = function(userRole, adecNumber) {
+    // Hide all main containers first
+    document.querySelectorAll('.view').forEach(container => {
+        container.classList.remove('active');
+        container.style.display = 'none';
+    });
+
+    console.log("Current Logged-in Role:", userRole);
+    const roleUpper = String(userRole).toUpperCase();
+
+    if (roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') {
+        // SHOW DEVELOPER DASHBOARD
+        const devContainer = $('developer-dashboard-container');
+        if (devContainer) {
+            devContainer.classList.add('active');
+            devContainer.style.display = 'flex';
+            fetchAuditLogs();
+        }
+    } else if (roleUpper === 'ADMIN') {
+        // SHOW STANDARD ADMIN DASHBOARD
+        const adminContainer = $('admin-dashboard-container');
+        if (adminContainer) {
+            adminContainer.classList.add('active');
+            adminContainer.style.display = 'flex';
+            initAdminDashboards();
+            listenForNewOrders();
+        }
+    } else if (roleUpper === 'TEACHER') {
+        // SHOW TEACHER PORTAL
+        const teacherContainer = $('user-view-container');
+        if (teacherContainer) {
+            teacherContainer.classList.add('active');
+            teacherContainer.style.display = 'flex';
+            fetchInventory();
+            fetchTeacherOrderHistory(adecNumber);
+        }
+    } else {
+        // Fallback to login
+        showView('login-view');
+    }
+};
+
 async function handleUserRole(adecNumber) {
     try {
         const snapshot = await get(child(ref(db), `users/${adecNumber}`));
@@ -1027,18 +1282,21 @@ async function handleUserRole(adecNumber) {
             const userData = snapshot.val();
             currentUser = { uid: adecNumber, ...userData };
             fetchSystemBranding(); fetchCategories();
-            $('admin-menu').style.display = userData.role === 'ADMIN' ? 'flex' : 'none';
-            $('teacher-menu').style.display = userData.role === 'TEACHER' ? 'flex' : 'none';
+
+            // Drawer Menu Visibility
+            if ($('admin-menu')) $('admin-menu').style.display = (userData.role === 'ADMIN' || userData.role === 'DEVELOPER') ? 'flex' : 'none';
+            if ($('teacher-menu')) $('teacher-menu').style.display = userData.role === 'TEACHER' ? 'flex' : 'none';
+
             if ("Notification" in window) Notification.requestPermission();
-            if (userData.role === 'DEVELOPER') {
-                showView('developer-dashboard'); fetchAuditLogs();
-            } else if (userData.role === 'ADMIN') {
-                showView('admin-dashboard'); initAdminDashboards(); listenForNewOrders();
-            } else if (userData.role === 'TEACHER') {
-                showView('teacher-dashboard'); fetchInventory(); fetchTeacherOrderHistory(adecNumber);
-            }
-        } else { localStorage.removeItem('stationery_user_adec'); showView('login-view'); }
-    } catch (e) { }
+
+            window.renderDashboardForRole(userData.role, adecNumber);
+        } else {
+            localStorage.removeItem('stationery_user_adec');
+            showView('login-view');
+        }
+    } catch (e) {
+        console.error("Role Handling Error:", e);
+    }
 }
 
 function showView(viewId) {
@@ -1090,8 +1348,8 @@ function renderCatalogPage() {
         const card = document.createElement('div'); card.className = 'inventory-card';
         card.innerHTML = `<div class="card-img-wrap skeleton"><img alt="" loading="lazy"></div><div class="card-body"><h3 class="card-title">${escapeHtml(data.itemName)}</h3><p class="serial">SN: ${escapeHtml(data.serialNumber || 'N/A')}</p><p class="description">${escapeHtml(data.description || '')}</p><button class="add-to-cart-btn">View Details</button></div>`;
         attachSmartImage(card.querySelector('img'), data.imageUrl);
-        card.onclick = (e) => { if (e.target.tagName !== 'BUTTON') showItemDetail(id, data); };
-        card.querySelector('button').onclick = () => showItemDetail(id, data);
+        card.onclick = (e) => { if (e.target.tagName !== 'BUTTON') showJanamKundaliModal(id, data, false); };
+        card.querySelector('button').onclick = () => showJanamKundaliModal(id, data, false);
         list.appendChild(card);
     });
     renderPaginationControls('stationery-list', catalogState, renderCatalogPage);
@@ -1117,7 +1375,7 @@ function renderPaginationControls(containerId, state, renderFn) {
     if (nextBtn) nextBtn.onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 
-window.showItemDetail = function(itemId, data) {
+window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
     console.log("Opening details for item ID:", itemId);
     const content = $('item-detail-content');
     if (!content) {
@@ -1132,6 +1390,8 @@ window.showItemDetail = function(itemId, data) {
     }
 
     const isOut = (parseInt(itemData.quantity) || 0) <= 0;
+
+    // Header Info
     content.innerHTML = `
         <img class="item-detail-img" src="${FALLBACK_IMG}">
         <div class="item-detail-info">
@@ -1140,7 +1400,8 @@ window.showItemDetail = function(itemId, data) {
             <p><strong>SN:</strong> ${escapeHtml(itemData.serialNumber)}</p>
             <p><strong>Available Qty:</strong> <span id="detail-item-qty">${itemData.quantity}</span></p>
             <div class="item-detail-desc">${escapeHtml(itemData.description)}</div>
-            <div class="item-detail-footer">
+
+            <div id="modal-add-to-cart-container" class="item-detail-footer" style="${isAdmin ? 'display:none;' : 'display:flex;'}">
                 <input type="number" id="detail-qty" value="1" min="1" max="${itemData.quantity}" style="width:70px; padding:8px; border-radius:6px; border:1px solid #ddd;">
                 <button id="detail-add-btn" class="primary-btn green" style="flex:1;" ${isOut ? 'disabled' : ''}>
                     ${isOut ? 'Out of Stock' : 'Add to Cart'}
@@ -1150,12 +1411,14 @@ window.showItemDetail = function(itemId, data) {
 
     attachSmartImage(content.querySelector('img'), itemData.imageUrl);
 
-    const addBtn = $('detail-add-btn');
-    if (addBtn) {
-        addBtn.onclick = () => {
-            addToCart(itemId, itemData, parseInt($('detail-qty').value) || 1);
-            $('item-detail-modal').classList.remove('active');
-        };
+    if (!isAdmin) {
+        const addBtn = $('detail-add-btn');
+        if (addBtn) {
+            addBtn.onclick = () => {
+                addToCart(itemId, itemData, parseInt($('detail-qty').value) || 1);
+                $('item-detail-modal').classList.remove('active');
+            };
+        }
     }
 
     $('item-detail-modal').classList.add('active');
@@ -1166,7 +1429,8 @@ function fetchMasterInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
-        adminInventoryState.allItems = Object.values(data);
+        adminInventoryState.allItems = Object.entries(data).map(([id, val]) => ({...val, id}));
+        window.allInventoryItems = adminInventoryState.allItems; // For Edit Modal lookup
         renderMasterInventory();
     });
 }
@@ -1183,14 +1447,58 @@ function renderMasterInventory() {
 
         if (pageItems.length === 0) { container.innerHTML = '<div class="text-center text-muted p-4">No records found.</div>'; return; }
 
-        const desktopTable = `<div class="table-responsive d-none d-md-block"><table class="table table-hover align-middle history-table"><thead class="table-light"><tr><th>Image</th><th>Serial No</th><th>Item Name</th><th>Category</th><th>Description</th><th>Open Qty</th><th>Qty Available</th><th>Status</th><th>Actions</th></tr></thead><tbody>${pageItems.map(item => {
-            const qty = parseInt(item.quantity) || 0;
-            return `<tr class="${qty < 5 ? 'row-low-stock' : ''}"><td><img src="${getDirectDriveUrl(item.imageUrl)}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td><td><code>${item.serialNumber || 'N/A'}</code></td><td><strong>${escapeHtml(item.itemName)}</strong></td><td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td><td><small class="text-muted">${escapeHtml(item.description || '-')}</small></td><td>${item.openingQuantity || '-'}</td><td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td><td>${getStatusBadge(qty)}</td><td><button class="btn btn-sm btn-outline-primary" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View</button></td></tr>`;
-        }).join('')}</tbody></table></div>`;
+        const desktopTable = `
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-hover align-middle history-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Image</th>
+                            <th>Serial Number</th>
+                            <th>Item</th>
+                            <th>Category</th>
+                            <th>Description</th>
+                            <th>Opening Quantity</th>
+                            <th>Quantity Available</th>
+                            <th>Status</th>
+                            <th class="action-column">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${pageItems.map(item => {
+                            const qty = parseInt(item.quantity) || 0;
+                            return `
+                            <tr class="${qty < 5 ? 'row-low-stock' : ''}">
+                                <td><img src="${getDirectDriveUrl(item.imageUrl)}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
+                                <td><code>${item.serialNumber || 'N/A'}</code></td>
+                                <td><strong>${escapeHtml(item.itemName)}</strong></td>
+                                <td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td>
+                                <td><small class="text-muted" style="display:inline-block; max-width:150px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(item.description || '-')}</small></td>
+                                <td>${item.openingQuantity || '-'}</td>
+                                <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
+                                <td>${getStatusBadge(qty)}</td>
+                                <td class="action-column">
+                                    <div class="action-btn-group">
+                                        <button class="btn btn-outline-primary btn-sm" onclick="showJanamKundaliModal('${item.id}', null, true)">View</button>
+                                        <button class="btn btn-outline-secondary btn-sm" onclick="openEditItemModal('${item.id}')">Edit</button>
+                                        <button class="btn btn-outline-danger btn-sm" onclick="deleteInventoryItem('${item.id}', '${item.itemName.replace(/'/g, "\\'")}')">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
 
         const mobileCards = `<div class="d-block d-md-none inventory-cards-wrapper">${pageItems.map(item => {
             const qty = parseInt(item.quantity) || 0;
-            return `<div class="inventory-card-mobile"><div class="inventory-card-header"><img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')"><div style="flex:1;"><h6 class="mb-0">${escapeHtml(item.itemName)}</h6><small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>${getStatusBadge(qty)}</div></div><div class="mb-2"><span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span></div><p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description.')}</p><div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3"><span class="small text-muted">Current Quantity:</span><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span></div><button class="primary-btn blue w-100" style="height:36px; min-height:36px; font-size:12px;" onclick="showItemDetail('${item.serialNumber}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">View Details</button></div>`;
+            return `<div class="inventory-card-mobile"><div class="inventory-card-header"><img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')"><div style="flex:1;"><h6 class="mb-0">${escapeHtml(item.itemName)}</h6><small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>${getStatusBadge(qty)}</div></div><div class="mb-2"><span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span></div><p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description.')}</p><div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3"><span class="small text-muted">Current Quantity:</span><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span></div>
+            <div class="action-btn-group w-100">
+                <button class="btn btn-outline-primary btn-sm flex-grow-1" onclick="showJanamKundaliModal('${item.id}', null, true)">View</button>
+                <button class="btn btn-outline-secondary btn-sm flex-grow-1" onclick="openEditItemModal('${item.id}')">Edit</button>
+                <button class="btn btn-outline-danger btn-sm flex-grow-1" onclick="deleteInventoryItem('${item.id}', '${item.itemName.replace(/'/g, "\\'")}')">Delete</button>
+            </div>
+            </div>`;
         }).join('')}</div>`;
 
         container.innerHTML = desktopTable + mobileCards;
@@ -1225,10 +1533,30 @@ function fetchAuditLedger() {
         const data = snap.val() || {}; const ledgerData = [];
         Object.entries(data).reverse().forEach(([id, order]) => {
             (order.items || []).forEach(item => {
-                ledgerData.push({ orderId: id, timestamp: order.timestamp, teacher: `${order.teacherName} (${order.teacherUid})`, item: `${item.itemName} (${item.serial})`, qty: item.requestQuantity, status: order.status });
+                const serial = item.serial || 'N/A';
+                let balance = 'N/A';
+                const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
+                if (it) balance = it.quantity;
+
+                ledgerData.push({
+                    orderId: id,
+                    timestamp: order.timestamp,
+                    teacherName: order.teacherName,
+                    teacherId: order.teacherUid,
+                    itemImageUrl: item.imageUrl,
+                    itemName: item.itemName,
+                    itemSn: serial,
+                    qtyIssued: item.requestQuantity,
+                    teacherSignatureUrl: order.teacherRequestSignature || (order.signatures ? order.signatures.teacher : null),
+                    issuerName: order.signatures ? "Admin" : (order.status.includes('Approved') ? "Admin" : "Pending"),
+                    issuerSignatureUrl: order.signatures ? order.signatures.admin : null,
+                    stockBalance: balance,
+                    status: order.status
+                });
             });
         });
         auditLedgerState.allItems = auditLedgerState.filtered = ledgerData;
+        window.allAuditLogs = ledgerData; // For Excel Export
         renderAuditLedger();
     });
 }
@@ -1241,30 +1569,26 @@ function renderAuditLedger() {
     const pageItems = auditLedgerState.filtered ? auditLedgerState.filtered.slice(start, end) : [];
 
     if (pageItems.length === 0) {
-        list.innerHTML = '<tr><td colspan="6" style="text-align:center;">No movements.</td></tr>';
+        list.innerHTML = '<tr><td colspan="11" style="text-align:center;">No movements.</td></tr>';
         return;
     }
 
     pageItems.forEach(row => {
         const tr = document.createElement('tr');
-        const serial = row.item ? row.item.match(/\((.*?)\)/)?.[1] : null;
-
-        let stockBalance = (row.stockBalance !== undefined && row.stockBalance !== null && row.stockBalance !== 'N/A')
-            ? row.stockBalance
-            : (row.remainingQty !== undefined ? row.remainingQty : (row.currentQty !== undefined ? row.currentQty : 'N/A'));
-
-        if (stockBalance === 'N/A' && serial) {
-            const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
-            if (it) stockBalance = it.quantity;
-        }
 
         const statusBadge = row.status === 'Pending Approval' ? 'bg-warning' : row.status === 'Approved' ? 'bg-info' : 'bg-success';
+
         tr.innerHTML = `
-            <td>${row.dateTime || row.timestamp ? new Date(row.dateTime || row.timestamp).toLocaleString() : new Date().toLocaleString()}</td>
-            <td>${row.teacherName || row.teacher || 'N/A'}</td>
-            <td>${row.itemName || row.item || 'Item'}</td>
-            <td><strong>${row.qtyIssued || row.qty || 0}</strong></td>
-            <td><span class="badge bg-secondary fs-6">${stockBalance}</span></td>
+            <td><small>${new Date(row.timestamp).toLocaleString()}</small></td>
+            <td><strong>${escapeHtml(row.teacherName)}</strong></td>
+            <td><code>${escapeHtml(row.teacherId)}</code></td>
+            <td><img src="${getDirectDriveUrl(row.itemImageUrl)}" class="inventory-thumb" onerror="this.src='${FALLBACK_IMG}'"></td>
+            <td>${escapeHtml(row.itemName)}<br><small class="text-muted">SN: ${row.itemSn}</small></td>
+            <td class="text-center"><strong>${row.qtyIssued}</strong></td>
+            <td>${row.teacherSignatureUrl ? `<img src="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;">` : '-'}</td>
+            <td>${escapeHtml(row.issuerName)}</td>
+            <td>${row.issuerSignatureUrl ? `<img src="${row.issuerSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;">` : '-'}</td>
+            <td class="text-center"><span class="badge bg-secondary">${row.stockBalance}</span></td>
             <td><span class="badge ${statusBadge}">${row.status}</span></td>
         `;
         list.appendChild(tr);
@@ -1272,14 +1596,99 @@ function renderAuditLedger() {
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
 }
 
-async function exportAuditLedger() {
-    const data = auditLedgerState.allItems.map(row => {
-        const serial = row.item.match(/\((.*?)\)/)?.[1];
-        let balance = 'N/A'; if (serial) { const it = Object.values(inventoryData).find(i => i.serialNumber === serial); if (it) balance = it.quantity; }
-        return { 'Date & Time': new Date(row.timestamp).toLocaleString(), 'Teacher (ADEK)': row.teacher, 'Item (Serial)': row.item, 'Qty Issued': row.qty, 'Stock Balance': balance, 'Status': row.status };
-    });
-    const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Audit"); XLSX.writeFile(wb, `Audit_${Date.now()}.xlsx`);
-}
+window.exportAuditLedgerToExcel = async function() {
+    if (!window.ExcelJS) {
+        alert("Excel library loading. Please wait 2 seconds and try again.");
+        return;
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Stock Movement Audit');
+
+    // Set Columns with width adjustments
+    worksheet.columns = [
+        { header: 'Date & Time', key: 'dateTime', width: 22 },
+        { header: 'Teacher Name', key: 'teacherName', width: 22 },
+        { header: 'Teacher ID', key: 'teacherId', width: 15 },
+        { header: 'Item Photo', key: 'itemPhoto', width: 18 },
+        { header: 'Item (Serial No.)', key: 'itemDetails', width: 25 },
+        { header: 'Qty Issued', key: 'qtyIssued', width: 12 },
+        { header: 'Teacher Sign', key: 'teacherSign', width: 20 },
+        { header: 'Issued By', key: 'issuerName', width: 20 },
+        { header: 'Issuer Sign', key: 'issuerSign', width: 20 },
+        { header: 'Stock Balance', key: 'stockBalance', width: 15 },
+        { header: 'Status', key: 'status', width: 20 }
+    ];
+
+    // Function to convert Image URL/Base64 to Buffer for ExcelJS
+    async function addImageToCell(url, colIndex, rowIndex) {
+        if (!url) return;
+        try {
+            // Handle both Base64 and URLs
+            let arrayBuffer;
+            if (url.startsWith('data:image')) {
+                const base64Data = url.split(',')[1];
+                const binaryString = window.atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                arrayBuffer = bytes.buffer;
+            } else {
+                const response = await fetch(getDirectDriveUrl(url));
+                const blob = await response.blob();
+                arrayBuffer = await blob.arrayBuffer();
+            }
+
+            const imageId = workbook.addImage({
+                buffer: arrayBuffer,
+                extension: 'png',
+            });
+            worksheet.addImage(imageId, {
+                tl: { col: colIndex - 1, row: rowIndex - 1 },
+                ext: { width: 60, height: 40 }
+            });
+        } catch (e) {
+            console.warn("Failed to attach image to Excel:", e);
+        }
+    }
+
+    // Loop through audit log records
+    const auditData = window.allAuditLogs || [];
+    for (let i = 0; i < auditData.length; i++) {
+        const log = auditData[i];
+        const rowIndex = i + 2; // Row 1 is header
+
+        const row = worksheet.addRow({
+            dateTime: new Date(log.timestamp).toLocaleString() || '',
+            teacherName: log.teacherName || '',
+            teacherId: log.teacherId || '',
+            itemPhoto: '', // Handled by addImageToCell
+            itemDetails: `${log.itemName || ''} (${log.itemSn || 'N/A'})`,
+            qtyIssued: log.qtyIssued || 0,
+            teacherSign: '', // Handled by addImageToCell
+            issuerName: log.issuerName || '',
+            issuerSign: '', // Handled by addImageToCell
+            stockBalance: log.stockBalance || 0,
+            status: log.status || 'Issued'
+        });
+        row.height = 45; // Allow height for image thumbnails
+        row.alignment = { vertical: 'middle', horizontal: 'left' };
+
+        // Embed Images into specific cells
+        if (log.itemImageUrl) await addImageToCell(log.itemImageUrl, 4, rowIndex);
+        if (log.teacherSignatureUrl) await addImageToCell(log.teacherSignatureUrl, 7, rowIndex);
+        if (log.issuerSignatureUrl) await addImageToCell(log.issuerSignatureUrl, 9, rowIndex);
+    }
+
+    // Style the header row
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+
+    // Generate and Download File
+    const buffer = await workbook.xlsx.writeBuffer();
+    saveAs(new Blob([buffer]), `Stock_Movement_Audit_${Date.now()}.xlsx`);
+};
 
 // ==================== CART / ORDERS ====================
 function addToCart(id, data, customQty = 1) {
@@ -1598,35 +2007,106 @@ async function updateDriveStatus() {
     } catch (e) { }
 }
 
-function fetchSystemBranding() { addListener(ref(db, 'settings/logo'), (snap) => { if (snap.val()) document.querySelectorAll('#school-logo').forEach(img => img.src = snap.val()); }); }
+function fetchSystemBranding() { addListener(ref(db, 'settings/logo'), (snap) => { if (snap.val()) document.querySelectorAll('#school-logo, .centered-school-logo, .sidebar-logo-img, .header-brand-logo').forEach(img => img.src = snap.val()); }); }
 
-function fetchCategories() {
-    addListener(ref(db, 'settings/categories'), (snap) => {
-        const data = snap.val() || {}; const select = $('inv-category');
-        if (select) {
-            select.innerHTML = '<option value="" disabled selected>Select Category</option>';
-            Object.values(data).forEach(name => { const opt = document.createElement('option'); opt.value = name; opt.textContent = name; select.appendChild(opt); });
-            select.innerHTML += '<option value="Other">Other (Custom)</option>';
-        }
-        const list = $('system-categories-list');
-        if (list) {
-            list.innerHTML = '';
-            Object.entries(data).forEach(([key, name]) => {
-                const li = document.createElement('li'); li.className = 'category-item';
-                li.innerHTML = `<span>${escapeHtml(name)}</span><button class="delete-cat-btn">Delete</button>`;
-                li.querySelector('button').onclick = async () => { if(confirm("Delete?")) await set(ref(db, `settings/categories/${key}`), null); };
-                list.appendChild(li);
+// 1. Add Category Function (Fixes Button Click Issue)
+window.handleAddCategory = async function(event) {
+    if (event) event.preventDefault(); // Stop page reload
+
+    const categoryInput = $('category-name-input');
+    if (!categoryInput) {
+        console.error("Input element 'category-name-input' not found!");
+        return;
+    }
+
+    const categoryName = categoryInput.value.trim();
+    if (!categoryName) {
+        alert("Please enter a valid category name.");
+        return;
+    }
+
+    const btn = $('btn-add-category');
+    if (btn) btn.disabled = true;
+
+    try {
+        // Check if category already exists
+        const snapshot = await get(ref(db, 'settings/categories'));
+        let exists = false;
+        if (snapshot.exists()) {
+            const categories = snapshot.val();
+            Object.values(categories).forEach((name) => {
+                if (String(name).toLowerCase() === categoryName.toLowerCase()) {
+                    exists = true;
+                }
             });
         }
+
+        if (exists) {
+            alert("This category already exists!");
+            if (btn) btn.disabled = false;
+            return;
+        }
+
+        // Save to Firebase
+        await push(ref(db, 'settings/categories'), categoryName);
+
+        // Clear input
+        categoryInput.value = '';
+        showToast(`Category "${categoryName}" added!`);
+    } catch (error) {
+        console.error("Error adding category:", error);
+        alert("Failed to add category: " + error.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+};
+
+// 2. Realtime Listener to Populate Category Dropdowns Dynamically
+window.listenAndPopulateCategories = function() {
+    addListener(ref(db, 'settings/categories'), (snapshot) => {
+        const dropdownElements = document.querySelectorAll('.category-select-element');
+        const list = $('system-categories-list');
+
+        let optionsHtml = '<option value="" disabled selected>Select Category</option>';
+        if (list) list.innerHTML = '';
+
+        if (snapshot.exists()) {
+            const data = snapshot.val();
+            Object.entries(data).forEach(([key, name]) => {
+                // Populate Dropdowns
+                optionsHtml += `<option value="${name}">${name}</option>`;
+
+                // Populate Management List
+                if (list) {
+                    const li = document.createElement('li');
+                    li.className = 'category-item';
+                    li.innerHTML = `<span>${escapeHtml(name)}</span><button class="delete-cat-btn">Delete</button>`;
+                    li.querySelector('button').onclick = async () => {
+                        if(confirm(`Delete category "${name}"?`)) await set(ref(db, `settings/categories/${key}`), null);
+                    };
+                    list.appendChild(li);
+                }
+            });
+        }
+
+        optionsHtml += '<option value="Other">Other (Custom)</option>';
+
+        dropdownElements.forEach((selectEl) => {
+            if (selectEl) {
+                const currentVal = selectEl.value;
+                selectEl.innerHTML = optionsHtml;
+                if (currentVal) selectEl.value = currentVal;
+            }
+        });
     });
-}
+};
 
 async function uploadLogo(file) {
     const reader = new FileReader(); const base = await new Promise((res) => { reader.onload = () => res(reader.result); reader.readAsDataURL(file); });
     await set(ref(db, 'settings/logo'), base); showToast("Logo Updated!");
 }
 
-async function addCategory(name) { await push(ref(db, 'settings/categories'), name); $('new-category-name').value = ''; showToast("Added!"); }
+async function addCategory(name) { await push(ref(db, 'settings/categories'), name); $('category-name-input').value = ''; showToast("Added!"); }
 
 function setupSignaturePad(canvasId) {
     const canvas = $(canvasId); if (!canvas) return null;
@@ -1685,6 +2165,47 @@ window.uploadPhotoToGoogleDrive = async function(base64Image, fileName) {
   }
 };
 
+// 1. EDIT ITEM FUNCTIONALITY
+window.openEditItemModal = function(itemId) {
+    console.log("Editing item ID:", itemId);
+    const item = window.allInventoryItems ? window.allInventoryItems.find(i => i.id === itemId) : null;
+
+    if (!item) {
+        alert("Item data not found!");
+        return;
+    }
+
+    // Populate Edit Form Inputs
+    if ($('edit-item-id')) $('edit-item-id').value = item.id;
+    if ($('edit-item-name')) $('edit-item-name').value = item.itemName || '';
+    if ($('edit-item-sn')) $('edit-item-sn').value = item.serialNumber || '';
+    if ($('edit-item-category')) $('edit-item-category').value = item.category || '';
+    if ($('edit-item-opening-qty')) $('edit-item-opening-qty').value = item.openingQuantity || 0;
+    if ($('edit-item-available-qty')) $('edit-item-available-qty').value = item.quantity || 0;
+    if ($('edit-item-description')) $('edit-item-description').value = item.description || '';
+
+    // Show Edit Modal
+    const editModal = new bootstrap.Modal($('editItemModal'));
+    editModal.show();
+};
+
+// 2. DELETE ITEM FUNCTIONALITY
+window.deleteInventoryItem = async function(itemId, itemName) {
+    if (!confirm(`Are you sure you want to delete "${itemName || 'this item'}" permanently?`)) {
+        return;
+    }
+
+    try {
+        console.log("Deleting item from Firebase:", itemId);
+        await remove(ref(db, 'inventory/' + itemId));
+        await logActivity("Inventory Deleted", `Item: ${itemName} (${itemId})`);
+        showToast(`"${itemName || 'Item'}" deleted successfully!`);
+    } catch (error) {
+        console.error("Error deleting item:", error);
+        showToast("Failed to delete item: " + error.message, "error");
+    }
+};
+
 // ==================== INVENTORY SAVE ====================
 async function saveInventoryItem(e) {
     if (e) e.preventDefault();
@@ -1695,7 +2216,7 @@ async function saveInventoryItem(e) {
     if (msg) { msg.textContent = "Processing..."; msg.className = "message"; }
 
     try {
-        const cat = $('inv-category').value;
+        const cat = $('item-category-dropdown').value;
         const itemName = $('inv-item-name').value.trim();
         const itemDescription = $('inv-description').value.trim();
         const serialNumber = $('inv-serial-number').value.trim();
@@ -1707,16 +2228,15 @@ async function saveInventoryItem(e) {
         if (!itemName || !serialNumber) throw new Error("Name and SN required");
         if (!file) throw new Error("Image required");
 
-        const reader = new FileReader();
-        const base64 = await new Promise((res, rej) => {
-            reader.onload = () => res(reader.result);
-            reader.onerror = rej;
-            reader.readAsDataURL(file);
-        });
+        if (msg) msg.textContent = "Step 1: Compressing Image...";
+        const compressedBase64 = await window.compressAndScaleImage(file);
 
-        if (msg) msg.textContent = "Uploading image to Google Drive...";
-        const driveUrl = await uploadPhotoToGoogleDrive(base64, `${serialNumber}_${Date.now()}.jpg`);
-        const finalImageUrl = driveUrl || base64;
+        if (msg) msg.textContent = "Step 2: AI Enhancing Studio Background...";
+        const studioPhotoBase64 = await window.generateStudioProductPhoto(compressedBase64);
+
+        if (msg) msg.textContent = "Step 3: Uploading Studio Photo to Google Drive...";
+        const driveUrl = await uploadPhotoToGoogleDrive(studioPhotoBase64, `${serialNumber}_${Date.now()}.jpg`, 'product');
+        const finalImageUrl = driveUrl || studioPhotoBase64;
 
         const itemId = serialNumber.replace(/[.#$[\]]/g, "_");
         const newItem = {
