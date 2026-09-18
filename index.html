@@ -6,13 +6,13 @@
     <meta name="theme-color" content="#2c3e50">
     <link rel="manifest" href="manifest.json">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.0.5">
+    <link rel="stylesheet" href="style.css?v=1.1.5">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/index.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <style>
@@ -417,15 +417,35 @@
                     <div id="admin-audit-ledger-area" style="margin-top:30px;">
                         <h3>Stock Movement Audit Sheet</h3>
                         <p style="font-size:13px; color:#64748b; margin-bottom:15px;">Real-time log of every issued item and inventory change.</p>
+
+                        <!-- Audit Filters -->
+                        <div class="row g-2 mb-3 bg-light p-3 rounded border">
+                            <div class="col-md-4">
+                                <label for="audit-filter-teacher" class="small fw-bold text-muted">Filter by Teacher Name / ID</label>
+                                <input type="text" id="audit-filter-teacher" class="form-control form-control-sm" placeholder="Enter Name or ADEK ID...">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="audit-filter-item" class="small fw-bold text-muted">Filter by Item Name / SN</label>
+                                <input type="text" id="audit-filter-item" class="form-control form-control-sm" placeholder="Enter Item or Serial...">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="audit-filter-date" class="small fw-bold text-muted">Filter by Date</label>
+                                <input type="date" id="audit-filter-date" class="form-control form-control-sm">
+                            </div>
+                        </div>
+
                         <div class="table-responsive">
                             <table class="table table-hover align-middle" id="audit-ledger-table">
                                 <thead class="table-light">
                                     <tr>
-                                        <th>Date & Time</th>
+                                        <th>S.No.</th>
+                                        <th>Date</th>
+                                        <th>Time</th>
                                         <th>Teacher Name</th>
                                         <th>Teacher ID</th>
                                         <th>Item Photo</th>
-                                        <th>Item (Serial No.)</th>
+                                        <th>Item Name</th>
+                                        <th>Item Serial No.</th>
                                         <th>Qty Issued</th>
                                         <th>Teacher Sign</th>
                                         <th>Issued By</th>
@@ -435,7 +455,7 @@
                                     </tr>
                                 </thead>
                                 <tbody id="admin-audit-ledger-list">
-                                    <tr><td colspan="11" style="text-align:center;">Loading ledger data...</td></tr>
+                                    <tr><td colspan="14" style="text-align:center;">Loading ledger data...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -490,7 +510,7 @@
 
             <!-- Right Side: Cart & Logout -->
             <div class="d-flex align-items-center gap-3 header-right-content">
-                <button id="cart-btn" class="cart-btn-main me-2">🛒 <span id="cart-count">0</span></button>
+                <button id="cart-btn" class="cart-btn-main me-2" onclick="window.openCartModal()">🛒 <span id="cart-count">0</span></button>
                 <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="handleUserLogout(event)">Logout</button>
             </div>
         </header>
@@ -529,20 +549,6 @@
         </div>
     </section>
 
-    <!-- Cart Modal -->
-    <!-- Cart Modal -->
-    <div id="cart-modal" class="modal">
-        <div class="modal-content">
-            <h3>Shopping Cart</h3>
-            <div id="cart-items"></div>
-            <div id="cart-message" class="message"></div>
-            <div class="modal-actions">
-                <button id="submit-requisition-btn" class="primary-btn green">Submit Requisition</button>
-                <button id="close-cart-btn" class="secondary-btn">Close</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Teacher Order Signature Modal -->
     <div class="modal fade" id="teacher-signature-modal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
@@ -578,7 +584,7 @@
                         <label for="pickup-location-input" class="form-label small fw-bold">Pickup Location / Handover Comment</label>
                         <textarea id="pickup-location-input" class="form-control" rows="3" placeholder="e.g. Collect from Main Office, Store Room 2"></textarea>
                     </div>
-                    <button type="button" class="btn btn-success w-100 fw-bold py-2" onclick="confirmAdminOrderApproval()">
+                    <button type="button" class="btn btn-success w-100 fw-bold py-2" onclick="window.confirmAdminOrderApproval(event)">
                         Confirm Approval & Notify Teacher
                     </button>
                 </div>
@@ -667,24 +673,26 @@
     </div>
 
     <!-- Handover Modal -->
-    <div id="handover-modal" class="modal">
-        <div class="modal-content">
-            <h3>Order Handover Confirmation</h3>
-            <div class="signature-section">
-                <div class="signature-pad-container">
-                    <label>Admin Signature</label>
-                    <canvas id="admin-canvas" width="450" height="150"></canvas>
-                    <button id="clear-admin-sig-btn" class="clear-btn">Clear</button>
+    <div class="modal fade" id="handoverModal" tabindex="-1" aria-labelledby="handoverModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold" id="handoverModalLabel">Final Order Handover & Receiver Signature</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="signature-pad-container">
-                    <label>Teacher Signature</label>
-                    <canvas id="teacher-canvas" width="450" height="150"></canvas>
-                    <button id="clear-teacher-sig-btn" class="clear-btn">Clear</button>
+                <div class="modal-body text-center p-4">
+                    <div id="handover-order-details" class="alert alert-info text-start mb-3" style="font-size: 14px;">
+                        Loading order details...
+                    </div>
+                    <p class="small text-muted mb-2 text-start">Teacher / Staff Signature:</p>
+                    <div class="border rounded-3 p-1 bg-light mb-2">
+                        <canvas id="handover-signature-pad" width="340" height="150" style="touch-action: none; background: #fff; cursor: crosshair; width: 100%;"></canvas>
+                    </div>
+                    <button type="button" id="clear-handover-sig" class="btn btn-sm btn-outline-secondary mb-3">Clear Signature</button>
+                    <button type="button" class="btn btn-success w-100 py-2 fw-bold" onclick="window.submitHandoverWithSignature(event)">
+                        Complete Handover & Close Order
+                    </button>
                 </div>
-            </div>
-            <div class="modal-actions">
-                <button id="complete-order-btn" class="primary-btn green">Complete & Close Order</button>
-                <button id="close-handover-modal-btn" class="secondary-btn">Cancel</button>
             </div>
         </div>
     </div>
@@ -714,13 +722,32 @@
         </div>
     </div>
 
-    <!-- Item Detail Modal ("Janam Kundali") -->
-    <div id="item-detail-modal" class="modal">
-        <div class="modal-content" style="max-width:500px;">
-            <h3>📦 Janam Kundali (Item Details)</h3>
-            <div id="item-detail-content"></div>
-            <div class="modal-actions" style="margin-top:20px;">
-                <button id="close-item-detail-btn" class="secondary-btn" style="flex:1;">Close</button>
+    <!-- Item Details Modal -->
+    <div class="modal fade" id="itemDetailsModal" tabindex="-1" aria-labelledby="itemDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold" id="detail-item-title">Item Details</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center p-4">
+                    <img id="detail-item-image" src="" alt="Item Image" class="img-fluid rounded mb-3" style="max-height: 200px; object-fit: contain;">
+                    <h4 id="detail-item-name" class="fw-bold mb-1"></h4>
+                    <p class="text-muted small mb-2">Serial No: <span id="detail-item-sn" class="fw-bold"></span></p>
+                    <p id="detail-item-description" class="text-secondary mb-3"></p>
+                    <div class="d-flex justify-content-between align-items-center bg-light p-3 rounded mb-3">
+                        <span>Available Stock:</span>
+                        <span id="detail-item-stock" class="badge bg-success fs-6">0</span>
+                    </div>
+                    <!-- Add to Cart in Modal -->
+                    <div id="catalog-modal-controls" class="d-flex gap-2">
+                        <input type="number" id="modal-item-qty" value="1" min="1" class="form-control" style="width: 80px;">
+                        <button id="modal-add-to-cart-btn" class="btn btn-success fw-bold flex-grow-1">Add to Cart</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
             </div>
         </div>
     </div>
@@ -782,10 +809,34 @@
             </div>
         </div>
     </div>
+
+    <!-- Cart Modal (Placed at end of body) -->
+    <div class="modal fade" id="cartModal" tabindex="-1" aria-labelledby="cartModalLabel" aria-hidden="true" style="z-index: 1060;">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title fw-bold" id="cartModalLabel">🛒 Your Stationery Cart</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-3" style="max-height: 60vh; overflow-y: auto;">
+                    <div id="cart-items-container">
+                        <!-- Dynamic Cart Items Render Here -->
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-between">
+                    <button type="button" class="btn btn-outline-danger btn-sm" onclick="window.clearCart()">Clear Cart</button>
+                    <div>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-success fw-bold" onclick="window.submitCartOrder()">Submit Order</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.0.5"></script>
+<script type="module" src="app.js?v=1.1.5"></script>
 </body>
 </html>

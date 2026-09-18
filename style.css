@@ -94,6 +94,15 @@ body {
   object-fit: contain;
   display: block;
 }
+#cartModal {
+    z-index: 1060 !important;
+}
+
+#cartModal.show {
+    display: block !important;
+    background-color: rgba(0, 0, 0, 0.5) !important;
+}
+
 @media (max-width: 768px) {
   .login-logo {
     max-height: 120px;
@@ -1086,6 +1095,15 @@ img.lazy-load {
 }
 
 /* Mobile (iOS & Android): Hide Excel Table, Show Cards */
+#cartModal {
+    z-index: 1060 !important;
+}
+
+#cartModal.show {
+    display: block !important;
+    background-color: rgba(0, 0, 0, 0.5) !important;
+}
+
 @media (max-width: 768px) {
   .inventory-desktop-table { display: none !important; }
   .inventory-mobile-cards { display: flex !important; flex-direction: column; gap: 12px; }
@@ -1222,6 +1240,15 @@ body.modal-open {
     overflow-y: auto !important;
     position: static !important;
     padding-right: 0 !important;
+}
+
+#cartModal {
+    z-index: 1060 !important;
+}
+
+#cartModal.show {
+    display: block !important;
+    background-color: rgba(0, 0, 0, 0.5) !important;
 }
 
 @media (max-width: 768px) {

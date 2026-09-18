@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.0.5";
+const APP_VERSION = "1.1.5";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -55,7 +55,7 @@ const FALLBACK_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
 
 // ==================== STATE ====================
 let currentUser = null;
-let cart = {};
+window.stationeryCart = []; // Global Cart Array (Persistent)
 let inventoryData = {};
 let unsubscribeListeners = [];
 let html5QrCode = null;
@@ -67,7 +67,9 @@ let notificationsList = [];
 let adminPad = null;
 let teacherPad = null;
 let teacherRequestPad = null;
+let handoverPad = null;
 let selectedOrderIdForApproval = null;
+window.activeHandoverRequestId = null;
 
 const catalogState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
 const adminInventoryState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
@@ -80,6 +82,116 @@ const alertedRequests = new Set();
 const ADMIN_CREDENTIALS = {
     username: "Asif",
     password: "Asif8013@#$"
+};
+
+window.handleFinalHandover = async function(event, orderId) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    console.log("Initiating Handover for Order:", orderId);
+    window.activeHandoverRequestId = orderId;
+
+    const detailsEl = $('handover-order-details');
+    try {
+        const snap = await get(ref(db, `orders/${orderId}`));
+        if (snap.exists()) {
+            const order = snap.val();
+            if (detailsEl) {
+                detailsEl.innerHTML = `
+                    <strong>Staff:</strong> ${escapeHtml(order.teacherName)}<br>
+                    <strong>Items:</strong> ${order.items?.length || 0} unique items<br>
+                    <strong>Status:</strong> ${escapeHtml(order.status)}
+                `;
+            }
+        }
+    } catch (err) {
+        console.error("Order fetch error:", err);
+    }
+
+    const modalEl = document.getElementById('handoverModal');
+    if (modalEl) {
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+
+        // Modal shown event to init canvas properly
+        modalEl.addEventListener('shown.bs.modal', () => {
+            if (!handoverPad) {
+                handoverPad = setupResponsiveSignaturePad('handover-signature-pad');
+            } else {
+                handoverPad.clear();
+            }
+        }, { once: true });
+
+        if (handoverPad) handoverPad.clear();
+    } else {
+        alert(`Confirm handover for Order ${orderId}?`);
+    }
+};
+
+window.submitHandoverWithSignature = async function(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    if (!handoverPad || handoverPad.isEmpty()) {
+        alert("Receiver signature is required to complete handover.");
+        return;
+    }
+
+    const orderId = window.activeHandoverRequestId;
+    const base64Signature = handoverPad.getDataUrl();
+
+    try {
+        console.log("Saving final handover for:", orderId);
+
+        // 1. Get Admin Name
+        const adminName = currentUser ? (currentUser.name || "Admin") : "System Admin";
+
+        // 2. Deduct Inventory Quantities & Prepare Stock Balance Data
+        const snap = await get(ref(db, `orders/${orderId}`));
+        const orderData = snap.val();
+
+        if (orderData && orderData.items) {
+            for (const item of orderData.items) {
+                const itemRef = ref(db, `inventory/${item.itemId}/quantity`);
+                const currentQtySnap = await get(itemRef);
+                const currentQty = currentQtySnap.val() || 0;
+                const remainingStock = Math.max(0, currentQty - item.requestQuantity);
+
+                // Update Main Inventory
+                await set(itemRef, remainingStock);
+
+                // Save current balance snapshot into the order item for the audit ledger
+                item.stockBalance = remainingStock;
+            }
+        }
+
+        // 3. Update Order Record with Admin Name and Stock Snapshot
+        await update(ref(db, `orders/${orderId}`), {
+            status: 'Handover Complete / Done',
+            handoverSignature: base64Signature,
+            completedAt: new Date().toISOString(),
+            handedOverBy: adminName,
+            issuedBy: adminName,
+            items: orderData.items // Re-save items with their stockBalance snapshots
+        });
+
+        // 4. Close Modal
+        const modalEl = document.getElementById('handoverModal');
+        if (modalEl) {
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+        }
+
+        showToast(`Handover for ${orderId} complete by ${adminName}!`, "success");
+        await logActivity("Handover Complete", `Order: ${orderId} by ${adminName}`);
+
+    } catch (err) {
+        console.error("Handover error:", err);
+        showToast("Handover failed: " + err.message, "error");
+    }
 };
 
 // ==================== IMAGE & UI UTILITIES ====================
@@ -184,16 +296,22 @@ function getDirectDriveUrl(url, endpointIndex = 0) {
 }
 
 window.handleImageError = function(imgElement, originalUrl) {
-    let retries = parseInt(imgElement.getAttribute('data-retries') || '0');
-    if (retries < 3) {
-        retries++;
-        imgElement.setAttribute('data-retries', retries);
-        const newUrl = getDirectDriveUrl(originalUrl, retries) + '?t=' + Date.now();
-        setTimeout(() => { imgElement.src = newUrl; }, 800 * retries);
-    } else {
-        imgElement.src = FALLBACK_IMG;
-        imgElement.onerror = null;
+    // 1. Prevent infinite retry loops by checking a failure flag
+    if (imgElement.getAttribute('data-failed') === 'true') {
+        return;
     }
+
+    console.warn("Image Load Failed:", originalUrl);
+
+    // 2. Mark as failed and clear the error handler to stop loops
+    imgElement.setAttribute('data-failed', 'true');
+    imgElement.onerror = null;
+
+    // 3. Substitute with a lightweight static fallback SVG
+    imgElement.src = FALLBACK_IMG;
+
+    // Ensure no dynamic timestamps or retries are attempted
+    imgElement.removeAttribute('data-retries');
 };
 
 function attachSmartImage(imgEl, rawUrl) {
@@ -406,11 +524,13 @@ window.handleUserLogout = function(event) {
         localStorage.removeItem('currentUserPass');
         localStorage.removeItem('currentUserRole');
         localStorage.removeItem('currentUserName');
+        localStorage.removeItem('teacherStationeryCart');
         sessionStorage.removeItem('isAdminAuthenticated');
+        sessionStorage.clear();
 
         cleanupListeners();
         currentUser = null;
-        cart = {};
+        window.stationeryCart = [];
         updateCartBadge();
         catalogState.allItems = []; catalogState.filtered = []; catalogState.currentPage = 1; catalogState.searchTerm = '';
 
@@ -672,17 +792,20 @@ window.checkDriveConnectionHealth = async function(scriptUrl) {
     try {
         const response = await fetch(scriptUrl, {
             method: 'GET',
-            redirect: 'follow'
+            mode: 'no-cors' // Use no-cors to handle opaque Apps Script redirects without error
         });
 
-        if (response.ok || response.type === 'opaque') {
-            updateDriveUIStatus(true, "Connected 24/7");
+        // Apps Script often returns 404 if not deployed or no GET handler
+        if (response.type === 'opaque' || response.ok) {
+            updateDriveUIStatus(true, "Active (24/7)");
         } else {
-            updateDriveUIStatus(false, "Checking...");
+            console.warn("Apps Script check returned status:", response.status);
+            updateDriveUIStatus(false, "Connection Warning");
         }
     } catch (err) {
-        console.warn("Drive connection warning (non-blocking):", err);
-        updateDriveUIStatus(true, "Active");
+        // Handle connection errors gracefully without crashing console
+        console.warn("Drive connection warning (non-critical):", err.message);
+        updateDriveUIStatus(false, "Offline / Error");
     }
 };
 
@@ -749,8 +872,167 @@ function seedDefaultUsersIfEmpty() {
     });
 }
 
+// Update UI cart counter
+window.updateCartBadge = function() {
+    const count = window.stationeryCart.reduce((sum, item) => sum + item.requestQuantity, 0);
+    const badge = $('cart-count');
+    if (badge) badge.textContent = count;
+};
+
+// Save Cart to Local Storage
+window.saveCartToStorage = function() {
+    localStorage.setItem('teacherStationeryCart', JSON.stringify(window.stationeryCart));
+    window.updateCartBadge();
+};
+
+// Load Cart from Local Storage on Startup
+window.loadCartFromStorage = function() {
+    const savedCart = localStorage.getItem('teacherStationeryCart');
+    if (savedCart) {
+        window.stationeryCart = JSON.parse(savedCart);
+        window.updateCartBadge();
+    }
+};
+
+// Safe Cart Render Function
+window.renderCartModalItems = function() {
+    const container = document.getElementById('cart-items-container');
+    if (!container) {
+        console.error("Cart container #cart-items-container not found!");
+        return;
+    }
+    const cart = window.stationeryCart || [];
+
+    if (cart.length === 0) {
+        container.innerHTML = `<div class="text-center py-4"><p class="text-muted fs-5 mb-0">🛒 Your cart is empty.</p></div>`;
+        return;
+    }
+
+    let html = '<ul class="list-group list-group-flush">';
+    cart.forEach((item, index) => {
+        html += `<li class="list-group-item d-flex justify-content-between align-items-center py-3">
+            <div class="d-flex align-items-center gap-3">
+                <img src="${item.imageUrl || item.image || FALLBACK_IMG}" style="width: 50px; height: 50px; object-fit: contain;" class="rounded border">
+                <div>
+                    <h6 class="mb-0 fw-bold">${item.itemName || 'Stationery Item'}</h6>
+                    <small class="text-muted">SN: ${item.serialNumber || 'N/A'}</small>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-3">
+                <div class="input-group input-group-sm" style="width: 110px;">
+                    <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, -1)">-</button>
+                    <input type="text" class="form-control text-center bg-white" value="${item.requestQuantity || 1}" readonly>
+                    <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, 1)">+</button>
+                </div>
+                <button class="btn btn-outline-danger btn-sm" onclick="window.removeFromCart(${index})">🗑️</button>
+            </div>
+        </li>`;
+    });
+    html += '</ul>';
+
+    container.innerHTML = html;
+};
+
+// Fail-Safe Open Cart Modal Function
+window.openCartModal = function(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    console.log("Opening Cart Modal...");
+
+    // 1. Render items safely
+    try {
+        window.renderCartModalItems();
+    } catch (err) {
+        console.error("Error rendering cart items:", err);
+    }
+
+    // 2. Clear lingering backdrops
+    document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+
+    // 3. Trigger Bootstrap Modal Instance
+    const modalEl = document.getElementById('cartModal');
+    if (modalEl) {
+        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modalInstance.show();
+
+        // Fallback force display if bootstrap modal JS fails
+        setTimeout(() => {
+            if (!modalEl.classList.contains('show')) {
+                modalEl.classList.add('show');
+                modalEl.style.display = 'block';
+                document.body.classList.add('modal-open');
+            }
+        }, 100);
+    } else {
+        alert("Error: Cart modal HTML element missing!");
+    }
+};
+
+window.showCartModal = window.openCartModal;
+
+window.hideCartModal = function() {
+    const modalEl = document.getElementById('cartModal');
+    if (modalEl) {
+        const modalInstance = bootstrap.Modal.getInstance(modalEl);
+        if (modalInstance) modalInstance.hide();
+        modalEl.classList.remove('show');
+        modalEl.style.display = 'none';
+        window.wipeScrollLocks();
+    }
+};
+
+window.updateCartQty = function(index, delta) {
+    const item = window.stationeryCart[index];
+    if (!item) return;
+
+    let newQty = (item.requestQuantity || 1) + delta;
+    if (newQty < 1) return;
+
+    // Check stock if available in item data
+    if (item.quantity && newQty > parseInt(item.quantity)) {
+        showToast("Maximum stock reached", "error");
+        return;
+    }
+
+    item.requestQuantity = newQty;
+    window.saveCartToStorage();
+    window.renderCartModalItems();
+};
+
+window.removeFromCart = function(index) {
+    window.stationeryCart.splice(index, 1);
+    window.saveCartToStorage();
+    window.renderCartModalItems();
+};
+
+window.clearCart = function() {
+    if (window.stationeryCart.length === 0) return;
+    if (confirm("Are you sure you want to clear all items from your cart?")) {
+        window.stationeryCart = [];
+        window.saveCartToStorage();
+        window.renderCartModalItems();
+    }
+};
+
+window.submitCartOrder = function() {
+    if (window.stationeryCart.length === 0) {
+        showToast("Your cart is empty", "error");
+        return;
+    }
+    const modalEl = document.getElementById('cartModal');
+    if (modalEl) {
+        const modalInstance = bootstrap.Modal.getInstance(modalEl);
+        if (modalInstance) modalInstance.hide();
+    }
+    submitRequisitionRequest();
+};
+
 document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
+    window.loadCartFromStorage();
     seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
@@ -854,7 +1136,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const categorySelect = $('item-category-dropdown');
     const serialNumberInput = $('inv-serial-number');
     const cartBtn = $('cart-btn');
+    if (cartBtn) {
+        cartBtn.addEventListener('click', window.openCartModal);
+        cartBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            window.openCartModal();
+        }, { passive: false });
+    }
+
     const closeCartBtn = $('close-cart-btn');
+    if (closeCartBtn) closeCartBtn.addEventListener('click', window.hideCartModal);
     const submitRequisitionBtn = $('submit-requisition-btn');
     const stationerySearch = $('stationery-search');
     const adminInventorySearch = $('admin-inventory-search');
@@ -908,8 +1199,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     $('drawer-cart-btn')?.addEventListener('click', () => {
         toggleDrawer(false);
-        $('cart-modal').classList.add('active');
-        renderCart();
+        window.showCartModal();
     });
 
     $('drawer-history-btn')?.addEventListener('click', () => {
@@ -985,8 +1275,6 @@ document.addEventListener('DOMContentLoaded', () => {
         else $('barcode').innerHTML = '';
     };
 
-    if (cartBtn) cartBtn.onclick = () => { $('cart-modal').classList.add('active'); renderCart(); };
-    if (closeCartBtn) closeCartBtn.onclick = () => $('cart-modal').classList.remove('active');
     if (submitRequisitionBtn) submitRequisitionBtn.onclick = submitRequisitionRequest;
 
     if (stationerySearch) {
@@ -1006,7 +1294,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (closeNotificationBtn) closeNotificationBtn.onclick = () => $('notification-modal').classList.remove('active');
     if (closeHandoverModalBtn) closeHandoverModalBtn.onclick = () => $('handover-modal').classList.remove('active');
-    if (completeOrderBtn) completeOrderBtn.onclick = completeHandoverAction;
+    if (completeOrderBtn) completeOrderBtn.onclick = window.submitHandoverWithSignature;
     if (closeOrderDetailBtn) closeOrderDetailBtn.onclick = () => $('order-detail-modal').classList.remove('active');
     if (closeItemDetailBtn) closeItemDetailBtn.onclick = () => $('item-detail-modal').classList.remove('active');
 
@@ -1029,6 +1317,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (exportInventoryBtn) exportInventoryBtn.onclick = exportInventory;
     if (exportHistoryBtn) exportHistoryBtn.onclick = exportHistory;
     if (exportAuditBtn) exportAuditBtn.onclick = exportAuditLedgerToExcel;
+
+    // Audit Ledger Filters
+    const auditFilterTeacher = $('audit-filter-teacher');
+    const auditFilterItem = $('audit-filter-item');
+    const auditFilterDate = $('audit-filter-date');
+
+    [auditFilterTeacher, auditFilterItem, auditFilterDate].forEach(el => {
+        if (el) el.addEventListener('input', applyAuditFilters);
+    });
 
     $('notification-bell')?.addEventListener('click', () => {
         renderNotificationList();
@@ -1065,6 +1362,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     $('clear-admin-sig-btn')?.addEventListener('click', () => { if (adminPad) adminPad.clear(); });
     $('clear-teacher-sig-btn')?.addEventListener('click', () => { if (teacherPad) teacherPad.clear(); });
+    $('clear-handover-sig')?.addEventListener('click', () => { if (handoverPad) handoverPad.clear(); });
 
     const teacherSigModal = document.getElementById('teacher-signature-modal');
     if (teacherSigModal) {
@@ -1457,6 +1755,7 @@ function fetchInventory() {
         const data = snapshot.val() || {};
         inventoryData = data;
         catalogState.allItems = Object.entries(data).map(([id, d]) => ({ id, data: d }));
+        window.allCatalogItems = catalogState.allItems; // For modal lookup
         resetCatalog();
     });
 }
@@ -1478,14 +1777,49 @@ function renderCatalogPage() {
     if (pageItems.length === 0) { list.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#64748b;padding:30px;">No items found.</p>'; return; }
     pageItems.forEach(({ id, data }) => {
         const card = document.createElement('div'); card.className = 'inventory-card';
-        card.innerHTML = `<div class="card-img-wrap skeleton"><img alt="" loading="lazy"></div><div class="card-body"><h3 class="card-title">${escapeHtml(data.itemName)}</h3><p class="serial">SN: ${escapeHtml(data.serialNumber || 'N/A')}</p><p class="description">${escapeHtml(data.description || '')}</p><button class="add-to-cart-btn">View Details</button></div>`;
+        card.innerHTML = `<div class="card-img-wrap skeleton"><img alt="" loading="lazy"></div><div class="card-body"><h3 class="card-title">${escapeHtml(data.itemName)}</h3><p class="serial">SN: ${escapeHtml(data.serialNumber || 'N/A')}</p><p class="description">${escapeHtml(data.description || '')}</p><button class="add-to-cart-btn" onclick="window.viewItemDetails('${id}')">View Details</button></div>`;
         attachSmartImage(card.querySelector('img'), data.imageUrl);
-        card.onclick = (e) => { if (e.target.tagName !== 'BUTTON') showJanamKundaliModal(id, data, false); };
-        card.querySelector('button').onclick = () => showJanamKundaliModal(id, data, false);
         list.appendChild(card);
     });
     renderPaginationControls('stationery-list', catalogState, renderCatalogPage);
 }
+
+// Global function to open item details modal
+window.viewItemDetails = function(itemId) {
+    console.log("View Details Triggered for Item ID:", itemId);
+    if (!itemId) return;
+
+    const itemObj = (window.allCatalogItems || []).find(i => i.id === itemId);
+    if (!itemObj) {
+        alert("Item details not found!");
+        return;
+    }
+    const item = itemObj.data;
+
+    $('detail-item-title').innerText = item.itemName || 'Item Details';
+    $('detail-item-name').innerText = item.itemName || 'N/A';
+    $('detail-item-sn').innerText = item.serialNumber || 'N/A';
+    $('detail-item-description').innerText = item.description || 'No description available.';
+    $('detail-item-stock').innerText = item.quantity || '0';
+    $('detail-item-image').src = getDirectDriveUrl(item.imageUrl) || FALLBACK_IMG;
+
+    // Handle Add to Cart from Modal
+    const addBtn = $('modal-add-to-cart-btn');
+    if (addBtn) {
+        addBtn.onclick = () => {
+            const qty = parseInt($('modal-item-qty').value) || 1;
+            addToCart(itemId, item, qty);
+            bootstrap.Modal.getOrCreateInstance($('itemDetailsModal')).hide();
+        };
+    }
+
+    // Show Bootstrap Modal safely
+    const detailsModalEl = $('itemDetailsModal');
+    if (detailsModalEl) {
+        const detailsModal = bootstrap.Modal.getOrCreateInstance(detailsModalEl);
+        detailsModal.show();
+    }
+};
 
 function renderPaginationControls(containerId, state, renderFn) {
     const targetElement = $(containerId);
@@ -1670,27 +2004,59 @@ function fetchAuditLedger() {
                 const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
                 if (it) balance = it.quantity;
 
+                const ts = new Date(order.timestamp);
+
                 ledgerData.push({
                     orderId: id,
                     timestamp: order.timestamp,
-                    teacherName: order.teacherName,
-                    teacherId: order.teacherUid,
-                    itemImageUrl: item.imageUrl,
-                    itemName: item.itemName,
+                    date: ts.toLocaleDateString(),
+                    time: ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                    teacherName: order.teacherName || "N/A",
+                    teacherId: order.teacherUid || "N/A",
+                    itemImageUrl: item.imageUrl || FALLBACK_IMG,
+                    itemName: item.itemName || "N/A",
                     itemSn: serial,
-                    qtyIssued: item.requestQuantity,
+                    qtyIssued: item.requestQuantity || 0,
                     teacherSignatureUrl: order.teacherRequestSignature || (order.signatures ? order.signatures.teacher : null),
-                    issuerName: order.signatures ? "Admin" : (order.status.includes('Approved') ? "Admin" : "Pending"),
-                    issuerSignatureUrl: order.signatures ? order.signatures.admin : null,
-                    stockBalance: balance,
+                    issuerName: order.issuedBy || order.handedOverBy || (order.status.includes('Done') ? "Admin" : "Pending"),
+                    issuerSignatureUrl: order.handoverSignature || (order.signatures ? order.signatures.admin : null),
+                    stockBalance: item.stockBalance !== undefined ? item.stockBalance : balance,
                     status: order.status
                 });
             });
         });
-        auditLedgerState.allItems = auditLedgerState.filtered = ledgerData;
-        window.allAuditLogs = ledgerData; // For Excel Export
-        renderAuditLedger();
+        auditLedgerState.allItems = ledgerData;
+        applyAuditFilters(); // This handles rendering and pagination
     });
+}
+
+function applyAuditFilters() {
+    const teacherTerm = ($('audit-filter-teacher')?.value || "").toLowerCase().trim();
+    const itemTerm = ($('audit-filter-item')?.value || "").toLowerCase().trim();
+    const dateVal = $('audit-filter-date')?.value; // YYYY-MM-DD
+
+    auditLedgerState.filtered = auditLedgerState.allItems.filter(row => {
+        const matchesTeacher = !teacherTerm ||
+                               (row.teacherName.toLowerCase().includes(teacherTerm) ||
+                                row.teacherId.toLowerCase().includes(teacherTerm));
+
+        const matchesItem = !itemTerm ||
+                            (row.itemName.toLowerCase().includes(itemTerm) ||
+                             row.itemSn.toLowerCase().includes(itemTerm));
+
+        let matchesDate = true;
+        if (dateVal) {
+            // Convert row.timestamp to YYYY-MM-DD for comparison
+            const rowDate = new Date(row.timestamp).toISOString().split('T')[0];
+            matchesDate = (rowDate === dateVal);
+        }
+
+        return matchesTeacher && matchesItem && matchesDate;
+    });
+
+    auditLedgerState.currentPage = 1;
+    window.allAuditLogs = auditLedgerState.filtered; // For Excel Export
+    renderAuditLedger();
 }
 
 function renderAuditLedger() {
@@ -1701,21 +2067,24 @@ function renderAuditLedger() {
     const pageItems = auditLedgerState.filtered ? auditLedgerState.filtered.slice(start, end) : [];
 
     if (pageItems.length === 0) {
-        list.innerHTML = '<tr><td colspan="11" style="text-align:center;">No movements.</td></tr>';
+        list.innerHTML = '<tr><td colspan="14" style="text-align:center;">No movements found matching filters.</td></tr>';
         return;
     }
 
-    pageItems.forEach(row => {
+    pageItems.forEach((row, index) => {
         const tr = document.createElement('tr');
-
-        const statusBadge = row.status === 'Pending Approval' ? 'bg-warning' : row.status === 'Approved' ? 'bg-info' : 'bg-success';
+        const sNo = start + index + 1;
+        const statusBadge = row.status.includes('Done') ? 'bg-success' : row.status === 'Pending Approval' ? 'bg-warning' : 'bg-info';
 
         tr.innerHTML = `
-            <td><small>${new Date(row.timestamp).toLocaleString()}</small></td>
+            <td>${sNo}</td>
+            <td>${row.date}</td>
+            <td><small>${row.time}</small></td>
             <td><strong>${escapeHtml(row.teacherName)}</strong></td>
             <td><code>${escapeHtml(row.teacherId)}</code></td>
             <td><img src="${getDirectDriveUrl(row.itemImageUrl)}" class="inventory-thumb" onerror="this.src='${FALLBACK_IMG}'"></td>
-            <td>${escapeHtml(row.itemName)}<br><small class="text-muted">SN: ${row.itemSn}</small></td>
+            <td>${escapeHtml(row.itemName)}</td>
+            <td><code>${row.itemSn}</code></td>
             <td class="text-center"><strong>${row.qtyIssued}</strong></td>
             <td>${row.teacherSignatureUrl ? `<img src="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;">` : '-'}</td>
             <td>${escapeHtml(row.issuerName)}</td>
@@ -1825,35 +2194,36 @@ window.exportAuditLedgerToExcel = async function() {
 // ==================== CART / ORDERS ====================
 function addToCart(id, data, customQty = 1) {
     const stock = parseInt(data.quantity) || 0;
-    if (cart[id]) {
-        if (cart[id].requestQuantity + customQty <= stock) { cart[id].requestQuantity += customQty; showToast("Updated"); } else showToast("No stock", 'error');
-    } else { cart[id] = { ...data, requestQuantity: customQty }; showToast("Added"); }
-    updateCartBadge();
-}
+    const existingItem = window.stationeryCart.find(i => i.id === id);
 
-function updateCartBadge() {
-    const count = Object.values(cart).reduce((sum, item) => sum + item.requestQuantity, 0);
-    if ($('cart-count')) $('cart-count').textContent = count;
+    if (existingItem) {
+        if (existingItem.requestQuantity + customQty <= stock) {
+            existingItem.requestQuantity += customQty;
+            showToast(`Updated ${data.itemName} quantity`);
+        } else {
+            showToast("Insufficient stock available", 'error');
+            return;
+        }
+    } else {
+        window.stationeryCart.push({
+            id,
+            itemName: data.itemName,
+            serialNumber: data.serialNumber,
+            quantity: data.quantity,
+            imageUrl: data.imageUrl,
+            requestQuantity: customQty
+        });
+        showToast(`${data.itemName} added to cart!`);
+    }
+    window.saveCartToStorage();
 }
 
 function renderCart() {
-    const container = $('cart-items'); if (!container) return;
-    container.innerHTML = ''; const items = Object.entries(cart);
-    if (items.length === 0) { container.innerHTML = '<p style="text-align:center;color:#64748b;padding:20px;">Empty</p>'; return; }
-    items.forEach(([id, item]) => {
-        const div = document.createElement('div'); div.className = 'cart-item';
-        div.innerHTML = `<div class="cart-item-info"><strong>${escapeHtml(item.itemName)}</strong><small>SN: ${item.serialNumber}</small></div><div class="cart-item-controls"><input type="number" class="qty-input" data-id="${id}" value="${item.requestQuantity}" min="1" max="${item.quantity}"><button class="remove-item-btn" data-id="${id}">🗑️</button></div>`;
-        container.appendChild(div);
-    });
-    container.querySelectorAll('.qty-input').forEach(inp => inp.onchange = (e) => {
-        const it = cart[inp.dataset.id]; if (!it) return;
-        let v = parseInt(e.target.value) || 1; if (v > it.quantity) v = it.quantity; it.requestQuantity = v; updateCartBadge();
-    });
-    container.querySelectorAll('.remove-item-btn').forEach(btn => btn.onclick = () => { delete cart[btn.dataset.id]; renderCart(); updateCartBadge(); });
+    window.renderCartModalItems();
 }
 
 async function submitRequisitionRequest() {
-    if (Object.keys(cart).length === 0) return showToast("Empty", 'error');
+    if (window.stationeryCart.length === 0) return showToast("Empty", 'error');
     if (teacherRequestPad) teacherRequestPad.clear();
     const modalEl = $('teacher-signature-modal');
     if (modalEl) {
@@ -1862,18 +2232,23 @@ async function submitRequisitionRequest() {
     }
 }
 
-async function submitFinalOrderWithSignature() {
+window.submitFinalOrderWithSignature = async function() {
+    if (window.stationeryCart.length === 0) {
+        alert("Your cart is empty!");
+        return;
+    }
+
     if (!teacherRequestPad || teacherRequestPad.isEmpty()) {
         alert("Please provide your signature before submitting the request.");
         return;
     }
 
-    const orderId = 'JYS-' + Math.floor(10000 + Math.random() * 90000);
+    const orderId = 'ORD-' + Date.now();
     const signatureDataUrl = teacherRequestPad.getDataUrl();
 
     try {
-        const items = Object.entries(cart).map(([id, item]) => ({
-            itemId: id,
+        const items = window.stationeryCart.map(item => ({
+            itemId: item.id,
             itemName: item.itemName,
             serial: item.serialNumber,
             requestQuantity: item.requestQuantity,
@@ -1883,7 +2258,7 @@ async function submitFinalOrderWithSignature() {
         const orderData = {
             orderId,
             teacherUid: currentUser.adecPassNumber || currentUser.uid,
-            teacherName: currentUser.name,
+            teacherName: currentUser.name || "Unknown Teacher",
             timestamp: new Date().toISOString(),
             items,
             status: 'Pending Approval',
@@ -1895,23 +2270,34 @@ async function submitFinalOrderWithSignature() {
         await set(ref(db, 'orders/' + orderId), orderData);
         await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
 
-        cart = {};
-        updateCartBadge();
+        // Clear cart and storage
+        window.stationeryCart = [];
+        window.saveCartToStorage();
 
-        const modalEl = $('teacher-signature-modal');
-        if (modalEl) {
-            const modal = bootstrap.Modal.getInstance(modalEl);
+        // Close modals
+        const sigModalEl = document.getElementById('teacher-signature-modal');
+        if (sigModalEl) {
+            const modal = bootstrap.Modal.getInstance(sigModalEl);
             if (modal) modal.hide();
         }
-        $('cart-modal').classList.remove('active');
 
-        showToast(`Order ${orderId} Submitted!`);
+        const cartModalEl = document.getElementById('cartModal');
+        if (cartModalEl) {
+            const modal = bootstrap.Modal.getInstance(cartModalEl);
+            if (modal) modal.hide();
+        }
+
+        showToast(`Order ${orderId} Submitted Successfully!`, "success");
+
+        // Refresh orders view if active
+        if (currentUser.role === 'TEACHER') {
+            fetchTeacherOrderHistory(currentUser.adecPassNumber || currentUser.uid);
+        }
     } catch (e) {
-        console.error(e);
+        console.error("Order Submission Error:", e);
         showToast("Error submitting order request", 'error');
     }
-}
-
+};
 function clearTeacherRequestCanvas() {
     if (teacherRequestPad) teacherRequestPad.clear();
 }
@@ -1951,8 +2337,8 @@ function fetchAdminOrders() {
                         </div>
                     ` : ''}
                     <div class="request-actions">
-                        ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;">Approve Order</button>` : ''}
-                        <button class="action-btn handover-btn" style="flex:1;">
+                        ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>` : ''}
+                        <button class="action-btn handover-btn" style="flex:1;" onclick="window.handleFinalHandover(event, '${id}')">
                             ${order.status.includes('Approved') ? 'Final Handover & Sign' : 'Force Handover'}
                         </button>
                     </div>`;
@@ -1964,16 +2350,19 @@ function fetchAdminOrders() {
                     wrap.appendChild(d); attachSmartImage(d.querySelector('img'), it.imageUrl);
                 });
 
-                card.querySelector('.prepare-btn')?.addEventListener('click', () => openAdminApprovalModal(id));
-                card.querySelector('.handover-btn').onclick = () => {
-                    activeHandoverRequestId = id; adminPad?.clear(); teacherPad?.clear();
-                    $('handover-modal').classList.add('active');
-                };
                 list.appendChild(card);
             }
         });
     });
 }
+
+window.handleAdminPrepareClick = function(event, orderId) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    openAdminApprovalModal(orderId);
+};
 
 function openAdminApprovalModal(orderId) {
     selectedOrderIdForApproval = orderId;
@@ -1984,14 +2373,25 @@ function openAdminApprovalModal(orderId) {
     }
 }
 
-async function confirmAdminOrderApproval() {
+window.confirmAdminOrderApproval = async function(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
     const locationInput = $('pickup-location-input').value.trim();
     if (!locationInput) {
-        alert("Please enter the pickup location name/comment.");
+        alert("Please enter the pickup location name/comment (e.g. Cabinet A, Main Store).");
+        return;
+    }
+
+    if (!selectedOrderIdForApproval) {
+        console.error("No Order ID selected for approval!");
         return;
     }
 
     try {
+        console.log("Approving Order:", selectedOrderIdForApproval);
         await update(ref(db, `orders/${selectedOrderIdForApproval}`), {
             status: "Approved / Ready for Pickup",
             pickupLocation: locationInput,
@@ -2003,13 +2403,16 @@ async function confirmAdminOrderApproval() {
             const modal = bootstrap.Modal.getInstance(modalEl);
             if (modal) modal.hide();
         }
+
         $('pickup-location-input').value = '';
-        showToast("Order approved and pickup location set!");
+        showToast("Order approved successfully! User view maintained.", "success");
+
+        // Data will automatically refresh via Firebase listeners
     } catch (err) {
         console.error("Error approving order:", err);
-        showToast("Failed to approve order", "error");
+        showToast("Failed to approve order: " + err.message, "error");
     }
-}
+};
 
 async function updateOrderStatus(id, status) {
     try { await update(ref(db, `orders/${id}`), { status }); showToast(`Status: ${status}`); } catch (e) { }
@@ -2080,23 +2483,6 @@ async function viewOrderDetails(id) {
     const content = $('order-detail-content');
     content.innerHTML = `<div style="text-align:center;margin-bottom:15px;"><h3>Requisition Receipt</h3><p>ID: ${id}</p></div><p><strong>Staff:</strong> ${escapeHtml(order.teacherName)} (${order.teacherUid})</p><table class="history-table" style="margin:15px 0;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${order.items.map(i => `<tr><td>${escapeHtml(i.itemName)}</td><td>${i.requestQuantity}</td></tr>`).join('')}</tbody></table>${order.signatures ? `<div class="order-detail-signatures"><div class="signature-display-box"><small>Admin</small><br><img src="${order.signatures.admin}"></div><div class="signature-display-box"><small>Staff</small><br><img src="${order.signatures.teacher}"></div></div>` : ''}`;
     $('order-detail-modal').classList.add('active');
-}
-
-async function completeHandoverAction() {
-    if (adminPad.isEmpty() || teacherPad.isEmpty()) return showToast("Signatures required", 'error');
-    const btn = $('complete-order-btn'); btn.disabled = true;
-    try {
-        const snap = await get(ref(db, `orders/${activeHandoverRequestId}`));
-        const data = snap.val();
-        for (const item of data.items) {
-            const qtyRef = ref(db, `inventory/${item.itemId}/quantity`);
-            const curr = (await get(qtyRef)).val() || 0;
-            await set(qtyRef, Math.max(0, curr - item.requestQuantity));
-        }
-        const sigs = { admin: adminPad.getDataUrl(), teacher: teacherPad.getDataUrl(), completedAt: new Date().toISOString() };
-        await update(ref(db, `orders/${activeHandoverRequestId}`), { status: 'Handover Complete / Done', signatures: sigs });
-        $('handover-modal').classList.remove('active'); showToast("Handover Complete!");
-    } catch (e) { } finally { btn.disabled = false; }
 }
 
 // ==================== SYSTEM / STAFF / DRIVE ====================
