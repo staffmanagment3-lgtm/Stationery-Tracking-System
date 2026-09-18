@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.1.5";
+const APP_VERSION = "1.1.9";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -114,18 +114,77 @@ window.handleFinalHandover = async function(event, orderId) {
         const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
         modal.show();
 
-        // Modal shown event to init canvas properly
-        modalEl.addEventListener('shown.bs.modal', () => {
-            if (!handoverPad) {
-                handoverPad = setupResponsiveSignaturePad('handover-signature-pad');
-            } else {
-                handoverPad.clear();
-            }
-        }, { once: true });
-
-        if (handoverPad) handoverPad.clear();
+        // Use standard event listener for shown.bs.modal to ensure canvas size is correct
+        if (!modalEl.hasAttribute('data-listener-attached')) {
+            modalEl.addEventListener('shown.bs.modal', function () {
+                const canvas = document.getElementById('handover-signature-pad');
+                if (canvas) {
+                    canvas.width = canvas.offsetWidth;
+                    canvas.height = 200;
+                    window.initSignaturePad(canvas);
+                }
+            });
+            modalEl.setAttribute('data-listener-attached', 'true');
+        }
     } else {
         alert(`Confirm handover for Order ${orderId}?`);
+    }
+};
+
+window.initSignaturePad = function(canvas) {
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+    window.isSignatureProvided = false;
+
+    function getPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (e.touches ? e.touches[0].clientX : e.clientX) - rect.left,
+            y: (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+        };
+    }
+
+    function start(e) {
+        if (e.touches) e.preventDefault();
+        isDrawing = true;
+        const pos = getPos(e);
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#000000';
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        if (e.touches) e.preventDefault();
+        const pos = getPos(e);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+        window.isSignatureProvided = true;
+    }
+
+    function stop() {
+        isDrawing = false;
+        ctx.closePath();
+    }
+
+    canvas.onmousedown = start;
+    canvas.onmousemove = draw;
+    canvas.onmouseup = stop;
+    canvas.onmouseleave = stop;
+
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', draw, { passive: false });
+    canvas.addEventListener('touchend', stop);
+
+    // Bind clear button
+    const clearBtn = document.getElementById('clear-handover-sig');
+    if (clearBtn) {
+        clearBtn.onclick = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            window.isSignatureProvided = false;
+        };
     }
 };
 
@@ -135,19 +194,43 @@ window.submitHandoverWithSignature = async function(event) {
         event.stopPropagation();
     }
 
-    if (!handoverPad || handoverPad.isEmpty()) {
+    if (!window.isSignatureProvided) {
         alert("Receiver signature is required to complete handover.");
         return;
     }
 
     const orderId = window.activeHandoverRequestId;
-    const base64Signature = handoverPad.getDataUrl();
+    const canvas = document.getElementById('handover-signature-pad');
+    const base64Signature = canvas.toDataURL('image/png');
+    const adminName = sessionStorage.getItem('userName') || (currentUser && currentUser.name) || 'Admin';
 
     try {
         console.log("Saving final handover for:", orderId);
 
-        // 1. Get Admin Name
-        const adminName = currentUser ? (currentUser.name || "Admin") : "System Admin";
+        // 1. Upload Signature to Google Drive with enhanced payload
+        let driveSignatureUrl = base64Signature;
+        try {
+            const signaturePayload = {
+                image: base64Signature,
+                filename: `Handover_${orderId}.png`,
+                folderType: 'signatures',
+                orderId: orderId,
+                issuedBy: adminName
+            };
+
+            const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+            if (url) {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(signaturePayload)
+                });
+                const result = await response.json();
+                if (result.status === 'success') driveSignatureUrl = result.fileUrl;
+            }
+        } catch (uploadErr) {
+            console.warn("Signature upload failed, falling back to base64:", uploadErr);
+        }
 
         // 2. Deduct Inventory Quantities & Prepare Stock Balance Data
         const snap = await get(ref(db, `orders/${orderId}`));
@@ -170,8 +253,9 @@ window.submitHandoverWithSignature = async function(event) {
 
         // 3. Update Order Record with Admin Name and Stock Snapshot
         await update(ref(db, `orders/${orderId}`), {
-            status: 'Handover Complete / Done',
-            handoverSignature: base64Signature,
+            status: 'Completed',
+            handoverSignatureUrl: driveSignatureUrl,
+            handoverSignature: driveSignatureUrl, // Maintain for backward compatibility
             completedAt: new Date().toISOString(),
             handedOverBy: adminName,
             issuedBy: adminName,
@@ -183,6 +267,7 @@ window.submitHandoverWithSignature = async function(event) {
         if (modalEl) {
             const modal = bootstrap.Modal.getInstance(modalEl);
             if (modal) modal.hide();
+            modalEl.classList.remove('active'); // Ensure custom active class is also removed
         }
 
         showToast(`Handover for ${orderId} complete by ${adminName}!`, "success");
@@ -191,6 +276,106 @@ window.submitHandoverWithSignature = async function(event) {
     } catch (err) {
         console.error("Handover error:", err);
         showToast("Handover failed: " + err.message, "error");
+    }
+};
+
+// ==================== BIOMETRIC AUTHENTICATION ====================
+
+// Helper to convert string to ArrayBuffer (for WebAuthn challenges)
+const strToBuffer = (str) => new TextEncoder().encode(str);
+const bufferToStr = (buf) => new TextDecoder().decode(buf);
+
+window.isBiometricEnrolled = function() {
+    return localStorage.getItem('biometric_enrolled') === 'true';
+};
+
+window.checkBiometricSupport = async function() {
+    if (!window.PublicKeyCredential) return false;
+    try {
+        return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    } catch (e) {
+        return false;
+    }
+};
+
+window.enrollBiometrics = async function(adecNumber) {
+    if (!adecNumber) return;
+
+    try {
+        const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+        const userID = strToBuffer(adecNumber);
+
+        const createCredentialOptions = {
+            publicKey: {
+                challenge: challenge,
+                rp: { name: "Stationery Tracker System" },
+                user: {
+                    id: userID,
+                    name: adecNumber,
+                    displayName: adecNumber,
+                },
+                pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+                authenticatorSelection: {
+                    authenticatorAttachment: "platform",
+                    userVerification: "required",
+                },
+                timeout: 60000,
+                attestation: "direct"
+            }
+        };
+
+        const credential = await navigator.credentials.create(createCredentialOptions);
+
+        if (credential) {
+            localStorage.setItem('biometric_enrolled', 'true');
+            localStorage.setItem('biometric_adec', adecNumber);
+            localStorage.setItem('biometric_cred_id', btoa(String.fromCharCode(...new Uint8Array(credential.rawId))));
+            showToast("Biometric login enabled!", "success");
+            const modal = bootstrap.Modal.getInstance($('biometricEnrollModal'));
+            if (modal) modal.hide();
+        }
+    } catch (err) {
+        console.error("Biometric Enrollment Error:", err);
+        showToast("Biometric enrollment failed.", "error");
+    }
+};
+
+window.loginWithBiometrics = async function() {
+    const credIdStr = localStorage.getItem('biometric_cred_id');
+    const adecNumber = localStorage.getItem('biometric_adec');
+
+    if (!credIdStr || !adecNumber) {
+        showToast("Biometric data missing. Please login manually first.", "error");
+        return;
+    }
+
+    try {
+        const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+        const credId = new Uint8Array(atob(credIdStr).split("").map(c => c.charCodeAt(0)));
+
+        const getCredentialOptions = {
+            publicKey: {
+                challenge: challenge,
+                allowCredentials: [{
+                    id: credId,
+                    type: 'public-key',
+                }],
+                userVerification: "required",
+                timeout: 60000,
+            }
+        };
+
+        const assertion = await navigator.credentials.get(getCredentialOptions);
+
+        if (assertion) {
+            console.log("Biometric Auth Successful for:", adecNumber);
+            localStorage.setItem('stationery_user_adec', adecNumber);
+            handleUserRole(adecNumber);
+            showToast(`Welcome back!`, "success");
+        }
+    } catch (err) {
+        console.error("Biometric Login Error:", err);
+        showToast("Biometric authentication failed or canceled.", "error");
     }
 };
 
@@ -482,6 +667,15 @@ window.handleUserLogin = async function(event) {
                     localStorage.setItem('stationery_user_adec', matchedKey);
                     handleUserRole(matchedKey);
                     if (loginError) loginError.textContent = "";
+
+                    // BIOMETRIC CHECK: If not enrolled and supported, prompt user
+                    const isEnrolled = window.isBiometricEnrolled();
+                    const isSupported = await window.checkBiometricSupport();
+                    if (!isEnrolled && isSupported) {
+                        const enrollModal = new bootstrap.Modal($('biometricEnrollModal'));
+                        enrollModal.show();
+                        $('enable-biometric-btn').onclick = () => window.enrollBiometrics(matchedKey);
+                    }
                 } else {
                     alert("Incorrect Password.");
                 }
@@ -1048,6 +1242,18 @@ document.addEventListener('DOMContentLoaded', () => {
             // Prevents ghost clicks on mobile
             window.handleDirectAdminOpen(e);
         }, { passive: false });
+    }
+
+    // Biometric Login Button Initialization
+    const bioBtn = $('biometric-login-btn');
+    if (bioBtn) {
+        window.checkBiometricSupport().then(supported => {
+            const enrolled = window.isBiometricEnrolled();
+            if (supported && enrolled) {
+                bioBtn.classList.remove('d-none');
+                bioBtn.onclick = window.loginWithBiometrics;
+            }
+        });
     }
 
     const devCreateAccountForm = $('dev-create-account-form');
@@ -2019,7 +2225,7 @@ function fetchAuditLedger() {
                     qtyIssued: item.requestQuantity || 0,
                     teacherSignatureUrl: order.teacherRequestSignature || (order.signatures ? order.signatures.teacher : null),
                     issuerName: order.issuedBy || order.handedOverBy || (order.status.includes('Done') ? "Admin" : "Pending"),
-                    issuerSignatureUrl: order.handoverSignature || (order.signatures ? order.signatures.admin : null),
+                    issuerSignatureUrl: order.handoverSignatureUrl || order.handoverSignature || (order.signatures ? order.signatures.admin : null),
                     stockBalance: item.stockBalance !== undefined ? item.stockBalance : balance,
                     status: order.status
                 });
@@ -2247,6 +2453,15 @@ window.submitFinalOrderWithSignature = async function() {
     const signatureDataUrl = teacherRequestPad.getDataUrl();
 
     try {
+        // 1. Upload Teacher Signature to Google Drive
+        let driveSignatureUrl = signatureDataUrl;
+        try {
+            const uploadedUrl = await uploadPhotoToGoogleDrive(signatureDataUrl, `TeacherSign_${orderId}.png`, 'signatures');
+            if (uploadedUrl) driveSignatureUrl = uploadedUrl;
+        } catch (uploadErr) {
+            console.warn("Teacher signature upload failed, using local data:", uploadErr);
+        }
+
         const items = window.stationeryCart.map(item => ({
             itemId: item.id,
             itemName: item.itemName,
@@ -2262,7 +2477,7 @@ window.submitFinalOrderWithSignature = async function() {
             timestamp: new Date().toISOString(),
             items,
             status: 'Pending Approval',
-            teacherRequestSignature: signatureDataUrl,
+            teacherRequestSignature: driveSignatureUrl,
             pickupLocation: "Awaiting Admin Details",
             requestedAt: new Date().toISOString()
         };
@@ -2338,15 +2553,25 @@ function fetchAdminOrders() {
                     ` : ''}
                     <div class="request-actions">
                         ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>` : ''}
-                        <button class="action-btn handover-btn" style="flex:1;" onclick="window.handleFinalHandover(event, '${id}')">
-                            ${order.status.includes('Approved') ? 'Final Handover & Sign' : 'Force Handover'}
-                        </button>
+                        ${order.status.includes('Approved') ? `
+                            <button class="action-btn handover-btn" style="flex:1;" onclick="window.handleFinalHandover(event, '${id}')">
+                                Final Handover & Sign
+                            </button>
+                        ` : ''}
                     </div>`;
 
                 const wrap = card.querySelector('.request-items');
+                wrap.style.flexDirection = 'column'; // Set to vertical stack
                 (order.items || []).forEach(it => {
-                    const d = document.createElement('div'); d.className = 'req-item-mini';
-                    d.innerHTML = `<img class="inventory-thumb" width="40" height="40"><br><small>x${it.requestQuantity}</small>`;
+                    const d = document.createElement('div'); d.className = 'd-flex align-items-center gap-2 mb-2 p-1 border rounded bg-white';
+                    d.innerHTML = `
+                        <img class="inventory-thumb" width="45" height="45" style="object-fit: contain;">
+                        <div style="flex: 1; overflow: hidden;">
+                            <h6 class="mb-0 small fw-bold text-truncate">${escapeHtml(it.itemName)}</h6>
+                            <small class="text-muted d-block" style="font-size: 9px;">SN: ${it.serial}</small>
+                        </div>
+                        <span class="badge bg-primary" style="font-size: 9px;">x${it.requestQuantity}</span>
+                    `;
                     wrap.appendChild(d); attachSmartImage(d.querySelector('img'), it.imageUrl);
                 });
 
