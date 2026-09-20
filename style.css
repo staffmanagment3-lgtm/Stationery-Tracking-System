@@ -8,7 +8,7 @@
 }
 html { -webkit-text-size-adjust: 100%; }
 body {
-    background-color: #f4f6f9 !important; /* Replaces plain flat white for better card elevation */
+    background-color: #f4f6f9 !important;
     color: #333;
     line-height: 1.6;
     overflow-x: hidden;
@@ -21,7 +21,7 @@ body {
     flex-direction: column;
 }
 
-/* ==================== VIEWS ==================== */
+/* ==================== VIEWS & SECTIONS ==================== */
 .view {
     display: none;
     flex-direction: column;
@@ -34,7 +34,19 @@ body {
 }
 .view.active { display: flex; opacity: 1; }
 
-/* ==================== SCROLL-X (mobile tab bars) ==================== */
+.dashboard-section {
+    width: 100%;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.d-none { display: none !important; }
+
+/* ==================== SCROLL-X ==================== */
 .scroll-x {
     display: flex;
     gap: 8px;
@@ -160,7 +172,7 @@ h2 { margin-bottom: 25px; color: #2c3e50; font-size: 22px; }
     box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.15);
 }
 
-/* ==================== BUTTONS (touch-first) ==================== */
+/* ==================== BUTTONS ==================== */
 button {
     min-height: 44px;
     min-width: 44px;
@@ -239,48 +251,41 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
     z-index: 100;
 }
 
-/* Ensure Left and Right Controls Stay Interactive Above Center Logo */
 .header-left-content,
 .header-right-content {
     position: relative;
     z-index: 10;
 }
 
-/* Centered Enlarged Logo Container */
 .header-center-logo {
     z-index: 5;
     max-width: 45%;
     text-align: center;
-    pointer-events: none; /* Allows clicks to pass through if necessary, though it's absolute centered */
+    pointer-events: none;
 }
 
-/* Zoomed & Scaled School Logo */
 .centered-school-logo {
     max-height: 55px;
     width: auto;
     object-fit: contain;
-    transform: scale(1.35); /* Enlarge and crop whitespace around the logo */
+    transform: scale(1.35);
     transition: transform 0.3s ease;
 }
 
-/* Responsive Scaling for Mobile Screens */
 @media (max-width: 576px) {
     .centered-school-logo {
         max-height: 40px;
         transform: scale(1.1);
     }
-    /* On very small screens, avoid title overlap with centered logo */
     .header-left-content span {
         display: none !important;
     }
 }
 
-/* Dark Text Contrasts for White Navbar */
 .top-navbar .text-dark {
     color: #1e293b !important;
 }
 
-/* Adjust White Cards and Tables over the new background */
 .card, .table-container, .analytics-card, .content, .form-container {
     background-color: #ffffff !important;
     border-radius: 12px;
@@ -568,10 +573,16 @@ img.lazy-load {
 
 /* ==================== MODALS ==================== */
 .modal {
-    display: none; position: fixed; z-index: 1000;
-    left: 0; top: 0; width: 100%; height: 100%;
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
     background-color: rgba(15,23,42,0.55);
-    justify-content: center; align-items: center;
+    justify-content: center;
+    align-items: center;
     padding: 14px;
     backdrop-filter: blur(2px);
 }
@@ -579,10 +590,15 @@ img.lazy-load {
 @keyframes modalIn { from { opacity: 0; } to { opacity: 1; } }
 
 .modal-content {
-    background-color: #fff; padding: 22px;
-    border-radius: 14px; width: 100%; max-width: 600px;
-    max-height: 90vh; max-height: 90dvh;
-    display: flex; flex-direction: column;
+    background-color: #fff;
+    padding: 22px;
+    border-radius: 14px;
+    width: 100%;
+    max-width: 600px;
+    max-height: 90vh;
+    max-height: 90dvh;
+    display: flex;
+    flex-direction: column;
     box-shadow: 0 20px 60px rgba(0,0,0,0.25);
     overflow-y: auto;
 }
@@ -638,14 +654,14 @@ img.lazy-load {
     border: 2px dashed #6c757d;
     border-radius: 8px;
     position: relative;
-    touch-action: none; /* Disables page scrolling while drawing on mobile */
+    touch-action: none;
     margin-bottom: 10px;
 }
 
 .signature-pad-container canvas {
     display: block;
     width: 100% !important;
-    height: 180px !important; /* Larger comfortable drawing height for fingers */
+    height: 180px !important;
     background-color: #ffffff;
     border-radius: 6px;
     cursor: crosshair;
@@ -822,7 +838,6 @@ img.lazy-load {
     min-width: 180px;
 }
 
-/* Ensure buttons remain visible and styled cleanly on mobile */
 .action-btn-group {
     display: inline-flex !important;
     gap: 4px;
@@ -832,7 +847,7 @@ img.lazy-load {
 .action-btn-group .btn {
     padding: 4px 8px !important;
     font-size: 0.82rem !important;
-    display: inline-block !important; /* Forces visibility */
+    display: inline-block !important;
 }
 
 /* ==================== ITEM DETAIL MODAL ==================== */
@@ -887,15 +902,29 @@ img.lazy-load {
     top: 0;
     left: -280px;
     width: 280px;
-    height: 100%;
+    height: 100vh;
+    height: 100dvh;
     background: #ffffff;
-    z-index: 2000;
+    z-index: 2100;
     box-shadow: 4px 0 15px rgba(0,0,0,0.1);
     transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
+    border-right: 1px solid #e2e8f0;
 }
-.side-drawer.open { left: 0; }
+.side-drawer.open {
+    left: 0 !important;
+    display: flex !important;
+}
+
+.sidebar-logo-container {
+    background: #ffffff !important;
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
 
 .drawer-overlay {
     position: fixed;
@@ -909,7 +938,6 @@ img.lazy-load {
 }
 .drawer-overlay.active { display: block; opacity: 1; }
 
-/* 1. Full White Header Bar */
 .sidebar-header {
     background-color: #ffffff !important;
     min-height: 75px;
@@ -920,10 +948,9 @@ img.lazy-load {
     border-bottom: 1px solid #e2e8f0;
 }
 
-/* 2. Expanded & Zoomed Logo */
 .sidebar-logo-container {
     overflow: hidden;
-    padding: 5px 35px 5px 10px; /* Space reserved on right for close button */
+    padding: 5px 35px 5px 10px;
     flex: 1;
     display: flex;
     align-items: center;
@@ -934,17 +961,16 @@ img.lazy-load {
     max-height: 60px;
     width: 100%;
     object-fit: contain;
-    transform: scale(1.35); /* Crops excess padding & makes logo text significantly larger */
+    transform: scale(1.35);
 }
 
-/* 3. Fixed Visible Close Button */
 .sidebar-close-btn {
     position: absolute !important;
     right: 12px !important;
     top: 50% !important;
     transform: translateY(-50%) !important;
     z-index: 1000 !important;
-    filter: none !important; /* Ensures crisp dark icon over white background */
+    filter: none !important;
     opacity: 0.8;
 }
 
@@ -972,6 +998,7 @@ img.lazy-load {
     gap: 12px;
     cursor: pointer;
     border-left: 4px solid transparent;
+    width: 100%;
 }
 .drawer-item:hover { background: #f1f5f9; color: #1e293b; }
 .drawer-item.active {
@@ -1088,47 +1115,11 @@ img.lazy-load {
     font-size: 13px;
 }
 
-/* Desktop: Show Excel Table, Hide Mobile Cards */
 @media (min-width: 769px) {
   .inventory-desktop-table { display: table !important; }
   .inventory-mobile-cards { display: none !important; }
 }
 
-/* Mobile (iOS & Android): Hide Excel Table, Show Cards */
-#cartModal {
-    z-index: 1060 !important;
-}
-
-#cartModal.show {
-    display: block !important;
-    background-color: rgba(0, 0, 0, 0.5) !important;
-}
-
-@media (max-width: 768px) {
-  .inventory-desktop-table { display: none !important; }
-  .inventory-mobile-cards { display: flex !important; flex-direction: column; gap: 12px; }
-
-  .inventory-card-mobile {
-    background: #ffffff;
-    border-radius: 12px;
-    padding: 14px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    border: 1px solid #eef2f5;
-  }
-  .inventory-card-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
-  }
-  .inventory-card-img {
-    width: 60px;
-    height: 60px;
-    object-fit: contain;
-    border-radius: 8px;
-    background: #f8f9fa;
-  }
-}
 .order-detail-signatures { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
 .signature-display-box {
     flex: 1; min-width: 200px;
@@ -1160,18 +1151,29 @@ img.lazy-load {
 @media print {
     body * { visibility: hidden; }
     .print-area, .print-area * { visibility: visible; }
-    .print-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 20px; }
-    .modal, .modal-content {
-        position: static !important; display: block !important;
-        width: 100% !important; max-width: none !important;
-        box-shadow: none !important; border: none !important;
+    #receipt-content, #receipt-content * { visibility: visible; }
+    #receipt-content {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        padding: 0;
+        margin: 0;
         background: white !important;
     }
-    .modal-actions, header, .logout-btn, .dev-tools { display: none !important; }
+    .modal, .modal-content {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+        display: block !important;
+        box-shadow: none !important;
+        border: none !important;
+    }
+    .modal-header, .modal-footer, .d-print-none { display: none !important; }
 }
 
 /* ==================== RESPONSIVE & SCROLL FIXES ==================== */
-/* Force html and body to accept wheel and touch gestures */
 html, body {
     overflow-y: auto !important;
     overflow-x: hidden !important;
@@ -1180,10 +1182,9 @@ html, body {
     touch-action: pan-y !important;
     overscroll-behavior-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
-    background-color: #f1f5f9 !important; /* Soft grey fallback prevents stark white screen */
+    background-color: #f1f5f9 !important;
 }
 
-/* Ensure main layout wrappers allow mouse wheel propagation */
 #admin-dashboard-container,
 #developer-dashboard-container,
 #user-view-container,
@@ -1210,18 +1211,15 @@ main,
     display: flex !important;
 }
 
-/* Ensure modals don't trap pointer events when hidden */
-.modal:not(.show) {
+/* CRITICAL FIX: Bootstrap modal styles - do NOT interfere with custom scanner modals */
+.modal:not(.show):not(.active) {
     pointer-events: none !important;
-    display: none !important;
 }
 
-/* Kill any invisible full-screen overlays locking touch events */
 .modal-backdrop:not(.show) {
     display: none !important;
 }
 
-/* 3. Fix Bootstrap Modal & Backdrop Overlays for Mobile Touch Screens */
 .modal-backdrop {
     z-index: 1050 !important;
     background-color: rgba(0, 0, 0, 0.5) !important;
@@ -1231,11 +1229,29 @@ main,
     pointer-events: auto !important;
 }
 
-.modal {
+/* Bootstrap modals get z-index 1055, custom scanner modals get 1070 */
+.modal.fade {
     z-index: 1055 !important;
 }
 
-/* Force Bootstrap modal-open state to scrollable */
+/* CRITICAL FIX: Custom scanner modals MUST display when .active is added */
+#qr-scanner-modal,
+#ocr-scanner-modal,
+#notification-modal,
+#order-detail-modal {
+    z-index: 1070 !important;
+}
+
+#qr-scanner-modal.active,
+#ocr-scanner-modal.active,
+#notification-modal.active,
+#order-detail-modal.active {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
 body.modal-open {
     overflow-y: auto !important;
     position: static !important;
@@ -1252,12 +1268,10 @@ body.modal-open {
 }
 
 @media (max-width: 768px) {
-    /* Hide traditional desktop table header */
     .batch-inventory-table thead {
         display: none !important;
     }
 
-    /* Display table body and rows as card blocks */
     .batch-inventory-table,
     .batch-inventory-table tbody,
     .batch-inventory-table tr {
@@ -1274,7 +1288,6 @@ body.modal-open {
         box-shadow: 0 2px 6px rgba(0,0,0,0.04);
     }
 
-    /* Format individual table cells as flex rows with labels */
     .batch-inventory-table td {
         display: flex !important;
         justify-content: space-between !important;
@@ -1288,7 +1301,6 @@ body.modal-open {
         border-bottom: none !important;
     }
 
-    /* Render label heading on the left side of the card row */
     .batch-inventory-table td::before {
         content: attr(data-label);
         font-weight: 700;
@@ -1299,7 +1311,6 @@ body.modal-open {
         text-align: left;
     }
 
-    /* Fix empty state message styling */
     .batch-inventory-table td.empty-batch-cell {
         display: block !important;
         text-align: center !important;
@@ -1321,23 +1332,15 @@ body.modal-open {
     .admin-nav { padding: 4px; }
     .admin-nav button { padding: 10px 14px; font-size: 12px; }
 
-    /* Ensure modal content is properly centered and visible on small screens */
     .modal-dialog {
         margin: 0.5rem !important;
         max-width: 95% !important;
     }
 
-    /* Prevent container content truncation */
     .dashboard-view {
         padding-left: 10px !important;
         padding-right: 10px !important;
     }
-}
-    .cart-item-controls { justify-content: center; }
-    .toast { bottom: 12px; left: 12px; right: 12px; max-width: none; }
-    .analytics-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-    .admin-nav { padding: 4px; }
-    .admin-nav button { padding: 10px 14px; font-size: 12px; }
 }
 
 @media (max-width: 480px) {

@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.2.6";
+const APP_VERSION = "1.4.2";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -55,7 +55,7 @@ const FALLBACK_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
 
 // ==================== STATE ====================
 let currentUser = null;
-window.stationeryCart = []; // Global Cart Array (Persistent)
+window.stationeryCart = [];
 let inventoryData = {};
 let unsubscribeListeners = [];
 let html5QrCode = null;
@@ -63,7 +63,6 @@ let ocrStream = null;
 let currentOcrTarget = null;
 let notificationsList = [];
 
-// New Order Signature Pads
 let adminPad = null;
 let teacherPad = null;
 let teacherRequestPad = null;
@@ -78,10 +77,107 @@ const teacherOrdersState = { allItems: [], filtered: [], currentPage: 1 };
 
 const alertedRequests = new Set();
 
-// Admin Credentials for Direct Access Popup
 const ADMIN_CREDENTIALS = {
     username: "Asif",
     password: "Asif8013@#$"
+};
+
+window.openAdminModal = function(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    console.log("Opening Developer Direct Access Modal...");
+
+    const isAuthenticated = sessionStorage.getItem('isAdminAuthenticated');
+    const savedUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    if (isAuthenticated === 'true' && savedUser.role === 'developer') {
+        window.renderDashboardForRole('developer', 'DEV001');
+        return;
+    }
+
+    const modalEl = document.getElementById('adminAuthModal') || document.getElementById('admin-auth-modal');
+    if (modalEl) {
+        if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+            const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modalInstance.show();
+        } else {
+            modalEl.classList.add('show');
+            modalEl.style.display = 'block';
+            document.body.classList.add('modal-open');
+        }
+    } else {
+        const pass = prompt("Enter Developer Passcode:");
+        if (pass === "Asif8013@#$") {
+            window.verifyAdminByPassword("Asif8013@#$");
+        } else if (pass) {
+            alert("Incorrect Developer Passcode!");
+        }
+    }
+};
+
+window.verifyAdminByPassword = function(password) {
+    if (password === "Asif8013@#$") {
+        console.log("Developer Direct Access Granted");
+        sessionStorage.setItem('isAdminAuthenticated', 'true');
+        currentUser = {
+            role: 'developer',
+            name: 'Developer Mode',
+            uid: 'DEV001',
+            adecPassNumber: 'DEV001'
+        };
+        localStorage.setItem('stationery_user_adec', 'DEV001');
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+        const loginEl = document.getElementById('login-view');
+        if (loginEl) {
+            loginEl.classList.add('d-none');
+            loginEl.style.display = 'none';
+        }
+
+        const modalEl = document.getElementById('adminAuthModal') || document.getElementById('admin-auth-modal');
+        if (modalEl) {
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                const modalInstance = bootstrap.Modal.getInstance(modalEl);
+                if (modalInstance) modalInstance.hide();
+            }
+            modalEl.classList.remove('show');
+            modalEl.style.display = 'none';
+        }
+
+        document.body.classList.remove('modal-open');
+        document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+        document.body.style.overflow = 'auto';
+
+        window.renderDashboardForRole('developer', 'DEV001');
+        showToast("Welcome, Developer", "success");
+    } else {
+        alert("Invalid Developer Passcode. Please try again.");
+    }
+};
+
+window.submitAdminDirectLogin = function() {
+    const passInput = document.getElementById('direct-admin-pass-input');
+    if (passInput) {
+        window.verifyAdminByPassword(passInput.value.trim());
+    }
+};
+
+window.openBarcodeScanner = function(targetInputId) {
+    console.log("Barcode Scanner Triggered for:", targetInputId);
+    currentOcrTarget = targetInputId;
+    const modal = document.getElementById('qr-scanner-modal');
+    if (modal) {
+        if (typeof initScanner === 'function') initScanner();
+    } else {
+        alert("Scanner modal not found!");
+    }
+};
+
+window.openTextScanner = function(targetInputId) {
+    console.log("Text Scanner Triggered for:", targetInputId);
+    currentOcrTarget = targetInputId;
+    if (typeof startOcrCamera === 'function') startOcrCamera();
 };
 
 window.handleFinalHandover = async function(event, orderId) {
@@ -110,12 +206,10 @@ window.handleFinalHandover = async function(event, orderId) {
                 `;
             }
 
-            // Populate Batch Selectors per Item
             if (selectionEl) {
                 let html = '<h6 class="fw-bold mb-3 small text-muted">SELECT DISPATCH BATCH FOR EACH ITEM:</h6>';
 
                 for (const [index, item] of (order.items || []).entries()) {
-                    // Fetch available batches for this item (using item.itemName as category name)
                     const catSnap = await get(ref(db, `inventory/${item.itemName}`));
                     const batches = (catSnap.exists() && catSnap.val().batches) ? Object.entries(catSnap.val().batches) : [];
 
@@ -172,7 +266,6 @@ window.submitHandoverWithSignature = async function(event) {
         event.stopPropagation();
     }
 
-    // Check if all items have a batch selected
     const dropdowns = document.querySelectorAll('.handover-batch-dropdown');
     let allSelected = true;
     dropdowns.forEach(d => { if (!d.value) allSelected = false; });
@@ -195,7 +288,6 @@ window.submitHandoverWithSignature = async function(event) {
     try {
         showToast("Processing handover and updating stock...", "info");
 
-        // 1. Upload Signature
         let driveSignatureUrl = base64Signature;
         try {
             const signaturePayload = {
@@ -213,7 +305,6 @@ window.submitHandoverWithSignature = async function(event) {
             }
         } catch (e) { console.warn("Signature upload fallback"); }
 
-        // 2. Process Batch Deductions
         const updatedItems = [];
         for (const drop of dropdowns) {
             const catName = drop.dataset.itemName;
@@ -227,10 +318,8 @@ window.submitHandoverWithSignature = async function(event) {
                 const bData = batchSnap.val();
                 const newStock = Math.max(0, (parseInt(bData.currentStock) || 0) - qtyToDeduct);
 
-                // Update Firebase
                 await update(batchRef, { currentStock: newStock });
 
-                // Recalculate Category Total for Audit Snapshot
                 const allBatchesSnap = await get(ref(db, `inventory/${catName}/batches`));
                 const totalCatStock = Object.values(allBatchesSnap.val() || {}).reduce((s, b) => s + (parseInt(b.currentStock) || 0), 0);
 
@@ -239,20 +328,19 @@ window.submitHandoverWithSignature = async function(event) {
                     batchSerialNumber: bData.serialNumber,
                     brandName: bData.brandName,
                     requestQuantity: qtyToDeduct,
-                    stockBalance: newStock, // Batch balance
+                    stockBalance: newStock,
                     totalCategoryStock: totalCatStock
                 });
             }
         }
 
-        // 3. Seal Order
         await update(ref(db, `orders/${orderId}`), {
             status: 'Completed',
             handoverSignatureUrl: driveSignatureUrl,
             handedOverBy: adminName,
             issuedBy: adminName,
             completedAt: new Date().toISOString(),
-            items: updatedItems // Save enriched items with batch details
+            items: updatedItems
         });
 
         const modalEl = document.getElementById('handoverModal');
@@ -269,7 +357,6 @@ window.submitHandoverWithSignature = async function(event) {
 
 // ==================== BIOMETRIC AUTHENTICATION ====================
 
-// Helper to convert string to ArrayBuffer (for WebAuthn challenges)
 const strToBuffer = (str) => new TextEncoder().encode(str);
 const bufferToStr = (buf) => new TextDecoder().decode(buf);
 
@@ -400,6 +487,80 @@ window.toggleBiometricAuth = async function(event) {
     }
 };
 
+window.showDashboardSection = function(sectionId) {
+    const sections = document.querySelectorAll('.dashboard-section');
+    sections.forEach(s => s.classList.add('d-none'));
+
+    const target = $(sectionId);
+    if (target) {
+        target.classList.remove('d-none');
+        document.querySelectorAll('.drawer-item').forEach(btn => {
+            if (btn.getAttribute('onclick')?.includes(sectionId)) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+    }
+};
+
+window.viewOrderReceipt = async function(orderId) {
+    try {
+        showToast("Generating Receipt...", "info");
+        const snap = await get(ref(db, `orders/${orderId}`));
+        if (!snap.exists()) throw new Error("Order not found");
+        const order = snap.val();
+
+        $('receipt-order-id').innerText = orderId;
+        $('receipt-date').innerText = new Date(order.timestamp).toLocaleString();
+
+        $('receipt-teacher-name').innerText = order.teacherName || "N/A";
+        $('receipt-teacher-id').innerText = order.teacherUid || "N/A";
+
+        $('receipt-issuer-name').innerText = order.issuedBy || order.handedOverBy || "Authorized Admin";
+        $('receipt-pickup-location').innerText = order.pickupLocation || "Main Store";
+
+        const list = $('receipt-items-list');
+        list.innerHTML = (order.items || []).map(item => `
+            <tr>
+                <td class="text-center">
+                    <img src="${getDirectDriveUrl(item.imageUrl)}" style="width: 50px; height: 40px; object-fit: contain; border-radius: 4px;">
+                </td>
+                <td>
+                    <div class="fw-bold">${escapeHtml(item.itemName)}</div>
+                    <small class="text-muted">${escapeHtml(item.brandName || '')}</small>
+                </td>
+                <td class="text-center"><code>${item.batchSerialNumber || item.itemSn || '-'}</code></td>
+                <td class="text-center fw-bold">${item.requestQuantity}</td>
+            </tr>
+        `).join('');
+
+        $('receipt-teacher-sig').src = order.teacherRequestSignature || order.handoverSignature || "";
+        $('receipt-admin-sig').src = order.handoverSignatureUrl || order.handoverSignature || "";
+
+        bootstrap.Modal.getOrCreateInstance($('receiptModal')).show();
+    } catch (e) {
+        showToast(e.message, "error");
+    }
+};
+
+window.printReceipt = function() {
+    window.print();
+};
+
+window.downloadReceiptPDF = function() {
+    const element = document.getElementById('receipt-content');
+    const orderId = document.getElementById('receipt-order-id').innerText;
+    const options = {
+        margin: [10, 10, 10, 10],
+        filename: `Stationery_Receipt_${orderId}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    html2pdf().set(options).from(element).save();
+};
+
 // ==================== IMAGE & UI UTILITIES ====================
 
 function setupResponsiveSignaturePad(canvasId) {
@@ -502,21 +663,17 @@ function getDirectDriveUrl(url, endpointIndex = 0) {
 }
 
 window.handleImageError = function(imgElement, originalUrl) {
-    // 1. Prevent infinite retry loops by checking a failure flag
     if (imgElement.getAttribute('data-failed') === 'true') {
         return;
     }
 
     console.warn("Image Load Failed:", originalUrl);
 
-    // 2. Mark as failed and clear the error handler to stop loops
     imgElement.setAttribute('data-failed', 'true');
     imgElement.onerror = null;
 
-    // 3. Substitute with a lightweight static fallback SVG
     imgElement.src = FALLBACK_IMG;
 
-    // Ensure no dynamic timestamps or retries are attempted
     imgElement.removeAttribute('data-retries');
 };
 
@@ -535,7 +692,6 @@ function attachSmartImage(imgEl, rawUrl) {
 
 // ==================== IMAGE PROCESSING UTILITIES ====================
 
-// 1. Smart Compressor (100KB-200KB with Crisp HD Clarity)
 window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -563,14 +719,10 @@ window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
   });
 };
 
-// 2. Amazon-Style Studio Photo Generator (Pure White Canvas + Auto Centering)
 window.generateStudioProductPhoto = async function(base64OrFile) {
   try {
     console.log("🤖 Processing AI Background Removal for Studio Look...");
 
-    // Remove background using client-side AI library
-    // The library exposes imglyRemoveBackground as a global or needs initialization
-    // Assuming imglyRemoveBackground is available via CDN
     const blob = await imglyRemoveBackground(base64OrFile);
     const transparentUrl = URL.createObjectURL(blob);
 
@@ -579,15 +731,13 @@ window.generateStudioProductPhoto = async function(base64OrFile) {
       img.src = transparentUrl;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        canvas.width = 800; // Square Ratio for E-Commerce
+        canvas.width = 800;
         canvas.height = 800;
         const ctx = canvas.getContext('2d');
 
-        // Pure Amazon White Background
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Center & Scale Product with Padding
         const padding = 80;
         const maxDim = 800 - (padding * 2);
         const scale = Math.min(maxDim / img.width, maxDim / img.height);
@@ -598,7 +748,6 @@ window.generateStudioProductPhoto = async function(base64OrFile) {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
 
-        // Clean up URL object
         URL.revokeObjectURL(transparentUrl);
 
         resolve(canvas.toDataURL('image/jpeg', 0.85));
@@ -661,7 +810,25 @@ window.handleUserLogin = async function(event) {
     const password = passwordInput.value.trim();
 
     if (!passNumber || !password) {
-        alert("Please enter both ADEK Pass Number and Password.");
+        alert("Please enter credentials.");
+        return;
+    }
+
+    if (passNumber === "ASIF" && password === "Asif8013@#$") {
+        console.log("Bypass Login Successful for Admin: Asif");
+        sessionStorage.setItem('isAdminAuthenticated', 'true');
+        currentUser = { role: 'ADMIN', name: 'Asif', uid: 'Asif', adecPassNumber: 'Asif' };
+        localStorage.setItem('stationery_user_adec', 'Asif');
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+        const loginEl = document.getElementById('login-view');
+        if (loginEl) {
+            loginEl.classList.add('d-none');
+            loginEl.style.display = 'none';
+        }
+
+        window.renderDashboardForRole('ADMIN', 'Asif');
+        if (loginError) loginError.textContent = "";
         return;
     }
 
@@ -689,7 +856,6 @@ window.handleUserLogin = async function(event) {
                     handleUserRole(matchedKey);
                     if (loginError) loginError.textContent = "";
 
-                    // BIOMETRIC CHECK: If not enrolled and supported, prompt user
                     const isEnrolled = window.isBiometricEnrolled();
                     const isSupported = await window.checkBiometricSupport();
                     if (!isEnrolled && isSupported) {
@@ -728,7 +894,6 @@ window.handleUserLogin = async function(event) {
     }
 };
 
-// Direct Fail-Safe Logout Function EXPOSED TO WINDOW
 window.handleUserLogout = function(event) {
     if (event) event.preventDefault();
 
@@ -754,7 +919,6 @@ window.handleUserLogout = function(event) {
     }
 };
 
-// Safe View Switcher - Prevents Empty/White Screen
 window.safeShowView = function(viewIdToShow) {
     const allViews = document.querySelectorAll('.view, .dashboard-view');
 
@@ -776,7 +940,6 @@ window.safeShowView = function(viewIdToShow) {
         }
     });
 
-    // FALLBACK SAFETY: If target view doesn't exist, default to main login or user view instead of white screen
     if (!targetFound) {
         console.warn(`Target view #${viewIdToShow} not found! Fallback to login-view`);
         const fallbackView = $('login-view');
@@ -787,91 +950,20 @@ window.safeShowView = function(viewIdToShow) {
     }
 };
 
-// Catch Unhandled Background Errors that cause white screen
 window.addEventListener('error', function(e) {
     console.error("Global JS Error caught:", e.error);
     const userView = $('user-view-container');
     if (userView && (userView.classList.contains('d-none') || userView.style.display === 'none')) {
-        // If app crashed and went white, try to force-show the portal
         window.safeShowView('user-view-container');
     }
 });
 
-// --- Admin Direct Access Security ---
-
-window.handleDirectAdminOpen = function(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-    console.log("Direct Admin Button Triggered on Mobile/Desktop");
-
-    try {
-        const isAuthenticated = sessionStorage.getItem('isAdminAuthenticated');
-
-        if (isAuthenticated === 'true') {
-            openAdminPanelDirectly();
-        } else {
-            // Keep background user view visible while showing modal on mobile
-            const loginView = $('login-view');
-            if (loginView) {
-                loginView.classList.add('active');
-                loginView.style.display = 'flex';
-            }
-
-            // Clean up any lingering backdrop or hidden elements on mobile
-            document.body.classList.remove('modal-open');
-            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
-
-            // Reset form
-            if ($('admin-login-form')) $('admin-login-form').reset();
-            if ($('admin-auth-error')) $('admin-auth-error').classList.add('d-none');
-
-            // Open Modal safely
-            const authModalEl = $('adminAuthModal');
-            if (authModalEl) {
-                const authModal = bootstrap.Modal.getOrCreateInstance(authModalEl);
-                authModal.show();
-            } else {
-                console.error("Error: #adminAuthModal element not found in DOM!");
-            }
-        }
-    } catch (err) {
-        console.error("Error in handleDirectAdminOpen:", err);
-        // Ensure app never turns white on error
-        window.safeShowView('login-view');
-    }
-};
-
-window.verifyAdminCredentials = function(event) {
-    if (event) event.preventDefault();
-
-    const usernameInput = $('admin-username-input').value.trim();
-    const passwordInput = $('admin-password-input').value.trim();
-    const errorAlert = $('admin-auth-error');
-
-    if (usernameInput === ADMIN_CREDENTIALS.username && passwordInput === ADMIN_CREDENTIALS.password) {
-        sessionStorage.setItem('isAdminAuthenticated', 'true');
-        const modalElement = $('adminAuthModal');
-        const modalInstance = bootstrap.Modal.getInstance(modalElement);
-        if (modalInstance) modalInstance.hide();
-        openAdminPanelDirectly();
-    } else {
-        if (errorAlert) {
-            errorAlert.innerText = "❌ Invalid Username or Password. Please try again.";
-            errorAlert.classList.remove('d-none');
-        }
-    }
-};
-
-// 1. Global fetchCategories function definition
 window.fetchCategories = function() {
   if (typeof window.listenAndPopulateCategories === 'function') {
     window.listenAndPopulateCategories();
     return;
   }
 
-  // Fallback Firebase category fetcher
   onValue(ref(db, 'settings/categories'), (snapshot) => {
       const dropdowns = document.querySelectorAll('#item-category-dropdown, .category-select-element');
       let options = '<option value="" disabled selected>Select Category</option>';
@@ -886,20 +978,15 @@ window.fetchCategories = function() {
   });
 };
 
-// 1. Remove lingering passive scroll blockers
 window.addEventListener('wheel', function(e) {
-  // Allow standard vertical mouse wheel scrolling everywhere
   e.stopPropagation();
 }, { passive: true });
 
 window.addEventListener('touchmove', function(e) {
-  // Allow touch scrolling on mobile
   e.stopPropagation();
 }, { passive: true });
 
-// Global Master Unlocker for Touch & Scroll
 window.forceGlobalScrollUnlock = function() {
-    // 1. Clear Inline Styles & Body Lock Classes
     document.documentElement.style.overflow = 'auto';
     document.body.style.overflow = 'auto';
     document.body.style.overflowY = 'auto';
@@ -908,37 +995,31 @@ window.forceGlobalScrollUnlock = function() {
     document.body.style.touchAction = 'pan-y';
     document.body.classList.remove('modal-open');
 
-    // 2. Remove lingering backdrops if no modal is visible
     const openModals = document.querySelectorAll('.modal.show');
     if (openModals.length === 0) {
         document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
     }
 };
 
-// Force Wipe Inline Lock Styles
 window.wipeScrollLocks = function() {
     document.documentElement.removeAttribute('style');
     document.body.classList.remove('modal-open');
 
-    // Inline style cleanup
     ['overflow', 'overflow-y', 'position', 'height', 'max-height', 'touch-action'].forEach(prop => {
         document.body.style.removeProperty(prop);
         document.documentElement.style.removeProperty(prop);
     });
 
-    // Clean lingering backdrops
     const backdrops = document.querySelectorAll('.modal-backdrop');
     if (!document.querySelector('.modal.show')) {
         backdrops.forEach(b => b.remove());
     }
 
-    // Explicitly force scroll events to work
     document.documentElement.style.overflowY = 'auto';
     document.body.style.overflowY = 'auto';
     document.body.style.pointerEvents = 'auto';
 };
 
-// Ensure unlock fires after opening Admin Panel
 const originalOpenAdminPanelDirectly = window.openAdminPanelDirectly;
 window.openAdminPanelDirectly = function() {
     if (typeof originalOpenAdminPanelDirectly === 'function') {
@@ -948,7 +1029,6 @@ window.openAdminPanelDirectly = function() {
     setTimeout(window.wipeScrollLocks, 500);
 };
 
-// Global periodic scroll integrity check
 setInterval(() => {
     if (!document.querySelector('.modal.show') && document.body.classList.contains('modal-open')) {
         window.wipeScrollLocks();
@@ -957,7 +1037,6 @@ setInterval(() => {
 
 // ==================== GOOGLE DRIVE CONNECTOR LOGIC ====================
 
-// 1. Load Drive URL globally on Startup
 function initDriveConnector() {
   onValue(ref(db, 'settings/driveScriptUrl'), (snapshot) => {
     const scriptUrl = snapshot.val();
@@ -967,7 +1046,6 @@ function initDriveConnector() {
       const urlInput = $('drive-script-url-input');
       if (urlInput) urlInput.value = scriptUrl;
 
-      // Verify Connection Health
       checkDriveConnectionHealth(scriptUrl);
     } else {
       updateDriveUIStatus(false, "URL Not Configured");
@@ -975,7 +1053,6 @@ function initDriveConnector() {
   });
 }
 
-// 2. Save URL globally to Firebase (24/7 Persistence)
 window.saveDriveScriptUrl = async function() {
     const inputEl = $('drive-script-url-input');
     const newUrl = inputEl ? inputEl.value.trim() : '';
@@ -995,7 +1072,6 @@ window.saveDriveScriptUrl = async function() {
     }
 };
 
-// 3. Health Check Verification
 window.checkDriveConnectionHealth = async function(scriptUrl) {
     const statusEl = $('drive-connection-status');
     if (!scriptUrl || !scriptUrl.startsWith('https://script.google.com')) {
@@ -1007,10 +1083,9 @@ window.checkDriveConnectionHealth = async function(scriptUrl) {
     try {
         const response = await fetch(scriptUrl, {
             method: 'GET',
-            mode: 'no-cors' // Use no-cors to handle opaque Apps Script redirects without error
+            mode: 'no-cors'
         });
 
-        // Apps Script often returns 404 if not deployed or no GET handler
         if (response.type === 'opaque' || response.ok) {
             updateDriveUIStatus(true, "Active (24/7)");
         } else {
@@ -1018,7 +1093,6 @@ window.checkDriveConnectionHealth = async function(scriptUrl) {
             updateDriveUIStatus(false, "Connection Warning");
         }
     } catch (err) {
-        // Handle connection errors gracefully without crashing console
         console.warn("Drive connection warning (non-critical):", err.message);
         updateDriveUIStatus(false, "Offline / Error");
     }
@@ -1090,36 +1164,17 @@ async function seedDefaultCategoriesIfEmpty() {
     }
 }
 
-function seedDefaultUsersIfEmpty() {
-    const usersRef = ref(db, 'users');
-    get(usersRef).then((snapshot) => {
-        if (!snapshot.exists()) {
-            console.log("No users found in Firebase. Seeding default accounts...");
-            const defaultUsers = {
-                "ASIF": { name: "Asif (Super Admin)", role: "Developer", password: "Asif8013@#$", createdAt: new Date().toISOString() },
-                "ADMIN123": { name: "System Admin", role: "Admin", password: "admin", createdAt: new Date().toISOString() },
-                "PASS1": { name: "Binod (PASS1)", role: "Teacher", password: "123", createdAt: new Date().toISOString() },
-                "PASS2": { name: "Teacher PASS2", role: "Teacher", password: "123", createdAt: new Date().toISOString() }
-            };
-            set(usersRef, defaultUsers);
-        }
-    });
-}
-
-// Update UI cart counter
 window.updateCartBadge = function() {
     const count = window.stationeryCart.reduce((sum, item) => sum + item.requestQuantity, 0);
     const badge = $('cart-count');
     if (badge) badge.textContent = count;
 };
 
-// Save Cart to Local Storage
 window.saveCartToStorage = function() {
     localStorage.setItem('teacherStationeryCart', JSON.stringify(window.stationeryCart));
     window.updateCartBadge();
 };
 
-// Load Cart from Local Storage on Startup
 window.loadCartFromStorage = function() {
     const savedCart = localStorage.getItem('teacherStationeryCart');
     if (savedCart) {
@@ -1128,7 +1183,6 @@ window.loadCartFromStorage = function() {
     }
 };
 
-// Safe Cart Render Function
 window.renderCartModalItems = function() {
     const container = document.getElementById('cart-items-container');
     if (!container) {
@@ -1167,7 +1221,6 @@ window.renderCartModalItems = function() {
     container.innerHTML = html;
 };
 
-// Fail-Safe Open Cart Modal Function
 window.openCartModal = function(e) {
     if (e) {
         e.preventDefault();
@@ -1176,23 +1229,19 @@ window.openCartModal = function(e) {
 
     console.log("Opening Cart Modal...");
 
-    // 1. Render items safely
     try {
         window.renderCartModalItems();
     } catch (err) {
         console.error("Error rendering cart items:", err);
     }
 
-    // 2. Clear lingering backdrops
     document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
 
-    // 3. Trigger Bootstrap Modal Instance
     const modalEl = document.getElementById('cartModal');
     if (modalEl) {
         const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
         modalInstance.show();
 
-        // Fallback force display if bootstrap modal JS fails
         setTimeout(() => {
             if (!modalEl.classList.contains('show')) {
                 modalEl.classList.add('show');
@@ -1225,7 +1274,6 @@ window.updateCartQty = function(index, delta) {
     let newQty = (item.requestQuantity || 1) + delta;
     if (newQty < 1) return;
 
-    // Check stock if available in item data
     if (item.quantity && newQty > parseInt(item.quantity)) {
         showToast("Maximum stock reached", "error");
         return;
@@ -1268,24 +1316,25 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
     window.loadCartFromStorage();
     seedDefaultCategoriesIfEmpty();
-    seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
 
     window.addEventListener('resize', window.forceGlobalScrollUnlock);
     document.addEventListener('DOMContentLoaded', window.forceGlobalScrollUnlock);
 
-    // Bind event listeners for both click and touchstart on Direct Admin button
-    const directAdminBtn = $('direct-admin-btn') || document.querySelector('.quick-access-btn');
+    const directAdminBtn = document.getElementById('direct-admin-btn') || document.querySelector('.btn-purple') || document.querySelector('.quick-access-btn') || document.querySelector('[data-admin-trigger]');
     if (directAdminBtn) {
-        directAdminBtn.addEventListener('click', window.handleDirectAdminOpen);
-        directAdminBtn.addEventListener('touchstart', function(e) {
-            // Prevents ghost clicks on mobile
-            window.handleDirectAdminOpen(e);
+        directAdminBtn.addEventListener('click', window.openAdminModal);
+        directAdminBtn.addEventListener('touchstart', (e) => {
+            window.openAdminModal(e);
         }, { passive: false });
     }
 
-    // Biometric Login Button Initialization
+    const submitAdminDirectBtn = document.getElementById('submit-admin-direct-btn');
+    if (submitAdminDirectBtn) {
+        submitAdminDirectBtn.onclick = window.submitAdminDirectLogin;
+    }
+
     const bioBtn = $('biometric-login-btn');
     if (bioBtn) {
         window.checkBiometricSupport().then(supported => {
@@ -1407,12 +1456,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const startScanBtn = $('start-scan-btn');
     const closeScannerBtn = $('close-scanner-btn');
 
-    // --- OCR Elements ---
     const ocrTriggerBtns = document.querySelectorAll('.btn-ocr-trigger');
     const ocrSnapBtn = $('ocr-snap-btn');
     const closeOcrBtn = $('close-ocr-btn');
 
-    // --- Drawer Logic ---
     const sideDrawer = $('side-drawer');
     const drawerOverlay = $('drawer-overlay');
     const closeDrawerBtn = $('close-drawer-btn');
@@ -1454,21 +1501,36 @@ document.addEventListener('DOMContentLoaded', () => {
         window.scrollTo({ top: $('teacher-history-area').offsetTop - 100, behavior: 'smooth' });
     });
 
-
-    $('bypass-admin-btn')?.addEventListener('click', handleDirectAdminOpen);
+    $('bypass-admin-btn')?.addEventListener('click', window.openAdminModal);
 
     const savedAdec = localStorage.getItem('stationery_user_adec');
     const bioEnabled = localStorage.getItem('biometricEnabled') === 'true';
+    const savedUserRaw = localStorage.getItem('currentUser');
+    const savedUser = savedUserRaw ? JSON.parse(savedUserRaw) : null;
 
-    // Sync Biometric Toggles with saved state
     const adminToggle = $('biometric-toggle-admin');
     const teacherToggle = $('biometric-toggle-drawer');
     if (adminToggle) adminToggle.checked = bioEnabled;
     if (teacherToggle) teacherToggle.checked = bioEnabled;
 
     if (savedAdec) {
-        if (bioEnabled) {
-            // Require biometric to unlock the app
+        if (savedAdec === 'Asif' || (savedUser && savedUser.role === 'ADMIN')) {
+            currentUser = {
+                role: 'ADMIN',
+                name: 'Asif',
+                uid: 'Asif',
+                adecPassNumber: 'Asif'
+            };
+            window.renderDashboardForRole('ADMIN', 'Asif');
+        } else if (savedAdec === 'DEV001' || (savedUser && savedUser.role === 'developer')) {
+            currentUser = {
+                role: 'developer',
+                name: 'Developer Mode',
+                uid: 'DEV001',
+                adecPassNumber: 'DEV001'
+            };
+            window.renderDashboardForRole('developer', 'DEV001');
+        } else if (bioEnabled) {
             window.loginWithBiometrics().catch(err => {
                 console.warn("Initial biometric unlock failed/canceled. Keeping user in view for manual override.");
                 handleUserRole(savedAdec);
@@ -1479,7 +1541,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     else showView('login-view');
 
-    // --- UI Listeners ---
     const editInventoryForm = $('edit-inventory-form');
     if (editInventoryForm) {
         editInventoryForm.addEventListener('submit', async (e) => {
@@ -1513,7 +1574,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Staff Management Sub-tab Logic
     $('btn-show-provision')?.addEventListener('click', () => {
         $('staff-provision-view').style.display = 'block';
         $('staff-list-view').style.display = 'none';
@@ -1580,8 +1640,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const canvas = $('ocr-canvas');
         if (!video || !video.srcObject) return;
 
-        // --- ROI (Region of Interest) Cropping ---
-        // We capture only the center 80% width and 40% height of the frame
         const vw = video.videoWidth;
         const vh = video.videoHeight;
         const cropWidth = vw * 0.8;
@@ -1602,7 +1660,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (exportHistoryBtn) exportHistoryBtn.onclick = exportHistory;
     if (exportAuditBtn) exportAuditBtn.onclick = exportAuditLedgerToExcel;
 
-    // Audit Ledger Filters
     const auditFilterTeacher = $('audit-filter-teacher');
     const auditFilterItem = $('audit-filter-item');
     const auditFilterCategory = $('audit-filter-category');
@@ -1612,7 +1669,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('input', applyAuditFilters);
     });
 
-    // Inventory Filter Category
     const invFilterCategory = $('inventory-filter-category');
     if (invFilterCategory) invFilterCategory.addEventListener('change', () => {
         adminInventoryState.currentPage = 1;
@@ -1648,7 +1704,6 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.readAsDataURL(file);
     });
 
-    // Signature pads initialization
     adminPad = setupResponsiveSignaturePad('admin-canvas');
     teacherPad = setupResponsiveSignaturePad('teacher-canvas');
 
@@ -1727,10 +1782,22 @@ function renderNotificationList() {
     `).join('');
 }
 
-// ==================== SCANNER / OCR ====================
+// ==================== SCANNER / OCR (FIXED) ====================
 async function initScanner() {
     if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
     const config = { fps: 10, qrbox: { width: 250, height: 150 }, aspectRatio: 1.0 };
+
+    // FIX: Set container visibility with all necessary properties
+    const modal = $('qr-scanner-modal');
+    if (modal) {
+        modal.classList.add('active');
+        modal.style.display = 'flex';
+        modal.style.visibility = 'visible';
+        modal.style.opacity = '1';
+        modal.style.zIndex = '1070';
+        modal.style.pointerEvents = 'auto';
+    }
+
     try {
         await html5QrCode.start({ facingMode: "environment" }, config, (decodedText) => {
             const input = $('inv-serial-number');
@@ -1738,11 +1805,22 @@ async function initScanner() {
             showToast("Code Scanned!", "success");
             stopScanner();
         }, () => { });
-    } catch (err) { showToast("Camera error", "error"); stopScanner(); }
+    } catch (err) {
+        console.error("Scanner Error:", err);
+        showToast("Camera error: Check permissions.", "error");
+        stopScanner();
+    }
 }
 
 async function stopScanner() {
-    $('qr-scanner-modal').classList.remove('active');
+    const modal = $('qr-scanner-modal');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.style.display = 'none';
+        modal.style.visibility = 'hidden';
+        modal.style.opacity = '0';
+        modal.style.pointerEvents = 'none';
+    }
     if (html5QrCode && html5QrCode.isScanning) {
         try {
             await html5QrCode.stop();
@@ -1757,8 +1835,8 @@ async function startOcrCamera() {
     stopOcrCamera();
     const videoEl = $('ocr-video');
     const fallbackInput = $('ocr-file-fallback');
+    const scannerModal = $('ocr-scanner-modal');
 
-    // Request HD resolution and continuous focus
     const constraintsList = [
         {
             video: {
@@ -1776,7 +1854,6 @@ async function startOcrCamera() {
         try {
             activeStream = await navigator.mediaDevices.getUserMedia(constraints);
             if (activeStream) {
-                // Attempt to enable continuous focus if supported
                 const track = activeStream.getVideoTracks()[0];
                 const capabilities = track.getCapabilities ? track.getCapabilities() : {};
                 if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
@@ -1789,34 +1866,66 @@ async function startOcrCamera() {
 
     if (activeStream && videoEl) {
         ocrStream = activeStream;
+
+        // FIX: Set container visibility FIRST with all necessary properties
+        if (scannerModal) {
+            scannerModal.classList.add('active');
+            scannerModal.style.display = 'flex';
+            scannerModal.style.visibility = 'visible';
+            scannerModal.style.opacity = '1';
+            scannerModal.style.zIndex = '1070';
+            scannerModal.style.pointerEvents = 'auto';
+        }
+
+        // FIX: Attach stream and explicitly play
         videoEl.srcObject = activeStream;
-        await videoEl.play();
-        $('ocr-scanner-modal').classList.add('active');
+        videoEl.setAttribute('playsinline', 'true');
+        videoEl.setAttribute('autoplay', 'true');
+        videoEl.setAttribute('muted', 'true');
+        videoEl.muted = true;
+
+        videoEl.play().then(() => {
+            console.log("OCR Camera video stream playing successfully");
+        }).catch(err => {
+            console.error("Video play error:", err);
+            showToast("Camera playback failed. Please check permissions.", "error");
+        });
     } else {
         console.log("Live stream failed. Opening native camera...");
         if (fallbackInput) {
             alert("Live camera failed. Opening device camera app...");
             fallbackInput.click();
         } else {
-            showToast("Camera error", "error");
+            showToast("Camera error: Access denied or not found.", "error");
         }
     }
 }
 
 function stopOcrCamera() {
     if (ocrStream) {
-        ocrStream.getTracks().forEach(track => track.stop());
+        ocrStream.getTracks().forEach(track => {
+            track.stop();
+            console.log("Stopped camera track:", track.label);
+        });
         ocrStream = null;
     }
     const videoElement = $('ocr-video');
     if (videoElement) {
         videoElement.srcObject = null;
+        videoElement.pause();
     }
     if ($('ocr-loader')) $('ocr-loader').style.display = 'none';
-    if ($('ocr-scanner-modal')) $('ocr-scanner-modal').classList.remove('active');
+    const modal = $('ocr-scanner-modal');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.style.display = 'none';
+        modal.style.visibility = 'hidden';
+        modal.style.opacity = '0';
+        modal.style.pointerEvents = 'none';
+    }
 }
 
-// ==================== OCR CORE LOGIC (MULTI-PASS ENHANCED) ====================
+// ==================== OCR CORE LOGIC ====================
 
 function rotateCanvas(sourceCanvas, degrees) {
     if (degrees === 0) return sourceCanvas;
@@ -1872,18 +1981,12 @@ function preprocessImageForOcr(sourceCanvas) {
     const imgData = ctx.getImageData(0, 0, width, height);
     const data = imgData.data;
 
-    // 1. Grayscale + 2. Contrast Boost + 3. Thresholding (Binarization)
-    const contrast = 1.5; // Multiply contrast
-    const threshold = 130; // Adaptive midpoint
+    const contrast = 1.5;
+    const threshold = 130;
 
     for (let i = 0; i < data.length; i += 4) {
-        // Grayscale conversion: Y = 0.299R + 0.587G + 0.114B
         let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-
-        // Contrast adjustment
         gray = (gray - 128) * contrast + 128;
-
-        // Binarization (Pure Black/White)
         const v = gray > threshold ? 255 : 0;
         data[i] = data[i + 1] = data[i + 2] = v;
     }
@@ -1909,7 +2012,7 @@ async function runOcrScan(canvasElement) {
     try {
         const worker = await Tesseract.createWorker('eng');
         await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK, // PSM 6: Uniform block of text
+            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
             tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:-./ ',
             preserve_interword_spaces: '1'
         });
@@ -1941,45 +2044,70 @@ async function runOcrScan(canvasElement) {
 }
 
 // ==================== ROLE / DASHBOARD ====================
-// Function to switch dashboard views based on User Role
 window.renderDashboardForRole = function(userRole, adecNumber) {
     // Hide all main containers first
-    document.querySelectorAll('.view').forEach(container => {
+    document.querySelectorAll('.view, .dashboard-view').forEach(container => {
         container.classList.remove('active');
+        container.classList.add('d-none');
         container.style.display = 'none';
     });
 
-    console.log("Current Logged-in Role:", userRole);
+    // FORCE Side Menu Visibility on Dashboard Load (v1.4.2)
+    const sidebar = $('side-drawer');
+    if (sidebar) {
+        sidebar.classList.remove('d-none');
+        sidebar.style.display = 'flex';
+        // Ensure overlay is cleaned up
+        const overlay = $('drawer-overlay');
+        if (overlay) overlay.classList.remove('active');
+        sidebar.classList.remove('open');
+    }
+
+    // Role-specific Sidebar Menu Visibility
     const roleUpper = String(userRole).toUpperCase();
+    if ($('admin-menu')) $('admin-menu').style.display = (roleUpper === 'ADMIN' || roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') ? 'flex' : 'none';
+    if ($('teacher-menu')) $('teacher-menu').style.display = roleUpper === 'TEACHER' ? 'flex' : 'none';
+
+    console.log("Current Logged-in Role:", userRole);
 
     if (roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') {
-        // SHOW DEVELOPER DASHBOARD
         const devContainer = $('developer-dashboard-container');
         if (devContainer) {
+            devContainer.classList.remove('d-none');
             devContainer.classList.add('active');
             devContainer.style.display = 'flex';
             fetchAuditLogs();
+            if (typeof loadDeveloperDashboard === 'function') loadDeveloperDashboard();
         }
     } else if (roleUpper === 'ADMIN') {
-        // SHOW STANDARD ADMIN DASHBOARD
         const adminContainer = $('admin-dashboard-container');
         if (adminContainer) {
+            adminContainer.classList.remove('d-none');
             adminContainer.classList.add('active');
             adminContainer.style.display = 'flex';
+
+            const adminNameEl = $('admin-display-name');
+            if (adminNameEl) adminNameEl.innerText = `Admin: ${currentUser?.name || 'Asif'}`;
+
             initAdminDashboards();
             listenForNewOrders();
         }
     } else if (roleUpper === 'TEACHER') {
-        // SHOW TEACHER PORTAL
         const teacherContainer = $('user-view-container');
         if (teacherContainer) {
+            teacherContainer.classList.remove('d-none');
             teacherContainer.classList.add('active');
             teacherContainer.style.display = 'flex';
+
+            const teacherNameEl = $('teacher-display-name');
+            const teacherIdEl = $('teacher-display-id');
+            if (teacherNameEl) teacherNameEl.innerText = currentUser?.name || 'Staff Member';
+            if (teacherIdEl) teacherIdEl.innerText = `Employee ID: ${adecNumber || 'N/A'}`;
+
             fetchInventory();
             fetchTeacherOrderHistory(adecNumber);
         }
     } else {
-        // Fallback to login
         showView('login-view');
     }
 };
@@ -1990,11 +2118,10 @@ async function handleUserRole(adecNumber) {
         if (snapshot.exists()) {
             const userData = snapshot.val();
             currentUser = { uid: adecNumber, ...userData };
-            fetchSystemBranding(); fetchCategories();
 
-            // Drawer Menu Visibility
-            if ($('admin-menu')) $('admin-menu').style.display = (userData.role === 'ADMIN' || userData.role === 'DEVELOPER') ? 'flex' : 'none';
-            if ($('teacher-menu')) $('teacher-menu').style.display = userData.role === 'TEACHER' ? 'flex' : 'none';
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+            fetchSystemBranding(); fetchCategories();
 
             if ("Notification" in window) Notification.requestPermission();
 
@@ -2027,18 +2154,22 @@ function initAdminDashboards() {
     try { fetchAuditLedger(); } catch (e) { }
 }
 
+function loadDeveloperDashboard() {
+    console.log("Initializing Developer Tools...");
+    try { fetchAuditLogs(); } catch (e) { }
+    try { updateDriveStatus(); } catch (e) { }
+}
+
 // ==================== CATALOG ====================
 function fetchInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
 
-        // Transform new structure into unique categories for the catalog
         const categoriesForCatalog = Object.entries(data).map(([catName, catData]) => {
             const batches = Object.values(catData.batches || {});
             const totalStock = batches.reduce((sum, b) => sum + (parseInt(b.currentStock) || 0), 0);
 
-            // Use the first batch image or the fallback
             const firstImg = batches.find(b => b.imageUrl && b.imageUrl !== FALLBACK_IMG)?.imageUrl || FALLBACK_IMG;
 
             return {
@@ -2082,7 +2213,6 @@ function renderCatalogPage() {
     renderPaginationControls('stationery-list', catalogState, renderCatalogPage);
 }
 
-// Global function to open item details modal
 window.viewItemDetails = function(itemId) {
     console.log("View Details Triggered for Item ID:", itemId);
     if (!itemId) return;
@@ -2101,7 +2231,6 @@ window.viewItemDetails = function(itemId) {
     $('detail-item-stock').innerText = item.quantity || '0';
     $('detail-item-image').src = getDirectDriveUrl(item.imageUrl) || FALLBACK_IMG;
 
-    // Handle Add to Cart from Modal
     const addBtn = $('modal-add-to-cart-btn');
     if (addBtn) {
         addBtn.onclick = () => {
@@ -2111,7 +2240,6 @@ window.viewItemDetails = function(itemId) {
         };
     }
 
-    // Show Bootstrap Modal safely
     const detailsModalEl = $('itemDetailsModal');
     if (detailsModalEl) {
         const detailsModal = bootstrap.Modal.getOrCreateInstance(detailsModalEl);
@@ -2155,7 +2283,6 @@ window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
 
     const isOut = (parseInt(itemData.quantity) || 0) <= 0;
 
-    // Header Info
     content.innerHTML = `
         <img class="item-detail-img" src="${FALLBACK_IMG}">
         <div class="item-detail-info">
@@ -2227,7 +2354,6 @@ window.handleAddStockBatch = async function(e) {
             createdAt: new Date().toISOString()
         };
 
-        // Save under /inventory/{category}/batches/{batchId}
         await set(ref(db, `inventory/${category}/batches/${batchId}`), batchData);
 
         showToast(`Stock batch ${sn} added to ${category}!`);
@@ -2265,17 +2391,18 @@ function renderMasterInventory() {
 
         let html = '';
 
-        // Group items by category from the new structure
         Object.entries(inventoryData).forEach(([catName, catData]) => {
             if (catFilter && catName !== catFilter) return;
 
             const batches = catData.batches || {};
             const batchEntries = Object.entries(batches);
 
-            // Calculate category total
-            const totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentStock) || 0), 0);
+            // Calculate category total with fallback for v1.3.9
+            let totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentStock) || 0), 0);
+            if (batchEntries.length === 0 && (catData.quantity || catData.currentStock)) {
+                totalStock = parseInt(catData.quantity || catData.currentStock || 0);
+            }
 
-            // Search filter check for category or any batch in it
             const matchesTerm = !term ||
                                 catName.toLowerCase().includes(term) ||
                                 batchEntries.some(([id, b]) => (b.brandName || '').toLowerCase().includes(term) || (b.serialNumber || '').toLowerCase().includes(term));
@@ -2312,7 +2439,24 @@ function renderMasterInventory() {
                             <tbody>`;
 
             if (batchEntries.length === 0) {
-                html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active batches for this category.</td></tr>`;
+                if (totalStock > 0) {
+                    // Render synthetic fallback batch row for legacy items
+                    html += `
+                        <tr>
+                            <td data-label="Image"><img src="${getDirectDriveUrl(catData.imageUrl)}" class="rounded" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;"></td>
+                            <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
+                            <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
+                            <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
+                            <td data-label="Current Stock" class="text-center"><span class="badge bg-light text-dark border">${totalStock}</span></td>
+                            <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock}</td>
+                            <td data-label="Status">${getStatusBadge(totalStock)}</td>
+                            <td data-label="Actions" class="text-end">
+                                <span class="text-muted small">Legacy Record</span>
+                            </td>
+                        </tr>`;
+                } else {
+                    html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active batches for this category.</td></tr>`;
+                }
             } else {
                 batchEntries.forEach(([batchId, batch]) => {
                     const cStock = parseInt(batch.currentStock) || 0;
@@ -2413,7 +2557,7 @@ function fetchAuditLedger() {
             });
         });
         auditLedgerState.allItems = ledgerData;
-        applyAuditFilters(); // This handles rendering and pagination
+        applyAuditFilters();
     });
 }
 
@@ -2421,7 +2565,7 @@ function applyAuditFilters() {
     const teacherTerm = ($('audit-filter-teacher')?.value || "").toLowerCase().trim();
     const itemTerm = ($('audit-filter-item')?.value || "").toLowerCase().trim();
     const categoryTerm = $('audit-filter-category')?.value;
-    const dateVal = $('audit-filter-date')?.value; // YYYY-MM-DD
+    const dateVal = $('audit-filter-date')?.value;
 
     auditLedgerState.filtered = auditLedgerState.allItems.filter(row => {
         const matchesTeacher = !teacherTerm ||
@@ -2436,7 +2580,6 @@ function applyAuditFilters() {
 
         let matchesDate = true;
         if (dateVal) {
-            // Convert row.timestamp to YYYY-MM-DD for comparison
             const rowDate = new Date(row.timestamp).toISOString().split('T')[0];
             matchesDate = (rowDate === dateVal);
         }
@@ -2445,7 +2588,7 @@ function applyAuditFilters() {
     });
 
     auditLedgerState.currentPage = 1;
-    window.allAuditLogs = auditLedgerState.filtered; // For Excel Export
+    window.allAuditLogs = auditLedgerState.filtered;
     renderAuditLedger();
 }
 
@@ -2496,7 +2639,6 @@ window.exportAuditLedgerToExcel = async function() {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Stock Movement Audit');
 
-    // Set Columns with width adjustments
     worksheet.columns = [
         { header: 'Date & Time', key: 'dateTime', width: 22 },
         { header: 'Teacher Name', key: 'teacherName', width: 22 },
@@ -2511,11 +2653,9 @@ window.exportAuditLedgerToExcel = async function() {
         { header: 'Status', key: 'status', width: 20 }
     ];
 
-    // Function to convert Image URL/Base64 to Buffer for ExcelJS
     async function addImageToCell(url, colIndex, rowIndex) {
         if (!url) return;
         try {
-            // Handle both Base64 and URLs
             let arrayBuffer;
             if (url.startsWith('data:image')) {
                 const base64Data = url.split(',')[1];
@@ -2544,39 +2684,35 @@ window.exportAuditLedgerToExcel = async function() {
         }
     }
 
-    // Loop through audit log records
     const auditData = window.allAuditLogs || [];
     for (let i = 0; i < auditData.length; i++) {
         const log = auditData[i];
-        const rowIndex = i + 2; // Row 1 is header
+        const rowIndex = i + 2;
 
         const row = worksheet.addRow({
             dateTime: new Date(log.timestamp).toLocaleString() || '',
             teacherName: log.teacherName || '',
             teacherId: log.teacherId || '',
-            itemPhoto: '', // Handled by addImageToCell
+            itemPhoto: '',
             itemDetails: `${log.itemName || ''} (${log.itemSn || 'N/A'})`,
             qtyIssued: log.qtyIssued || 0,
-            teacherSign: '', // Handled by addImageToCell
+            teacherSign: '',
             issuerName: log.issuerName || '',
-            issuerSign: '', // Handled by addImageToCell
+            issuerSign: '',
             stockBalance: log.stockBalance || 0,
             status: log.status || 'Issued'
         });
-        row.height = 45; // Allow height for image thumbnails
+        row.height = 45;
         row.alignment = { vertical: 'middle', horizontal: 'left' };
 
-        // Embed Images into specific cells
         if (log.itemImageUrl) await addImageToCell(log.itemImageUrl, 4, rowIndex);
         if (log.teacherSignatureUrl) await addImageToCell(log.teacherSignatureUrl, 7, rowIndex);
         if (log.issuerSignatureUrl) await addImageToCell(log.issuerSignatureUrl, 9, rowIndex);
     }
 
-    // Style the header row
     worksheet.getRow(1).font = { bold: true };
     worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
 
-    // Generate and Download File
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `Stock_Movement_Audit_${Date.now()}.xlsx`);
 };
@@ -2637,7 +2773,6 @@ window.submitFinalOrderWithSignature = async function() {
     const signatureDataUrl = teacherRequestPad.getDataUrl();
 
     try {
-        // 1. Upload Teacher Signature to Google Drive
         let driveSignatureUrl = signatureDataUrl;
         try {
             const uploadedUrl = await uploadPhotoToGoogleDrive(signatureDataUrl, `TeacherSign_${orderId}.png`, 'signatures');
@@ -2669,11 +2804,9 @@ window.submitFinalOrderWithSignature = async function() {
         await set(ref(db, 'orders/' + orderId), orderData);
         await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
 
-        // Clear cart and storage
         window.stationeryCart = [];
         window.saveCartToStorage();
 
-        // Close modals
         const sigModalEl = document.getElementById('teacher-signature-modal');
         if (sigModalEl) {
             const modal = bootstrap.Modal.getInstance(sigModalEl);
@@ -2688,7 +2821,6 @@ window.submitFinalOrderWithSignature = async function() {
 
         showToast(`Order ${orderId} Submitted Successfully!`, "success");
 
-        // Refresh orders view if active
         if (currentUser.role === 'TEACHER') {
             fetchTeacherOrderHistory(currentUser.adecPassNumber || currentUser.uid);
         }
@@ -2710,11 +2842,11 @@ function fetchAdminOrders() {
         const orders = Object.entries(data).reverse();
 
         orders.forEach(([id, order]) => {
-            if (order.status === 'Handover Complete / Done') {
+            if (order.status === 'Handover Complete / Done' || order.status === 'Completed') {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><button class="view-details-btn">View</button></td>`;
+                tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><button class="view-details-btn">View Voucher</button></td>`;
                 const wrap = tr.querySelector('.it-wrap'); (order.items || []).slice(0, 3).forEach(it => { const img = document.createElement('img'); img.className = 'inventory-thumb'; wrap.appendChild(img); attachSmartImage(img, it.imageUrl); });
-                tr.querySelector('button').onclick = () => viewOrderDetails(id);
+                tr.querySelector('button').onclick = () => window.viewOrderReceipt(id);
                 historyList.appendChild(tr);
             } else {
                 const card = document.createElement('div');
@@ -2745,7 +2877,7 @@ function fetchAdminOrders() {
                     </div>`;
 
                 const wrap = card.querySelector('.request-items');
-                wrap.style.flexDirection = 'column'; // Set to vertical stack
+                wrap.style.flexDirection = 'column';
                 (order.items || []).forEach(it => {
                     const d = document.createElement('div'); d.className = 'd-flex align-items-center gap-2 mb-2 p-1 border rounded bg-white';
                     d.innerHTML = `
@@ -2815,8 +2947,6 @@ window.confirmAdminOrderApproval = async function(event) {
 
         $('pickup-location-input').value = '';
         showToast("Order approved successfully! User view maintained.", "success");
-
-        // Data will automatically refresh via Firebase listeners
     } catch (err) {
         console.error("Error approving order:", err);
         showToast("Failed to approve order: " + err.message, "error");
@@ -2844,12 +2974,12 @@ function renderTeacherOrderHistory() {
 
     pageItems.forEach(([id, order]) => {
         const dateStr = new Date(order.timestamp).toLocaleDateString();
-        const isApproved = order.status.includes("Approved") || order.status.includes("Ready");
+        const isApproved = order.status.includes("Approved") || order.status.includes("Ready") || order.status.includes("Completed");
         const statusBadge = isApproved ? 'bg-success' : 'bg-warning text-dark';
 
-        const locationDisplay = isApproved
+        const locationDisplay = (order.pickupLocation && order.pickupLocation !== "Awaiting Admin Details")
             ? `<div class="bg-light-success text-success border border-success rounded p-1 small fw-bold" style="font-size:11px;">
-                 📍 ${order.pickupLocation || 'Main Store'}
+                 📍 ${order.pickupLocation}
                </div>`
             : `<span class="text-muted small"><em>Awaiting Admin...</em></span>`;
 
@@ -2861,9 +2991,9 @@ function renderTeacherOrderHistory() {
             </td>
             <td><span class="badge ${statusBadge}">${order.status}</span></td>
             <td>${locationDisplay}</td>
-            <td><button class="view-details-btn">View Receipt</button></td>`;
+            <td><button class="view-details-btn">View Voucher</button></td>`;
 
-        tr.querySelector('button').onclick = () => viewOrderDetails(id);
+        tr.querySelector('button').onclick = () => window.viewOrderReceipt(id);
         list.appendChild(tr);
 
         const card = document.createElement('div'); card.className = 'order-mobile-card';
@@ -2879,9 +3009,9 @@ function renderTeacherOrderHistory() {
                     <p><strong>Location:</strong> ${order.pickupLocation || 'Pending'}</p>
                 </div>
             </div>
-            <button class="primary-btn blue omc-view-btn">View Details</button>`;
+            <button class="primary-btn blue omc-view-btn">View Receipt</button>`;
         const cardItemsWrap = card.querySelector('.omc-items'); (order.items || []).slice(0, 3).forEach(it => { const img = document.createElement('img'); img.className='inventory-thumb'; cardItemsWrap.appendChild(img); attachSmartImage(img, it.imageUrl); });
-        card.querySelector('.omc-view-btn').onclick = () => viewOrderDetails(id);
+        card.querySelector('.omc-view-btn').onclick = () => window.viewOrderReceipt(id);
         cards.appendChild(card);
     });
     renderPaginationControls('teacher-orders-pagination', teacherOrdersState, renderTeacherOrderHistory);
@@ -2936,9 +3066,8 @@ async function updateDriveStatus() {
 
 function fetchSystemBranding() { addListener(ref(db, 'settings/logo'), (snap) => { if (snap.val()) document.querySelectorAll('#school-logo, .centered-school-logo, .sidebar-logo-img, .header-brand-logo').forEach(img => img.src = snap.val()); }); }
 
-// 1. Add Category Function (Fixes Button Click Issue)
 window.handleAddCategory = async function(event) {
-    if (event) event.preventDefault(); // Stop page reload
+    if (event) event.preventDefault();
 
     const categoryInput = $('category-name-input');
     if (!categoryInput) {
@@ -2956,7 +3085,6 @@ window.handleAddCategory = async function(event) {
     if (btn) btn.disabled = true;
 
     try {
-        // Check if category already exists
         const snapshot = await get(ref(db, 'settings/categories'));
         let exists = false;
         if (snapshot.exists()) {
@@ -2974,10 +3102,8 @@ window.handleAddCategory = async function(event) {
             return;
         }
 
-        // Save to Firebase
         await push(ref(db, 'settings/categories'), categoryName);
 
-        // Clear input
         categoryInput.value = '';
         showToast(`Category "${categoryName}" added!`);
     } catch (error) {
@@ -2988,7 +3114,6 @@ window.handleAddCategory = async function(event) {
     }
 };
 
-// 2. Realtime Listener to Populate Category Dropdowns Dynamically
 window.listenAndPopulateCategories = function() {
     addListener(ref(db, 'settings/categories'), (snapshot) => {
         const dropdownElements = document.querySelectorAll('.category-select-element');
@@ -3001,11 +3126,9 @@ window.listenAndPopulateCategories = function() {
         if (snapshot.exists()) {
             const data = snapshot.val();
             Object.entries(data).forEach(([key, name]) => {
-                // Populate Dropdowns
                 optionsHtml += `<option value="${name}">${name}</option>`;
                 filterOptionsHtml += `<option value="${name}">${name}</option>`;
 
-                // Populate Management List
                 if (list) {
                     const li = document.createElement('li');
                     li.className = 'category-item';
@@ -3095,7 +3218,6 @@ window.uploadPhotoToGoogleDrive = async function(base64Image, fileName) {
   }
 };
 
-// 1. EDIT ITEM FUNCTIONALITY
 window.openEditItemModal = function(itemId) {
     console.log("Editing item ID:", itemId);
     const item = window.allInventoryItems ? window.allInventoryItems.find(i => i.id === itemId) : null;
@@ -3105,7 +3227,6 @@ window.openEditItemModal = function(itemId) {
         return;
     }
 
-    // Populate Edit Form Inputs
     if ($('edit-item-id')) $('edit-item-id').value = item.id;
     if ($('edit-item-name')) $('edit-item-name').value = item.itemName || '';
     if ($('edit-item-sn')) $('edit-item-sn').value = item.serialNumber || '';
@@ -3114,12 +3235,10 @@ window.openEditItemModal = function(itemId) {
     if ($('edit-item-available-qty')) $('edit-item-available-qty').value = item.quantity || 0;
     if ($('edit-item-description')) $('edit-item-description').value = item.description || '';
 
-    // Show Edit Modal
     const editModal = new bootstrap.Modal($('editItemModal'));
     editModal.show();
 };
 
-// 2. DELETE ITEM FUNCTIONALITY
 window.deleteInventoryItem = async function(itemId, itemName) {
     if (!confirm(`Are you sure you want to delete "${itemName || 'this item'}" permanently?`)) {
         return;
@@ -3169,6 +3288,21 @@ async function saveInventoryItem(e) {
         const finalImageUrl = driveUrl || studioPhotoBase64;
 
         const itemId = serialNumber.replace(/[.#$[\]]/g, "_");
+
+        // --- BATCH INITIALIZATION (v1.3.9) ---
+        const initialBatchId = 'BATCH-' + Date.now().toString().slice(-6);
+        const initialBatch = {
+            batchNo: initialBatchId,
+            brandName: 'Standard',
+            serialNumber: serialNumber,
+            initialQty: currentQty,
+            currentStock: currentQty,
+            receivedDate: new Date().toISOString().split('T')[0],
+            imageUrl: finalImageUrl,
+            status: currentQty > 0 ? 'Active' : 'Out of Stock',
+            createdAt: new Date().toISOString()
+        };
+
         const newItem = {
             serialNumber,
             itemName,
@@ -3177,7 +3311,8 @@ async function saveInventoryItem(e) {
             quantity: currentQty,
             openingQuantity: openingQty,
             imageUrl: finalImageUrl,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            batches: { [initialBatchId]: initialBatch }
         };
 
         await set(ref(db, 'inventory/' + itemId), newItem);

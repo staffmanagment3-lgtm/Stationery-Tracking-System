@@ -6,36 +6,49 @@
     <meta name="theme-color" content="#2c3e50">
     <link rel="manifest" href="manifest.json">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.2.6">
+    <link rel="stylesheet" href="style.css?v=1.4.2">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/index.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
-      .signature-pad-container {
-        width: 100%;
-        max-width: 100%;
-        background: #f8f9fa;
-        border: 2px dashed #6c757d;
-        border-radius: 8px;
-        position: relative;
-        touch-action: none; /* Disables page scrolling while drawing on mobile */
-        margin-bottom: 10px;
-      }
+        .signature-pad-container {
+          width: 100%;
+          max-width: 100%;
+          background: #f8f9fa;
+          border: 2px dashed #6c757d;
+          border-radius: 8px;
+          position: relative;
+          touch-action: none;
+          margin-bottom: 10px;
+        }
 
-      .signature-pad-container canvas {
-        display: block;
-        width: 100% !important;
-        height: 180px !important; /* Larger comfortable drawing height for fingers */
-        background-color: #ffffff;
-        border-radius: 6px;
-        cursor: crosshair;
-        touch-action: none;
-      }
+        .signature-pad-container canvas {
+          display: block;
+          width: 100% !important;
+          height: 180px !important;
+          background-color: #ffffff;
+          border-radius: 6px;
+          cursor: crosshair;
+          touch-action: none;
+        }
+
+        /* CRITICAL FIX: Ensure scanner modals display correctly */
+        #qr-scanner-modal,
+        #ocr-scanner-modal {
+          z-index: 1070 !important;
+        }
+        #qr-scanner-modal.active,
+        #ocr-scanner-modal.active {
+          display: flex !important;
+          opacity: 1 !important;
+          visibility: visible !important;
+          pointer-events: auto !important;
+        }
     </style>
 </head>
 <body>
@@ -45,13 +58,10 @@
 
     <!-- Side Drawer Menu -->
     <aside id="side-drawer" class="side-drawer">
-        <div class="sidebar-header position-relative bg-white border-bottom p-2">
-            <!-- Full Width Logo Container -->
-            <div class="sidebar-logo-container w-100 d-flex align-items-center justify-content-center">
-                <img src="school.png" alt="School Logo" class="sidebar-logo-img">
+        <div class="sidebar-header position-relative bg-white border-bottom p-2 mb-3">
+            <div class="sidebar-logo-container bg-white p-2 rounded-3 text-center shadow-sm w-100 d-flex align-items-center justify-content-center">
+                <img src="school.png" alt="School Logo" class="sidebar-logo-img img-fluid" style="max-height: 50px; object-fit: contain;">
             </div>
-
-            <!-- Dark Close Button Overlay on Top of White Background -->
             <button type="button" id="close-drawer-btn" class="btn-close sidebar-close-btn" aria-label="Close"></button>
         </div>
 
@@ -74,8 +84,9 @@
 
         <!-- Teacher Menu -->
         <nav id="teacher-menu" class="drawer-nav" style="display: none;">
+            <button class="drawer-item active" onclick="showDashboardSection('stationery-catalog-section')">📦 Stationery Catalog</button>
             <button id="drawer-cart-btn" class="drawer-item">🛒 My Cart</button>
-            <button id="drawer-history-btn" class="drawer-item">📜 My Order History</button>
+            <button class="drawer-item" onclick="showDashboardSection('order-history-section')">📜 My Order History</button>
             <div class="drawer-item d-flex justify-content-between align-items-center bg-transparent border-0" style="padding: 12px 20px;">
                 <span class="text-white"><i class="bi bi-fingerprint me-2"></i> Biometric Login</span>
                 <div class="form-check form-switch">
@@ -101,15 +112,15 @@
                     <input type="password" id="login-password" placeholder="Enter Password" required autocomplete="current-password">
                 </div>
                 <button type="button" id="login-btn" onclick="handleUserLogin(event)" class="primary-btn">
-                  Login to Dashboard
+                    Login to Dashboard
                 </button>
                 <button type="button" id="biometric-login-btn" class="primary-btn purple mt-3 d-none">
                     🔐 Login with Face ID / Fingerprint
                 </button>
             </form>
             <div class="dev-tools">
-                <button type="button" id="direct-admin-btn" class="quick-access-btn direct-admin-btn" onclick="handleDirectAdminOpen(event)">
-                    ⚡ Direct Open Admin Panel
+                <button type="button" id="direct-admin-btn" class="quick-access-btn direct-admin-btn" onclick="window.openAdminModal(event)">
+                    ⚡ Direct Open Developer Panel
                 </button>
             </div>
             <p id="login-error" class="error-message"></p>
@@ -119,20 +130,15 @@
     <!-- Developer Dashboard -->
     <section id="developer-dashboard-container" class="view dashboard-view">
         <header class="top-navbar bg-white border-bottom position-relative d-flex align-items-center justify-content-between px-3 py-2 shadow-sm">
-            <!-- Left Side: Sidebar Toggle & Title -->
             <div class="d-flex align-items-center gap-2 header-left-content">
                 <button id="dev-hamburger" class="btn p-0 border-0 fs-3 text-dark d-flex align-items-center menu-toggle">
                     <i class="bi bi-list"></i>
                 </button>
                 <span class="fs-5 fw-bold text-dark ms-2 d-none d-sm-inline">Developer Panel</span>
             </div>
-
-            <!-- Center: Absolutely Positioned Large Logo -->
             <div class="header-center-logo position-absolute top-50 start-50 translate-middle">
                 <img src="school.png" alt="School Logo" class="centered-school-logo">
             </div>
-
-            <!-- Right Side: Logout -->
             <div class="header-right-content">
                 <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="handleUserLogout(event)">Logout</button>
             </div>
@@ -214,21 +220,23 @@
     <!-- Admin Dashboard -->
     <section id="admin-dashboard-container" class="view dashboard-view">
         <header class="top-navbar bg-white border-bottom position-relative d-flex align-items-center justify-content-between px-3 py-2 shadow-sm">
-            <!-- Left Side: Sidebar Toggle & Title -->
             <div class="d-flex align-items-center gap-2 header-left-content">
                 <button id="admin-hamburger" class="btn p-0 border-0 fs-3 text-dark d-flex align-items-center menu-toggle">
                     <i class="bi bi-list"></i>
                 </button>
                 <span class="fs-5 fw-bold text-dark ms-2 d-none d-sm-inline">Admin Dashboard</span>
             </div>
-
-            <!-- Center: Absolutely Positioned Large Logo -->
             <div class="header-center-logo position-absolute top-50 start-50 translate-middle">
                 <img src="school.png" alt="School Logo" class="centered-school-logo">
             </div>
-
-            <!-- Right Side: Notifications & Logout -->
             <div class="d-flex align-items-center gap-3 header-right-content">
+                <div class="user-profile-badge d-none d-md-flex align-items-center gap-2 me-2 border-end pe-3">
+                    <i class="bi bi-person-badge-fill fs-4 text-primary"></i>
+                    <div class="text-start">
+                        <div class="fw-bold text-dark small" id="admin-display-name">Admin: Asif</div>
+                        <div class="text-muted" style="font-size: 10px;">Administrator</div>
+                    </div>
+                </div>
                 <div id="notification-bell" class="notification-bell text-warning position-relative fs-4 cursor-pointer">
                     <span class="bell-icon">🔔</span>
                     <span id="notif-badge" class="badge-count" style="display: none;">0</span>
@@ -237,7 +245,6 @@
             </div>
         </header>
         <div class="content">
-            <!-- Navigation moved to drawer -->
             <div id="admin-content-area">
                 <!-- Tab: Inventory -->
                 <div id="tab-inventory" class="admin-tab active">
@@ -250,45 +257,44 @@
                             <p>Calculating analytics...</p>
                         </div>
                     </div>
-            <div id="admin-master-inventory-area" style="margin-top:30px;">
-                <h3>Master Inventory Report</h3>
-                <div class="row g-2 mb-3">
-                    <div class="col-md-8">
-                        <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
-                        <input type="text" id="admin-inventory-search" class="form-control" placeholder="🔍 Filter inventory by name or serial...">
-                    </div>
-                    <div class="col-md-4">
-                        <select id="inventory-filter-category" class="form-select category-select-element">
-                            <option value="">All Categories</option>
-                        </select>
-                    </div>
-                </div>
+                    <div id="admin-master-inventory-area" style="margin-top:30px;">
+                        <h3>Master Inventory Report</h3>
+                        <div class="row g-2 mb-3">
+                            <div class="col-md-8">
+                                <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
+                                <input type="text" id="admin-inventory-search" class="form-control" placeholder="🔍 Filter inventory by name or serial...">
+                            </div>
+                            <div class="col-md-4">
+                                <select id="inventory-filter-category" class="form-select category-select-element">
+                                    <option value="">All Categories</option>
+                                </select>
+                            </div>
+                        </div>
 
-                <div id="inventory-container">
-                    <!-- Dynamic Responsive Inventory (Table or Cards) -->
-                    <div class="table-responsive">
-                        <table class="history-table">
-                            <thead>
-                            <tr>
-                                <th>Image</th>
-                                <th>Serial Number</th>
-                                <th>Item</th>
-                                <th>Category</th>
-                                <th>Description</th>
-                                <th>Opening Quantity</th>
-                                <th>Quantity Available</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                            </thead>
-                            <tbody id="master-inventory-list">
-                            <tr><td colspan="9">Loading...</td></tr>
-                            </tbody>
-                        </table>
+                        <div id="inventory-container">
+                            <div class="table-responsive">
+                                <table class="history-table">
+                                    <thead>
+                                    <tr>
+                                        <th>Image</th>
+                                        <th>Serial Number</th>
+                                        <th>Item</th>
+                                        <th>Category</th>
+                                        <th>Description</th>
+                                        <th>Opening Quantity</th>
+                                        <th>Quantity Available</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody id="master-inventory-list">
+                                    <tr><td colspan="9">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div id="admin-inventory-pagination"></div>
                     </div>
-                </div>
-                <div id="admin-inventory-pagination"></div>
-            </div>
                 </div>
 
                 <!-- Tab: Add Item -->
@@ -310,21 +316,21 @@
                                 <label for="inv-item-name">Item Name</label>
                                 <div style="display:flex; gap:8px;">
                                     <input type="text" id="inv-item-name" placeholder="Enter item name" required style="flex-grow:1;">
-                                    <button type="button" class="primary-btn purple btn-ocr-trigger" data-target="inv-item-name" style="width:auto; padding:0 12px; min-width:44px;" title="Scan Text from Label">📝 Scan</button>
+                                    <button type="button" class="primary-btn purple btn-ocr-trigger" onclick="window.openTextScanner('inv-item-name')" style="width:auto; padding:0 12px; min-width:44px;" title="Scan Text from Label">📝 Scan</button>
                                 </div>
                             </div>
                             <div class="input-group">
                                 <label for="inv-description">Description</label>
                                 <div style="display:flex; flex-direction:column; gap:8px;">
                                     <textarea id="inv-description" placeholder="Enter description" rows="3" required></textarea>
-                                    <button type="button" class="primary-btn purple btn-ocr-trigger" data-target="inv-description" style="width:100%; height:36px; min-height:36px; font-size:12px;" title="Scan Text from Label">📝 Scan Text from Label</button>
+                                    <button type="button" class="primary-btn purple btn-ocr-trigger" onclick="window.openTextScanner('inv-description')" style="width:100%; height:36px; min-height:36px; font-size:12px;" title="Scan Text from Label">📝 Scan Text from Label</button>
                                 </div>
                             </div>
                             <div class="input-group">
                                 <label for="inv-serial-number">Serial Number</label>
                                 <div style="display:flex; gap:8px;">
                                     <input type="text" id="inv-serial-number" placeholder="Enter serial number" required style="flex-grow:1;">
-                                    <button type="button" id="start-scan-btn" class="primary-btn purple" style="width:auto; padding:0 12px; min-width:44px;" title="Scan Barcode/QR">📷 Scan</button>
+                                    <button type="button" id="start-scan-btn" class="primary-btn purple" onclick="window.openBarcodeScanner('inv-serial-number')" style="width:auto; padding:0 12px; min-width:44px;" title="Scan Barcode/QR">📷 Scan</button>
                                 </div>
                             </div>
                             <div class="input-group">
@@ -440,7 +446,6 @@
                         <h3>Stock Movement Audit Sheet</h3>
                         <p style="font-size:13px; color:#64748b; margin-bottom:15px;">Real-time log of every issued item and inventory change.</p>
 
-                        <!-- Audit Filters -->
                         <div class="row g-2 mb-3 bg-light p-3 rounded border">
                             <div class="col-md-3">
                                 <label for="audit-filter-teacher" class="small fw-bold text-muted">Filter by Teacher Name / ID</label>
@@ -465,25 +470,25 @@
                         <div class="table-responsive">
                             <table class="table table-hover align-middle" id="audit-ledger-table">
                                 <thead class="table-light">
-                                    <tr>
-                                        <th>S.No.</th>
-                                        <th>Date</th>
-                                        <th>Time</th>
-                                        <th>Teacher Name</th>
-                                        <th>Teacher ID</th>
-                                        <th>Item Photo</th>
-                                        <th>Item Name</th>
-                                        <th>Item Serial No.</th>
-                                        <th>Qty Issued</th>
-                                        <th>Teacher Sign</th>
-                                        <th>Issued By</th>
-                                        <th>Issuer Sign</th>
-                                        <th>Stock Balance</th>
-                                        <th>Status</th>
-                                    </tr>
+                                <tr>
+                                    <th>S.No.</th>
+                                    <th>Date</th>
+                                    <th>Time</th>
+                                    <th>Teacher Name</th>
+                                    <th>Teacher ID</th>
+                                    <th>Item Photo</th>
+                                    <th>Item Name</th>
+                                    <th>Item Serial No.</th>
+                                    <th>Qty Issued</th>
+                                    <th>Teacher Sign</th>
+                                    <th>Issued By</th>
+                                    <th>Issuer Sign</th>
+                                    <th>Stock Balance</th>
+                                    <th>Status</th>
+                                </tr>
                                 </thead>
                                 <tbody id="admin-audit-ledger-list">
-                                    <tr><td colspan="14" style="text-align:center;">Loading ledger data...</td></tr>
+                                <tr><td colspan="14" style="text-align:center;">Loading ledger data...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -523,35 +528,40 @@
     <!-- Teacher Dashboard -->
     <section id="user-view-container" class="view dashboard-view">
         <header class="top-navbar bg-white border-bottom position-relative d-flex align-items-center justify-content-between px-3 py-2 shadow-sm">
-            <!-- Left Side: Sidebar Toggle & Title -->
             <div class="d-flex align-items-center gap-2 header-left-content">
                 <button id="teacher-hamburger" class="btn p-0 border-0 fs-3 text-dark d-flex align-items-center menu-toggle">
                     <i class="bi bi-list"></i>
                 </button>
                 <span class="fs-5 fw-bold text-dark ms-2 d-none d-sm-inline">Teacher Portal</span>
             </div>
-
-            <!-- Center: Absolutely Positioned Large Logo -->
             <div class="header-center-logo position-absolute top-50 start-50 translate-middle">
                 <img src="school.png" alt="School Logo" class="centered-school-logo">
             </div>
-
-            <!-- Right Side: Cart & Logout -->
             <div class="d-flex align-items-center gap-3 header-right-content">
+                <div class="user-profile-badge d-none d-md-flex align-items-center gap-2 me-2 border-end pe-3">
+                    <i class="bi bi-person-circle fs-4 text-success"></i>
+                    <div class="text-start">
+                        <div class="fw-bold text-dark small" id="teacher-display-name">Teacher Name</div>
+                        <div class="text-muted" id="teacher-display-id" style="font-size: 10px;">Employee ID: --</div>
+                    </div>
+                </div>
                 <button id="cart-btn" class="cart-btn-main me-2" onclick="window.openCartModal()">🛒 <span id="cart-count">0</span></button>
                 <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="handleUserLogout(event)">Logout</button>
             </div>
         </header>
         <div class="content">
-            <h2>Stationery Catalog</h2>
-            <div class="search-bar">
-                <label for="stationery-search" class="visually-hidden">Search</label>
-                <input type="text" id="stationery-search" placeholder="🔍 Search by name or serial..." autocomplete="off">
+            <div id="stationery-catalog-section" class="dashboard-section">
+                <h2>Stationery Catalog</h2>
+                <div class="search-bar">
+                    <label for="stationery-search" class="visually-hidden">Search</label>
+                    <input type="text" id="stationery-search" placeholder="🔍 Search by name or serial..." autocomplete="off">
+                </div>
+                <div id="stationery-list" class="grid-container">
+                    <p>Loading catalog...</p>
+                </div>
             </div>
-            <div id="stationery-list" class="grid-container">
-                <p>Loading catalog...</p>
-            </div>
-            <div id="teacher-history-area" style="margin-top:40px;">
+
+            <div id="order-history-section" class="dashboard-section d-none">
                 <h3>My Order History</h3>
                 <div id="teacher-orders-container">
                     <div class="table-responsive desktop-only">
@@ -569,7 +579,6 @@
                             </tbody>
                         </table>
                     </div>
-                    <!-- Mobile Card View -->
                     <div id="teacher-history-cards" class="mobile-only"></div>
                 </div>
                 <div id="teacher-orders-pagination"></div>
@@ -620,30 +629,20 @@
         </div>
     </div>
 
-    <!-- Admin Password Verification Modal -->
-    <div class="modal fade" id="adminAuthModal" tabindex="-1" data-bs-backdrop="static" aria-labelledby="adminAuthModalLabel" aria-hidden="true">
+    <!-- Admin Direct Access Modal -->
+    <div class="modal fade" id="adminAuthModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content shadow-lg border-0">
-                <div class="modal-header bg-dark text-white">
-                    <h5 class="modal-title fw-bold" id="adminAuthModalLabel">🔒 Admin Authentication Required</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            <div class="modal-content rounded-4 shadow">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-bold">Developer Panel Access</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body p-4">
-                    <!-- Alert Message for Wrong Password -->
-                    <div id="admin-auth-error" class="alert alert-danger d-none" role="alert"></div>
-                    <form id="admin-login-form" onsubmit="verifyAdminCredentials(event); return false;">
-                        <div class="mb-3">
-                            <label for="admin-username-input" class="form-label fw-bold">Username</label>
-                            <input type="text" id="admin-username-input" class="form-control" placeholder="Enter Admin Username" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="admin-password-input" class="form-label fw-bold">Password</label>
-                            <input type="password" id="admin-password-input" class="form-control" placeholder="Enter Admin Password" required>
-                        </div>
-                        <div class="d-grid gap-2 mt-4">
-                            <button type="submit" class="btn btn-primary fw-bold py-2">Verify & Access Dashboard</button>
-                        </div>
-                    </form>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Enter Developer Passcode</label>
+                        <input type="password" id="direct-admin-pass-input" class="form-control form-control-lg" placeholder="Enter Passcode">
+                    </div>
+                    <button type="button" id="submit-admin-direct-btn" class="btn btn-primary btn-lg w-100 fw-bold">Login as Developer</button>
                 </div>
             </div>
         </div>
@@ -793,7 +792,6 @@
                     </div>
 
                     <div id="handover-batch-selection" class="mb-4 text-start">
-                        <!-- Items and their batch selectors will be injected here -->
                     </div>
 
                     <p class="small text-muted mb-2 text-start fw-bold">Receiver Signature (Teacher / Staff):</p>
@@ -851,7 +849,6 @@
                         <span>Available Stock:</span>
                         <span id="detail-item-stock" class="badge bg-success fs-6">0</span>
                     </div>
-                    <!-- Add to Cart in Modal -->
                     <div id="catalog-modal-controls" class="d-flex gap-2">
                         <input type="number" id="modal-item-qty" value="1" min="1" class="form-control" style="width: 80px;">
                         <button id="modal-add-to-cart-btn" class="btn btn-success fw-bold flex-grow-1">Add to Cart</button>
@@ -864,28 +861,111 @@
         </div>
     </div>
 
-    <!-- Notification Modal (Bootstrap) -->
-    <div class="modal fade" id="notificationModal" tabindex="-1" aria-labelledby="notificationModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-scrollable">
-        <div class="modal-content">
-          <div class="modal-header d-flex justify-content-between align-items-center">
-            <h5 class="modal-title" id="notificationModalLabel">🔔 Notifications</h5>
-            <div>
-              <button class="btn btn-sm btn-outline-secondary me-2" id="clear-all-notifications-btn">Clear All</button>
-              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <!-- Order Receipt Modal (Official Voucher Style) -->
+    <div class="modal fade" id="receiptModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header bg-dark text-white d-print-none">
+                    <h5 class="modal-title fw-bold">📄 Stationery Requisition Receipt</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div id="receipt-content" class="p-5 bg-white" style="font-family: 'Times New Roman', serif; color: #000;">
+                        <div class="d-flex justify-content-between align-items-center border-bottom pb-4 mb-4">
+                            <img src="school.png" alt="School Logo" style="height: 80px; object-fit: contain;">
+                            <div class="text-end">
+                                <h2 class="fw-bold mb-1" style="color: #2c3e50;">REQUISITION VOUCHER</h2>
+                                <p class="mb-0 text-muted">ID: <span id="receipt-order-id" class="fw-bold text-dark"></span></p>
+                                <p class="mb-0 text-muted">Date: <span id="receipt-date"></span></p>
+                            </div>
+                        </div>
+
+                        <div class="row mb-4">
+                            <div class="col-6">
+                                <h6 class="fw-bold border-bottom pb-1 mb-2">REQUESTER DETAILS</h6>
+                                <p class="mb-1"><strong>Name:</strong> <span id="receipt-teacher-name"></span></p>
+                                <p class="mb-1"><strong>ID No:</strong> <span id="receipt-teacher-id"></span></p>
+                            </div>
+                            <div class="col-6">
+                                <h6 class="fw-bold border-bottom pb-1 mb-2">ISSUANCE DETAILS</h6>
+                                <p class="mb-1"><strong>Issued By:</strong> <span id="receipt-issuer-name"></span></p>
+                                <p class="mb-1"><strong>Location:</strong> <span id="receipt-pickup-location"></span></p>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive mb-5">
+                            <table class="table table-bordered align-middle">
+                                <thead class="table-light text-center">
+                                <tr style="background-color: #f8f9fa !important;">
+                                    <th style="width: 80px;">PHOTO</th>
+                                    <th>ITEM DESCRIPTION</th>
+                                    <th>SERIAL / BATCH</th>
+                                    <th style="width: 80px;">QTY</th>
+                                </tr>
+                                </thead>
+                                <tbody id="receipt-items-list">
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="row mt-5 pt-4 text-center">
+                            <div class="col-6">
+                                <div class="border-bottom mx-4 mb-2">
+                                    <img id="receipt-teacher-sig" src="" style="height: 60px; object-fit: contain;">
+                                </div>
+                                <p class="small fw-bold mb-0">REQUESTER SIGNATURE</p>
+                                <small class="text-muted">(Teacher / Staff)</small>
+                            </div>
+                            <div class="col-6">
+                                <div class="border-bottom mx-4 mb-2">
+                                    <img id="receipt-admin-sig" src="" style="height: 60px; object-fit: contain;">
+                                </div>
+                                <p class="small fw-bold mb-0">AUTHORIZED SIGNATURE</p>
+                                <small class="text-muted">(Store Department)</small>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 text-center border-top pt-3 text-muted" style="font-size: 11px;">
+                            <p>This is a computer-generated voucher. No manual signature required if digitally sealed.</p>
+                            <p class="mb-0">© Stationery Tracker System - All Rights Reserved</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer d-print-none bg-light border-top">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="window.downloadReceiptPDF()">
+                        <i class="bi bi-file-earmark-pdf me-1"></i> Download PDF
+                    </button>
+                    <button type="button" class="btn btn-success" onclick="window.printReceipt()">
+                        <i class="bi bi-printer me-1"></i> Print Receipt
+                    </button>
+                </div>
             </div>
-          </div>
-          <div class="modal-body p-0">
-            <ul class="list-group list-group-flush" id="notification-list-container">
-              <li class="list-group-item text-center text-muted py-4">No new notifications</li>
-            </ul>
-          </div>
         </div>
-      </div>
     </div>
 
-    <!-- Scanner Modal -->
-    <div id="qr-scanner-modal" class="modal">
+    <!-- Notification Modal (Bootstrap) -->
+    <div class="modal fade" id="notificationModal" tabindex="-1" aria-labelledby="notificationModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header d-flex justify-content-between align-items-center">
+                    <h5 class="modal-title" id="notificationModalLabel">🔔 Notifications</h5>
+                    <div>
+                        <button class="btn btn-sm btn-outline-secondary me-2" id="clear-all-notifications-btn">Clear All</button>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                </div>
+                <div class="modal-body p-0">
+                    <ul class="list-group list-group-flush" id="notification-list-container">
+                        <li class="list-group-item text-center text-muted py-4">No new notifications</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scanner Modal (FIXED: z-index boosted, display controlled by .active class) -->
+    <div id="qr-scanner-modal" class="modal" style="z-index: 1070;">
         <div class="modal-content" style="max-width:450px; text-align:center;">
             <h3>📷 Barcode / QR Scanner</h3>
             <p style="font-size:12px; color:#64748b; margin-bottom:15px;">Center the code within the frame</p>
@@ -896,17 +976,16 @@
         </div>
     </div>
 
-    <!-- OCR Scanner Modal -->
-    <div id="ocr-scanner-modal" class="modal">
+    <!-- OCR Scanner Modal (FIXED: z-index boosted, display controlled by .active class) -->
+    <div id="ocr-scanner-modal" class="modal" style="z-index: 1070;">
         <div class="modal-content" style="max-width:500px; text-align:center; position:relative;">
             <h3>📝 OCR Text Scanner</h3>
             <p style="font-size:12px; color:#64748b; margin-bottom:10px;">Snapshot a clear label to extract text</p>
 
-            <!-- Native Fallback Input -->
             <input type="file" id="ocr-file-fallback" accept="image/*" capture="environment" style="display: none;">
 
             <div id="ocr-camera-wrap" style="position:relative; width:100%; aspect-ratio: 4/3; background:#000; border-radius:12px; overflow:hidden; border:2px solid #e2e8f0;">
-                <video id="ocr-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <video id="ocr-video" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover;"></video>
                 <canvas id="ocr-canvas" style="display:none;"></canvas>
 
                 <div id="ocr-loader" style="display:none; position:absolute; inset:0; background:rgba(15,23,42,0.8); color:white; flex-direction:column; align-items:center; justify-content:center; z-index:10;">
@@ -922,7 +1001,7 @@
         </div>
     </div>
 
-    <!-- Cart Modal (Placed at end of body) -->
+    <!-- Cart Modal -->
     <div class="modal fade" id="cartModal" tabindex="-1" aria-labelledby="cartModalLabel" aria-hidden="true" style="z-index: 1060;">
         <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content border-0 shadow-lg">
@@ -932,7 +1011,6 @@
                 </div>
                 <div class="modal-body p-3" style="max-height: 60vh; overflow-y: auto;">
                     <div id="cart-items-container">
-                        <!-- Dynamic Cart Items Render Here -->
                     </div>
                 </div>
                 <div class="modal-footer d-flex justify-content-between">
@@ -949,6 +1027,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.2.6"></script>
+<script type="module" src="app.js?v=1.4.2"></script>
 </body>
 </html>
