@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.4.2";
+const APP_VERSION = "1.4.3";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -2411,13 +2411,13 @@ function renderMasterInventory() {
 
             html += `
                 <div class="card mb-4 border-0 shadow-sm overflow-hidden" style="border-radius: 12px;">
-                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center border-bottom">
-                        <h5 class="mb-0 fw-bold text-primary"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(catName)}</h5>
-                        <div class="d-flex align-items-center gap-3">
-                            <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} p-2 px-3 fs-6">
+                    <div class="card-header bg-white py-3 inventory-item-header border-bottom">
+                        <h5 class="mb-0 fw-bold text-primary inventory-item-title"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(catName)}</h5>
+                        <div class="inventory-item-actions d-flex align-items-center gap-3">
+                            <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} total-stock-badge p-2 px-3 fs-6">
                                 Total Stock: ${totalStock}
                             </span>
-                            <button class="btn btn-sm btn-outline-primary fw-bold" onclick="window.openAddStockModal('${escapeHtml(catName)}')">
+                            <button class="btn btn-sm btn-outline-primary fw-bold add-stock-btn" onclick="window.openAddStockModal('${escapeHtml(catName)}')">
                                 + Add Stock
                             </button>
                         </div>
