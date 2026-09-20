@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.6";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -89,24 +89,62 @@ window.handleFinalHandover = async function(event, orderId) {
         event.preventDefault();
         event.stopPropagation();
     }
-    console.log("Initiating Handover for Order:", orderId);
+    console.log("Initiating Batch-Aware Handover for Order:", orderId);
     window.activeHandoverRequestId = orderId;
 
-    const detailsEl = $('handover-order-details');
+    const summaryEl = $('handover-order-summary');
+    const selectionEl = $('handover-batch-selection');
+
+    if (selectionEl) selectionEl.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm text-primary"></div> Loading batches...</div>';
+
     try {
         const snap = await get(ref(db, `orders/${orderId}`));
         if (snap.exists()) {
             const order = snap.val();
-            if (detailsEl) {
-                detailsEl.innerHTML = `
-                    <strong>Staff:</strong> ${escapeHtml(order.teacherName)}<br>
-                    <strong>Items:</strong> ${order.items?.length || 0} unique items<br>
-                    <strong>Status:</strong> ${escapeHtml(order.status)}
+            if (summaryEl) {
+                summaryEl.innerHTML = `
+                    <div class="d-flex justify-content-between">
+                        <span><strong>Staff:</strong> ${escapeHtml(order.teacherName)}</span>
+                        <span class="badge bg-white text-primary border">${order.items?.length || 0} Items</span>
+                    </div>
                 `;
+            }
+
+            // Populate Batch Selectors per Item
+            if (selectionEl) {
+                let html = '<h6 class="fw-bold mb-3 small text-muted">SELECT DISPATCH BATCH FOR EACH ITEM:</h6>';
+
+                for (const [index, item] of (order.items || []).entries()) {
+                    // Fetch available batches for this item (using item.itemName as category name)
+                    const catSnap = await get(ref(db, `inventory/${item.itemName}`));
+                    const batches = (catSnap.exists() && catSnap.val().batches) ? Object.entries(catSnap.val().batches) : [];
+
+                    html += `
+                        <div class="item-batch-row mb-3 p-2 border rounded bg-light">
+                            <div class="d-flex justify-content-between mb-2">
+                                <span class="fw-bold small">${index + 1}. ${escapeHtml(item.itemName)}</span>
+                                <span class="badge bg-secondary">Req: ${item.requestQuantity}</span>
+                            </div>
+                            <select class="form-select form-select-sm handover-batch-dropdown" data-item-name="${escapeHtml(item.itemName)}" data-item-qty="${item.requestQuantity}" required>
+                                <option value="" disabled selected>-- Choose Batch / SN --</option>
+                                ${batches.map(([bid, b]) => {
+                                    const available = parseInt(b.currentStock) || 0;
+                                    const isDisabled = available < item.requestQuantity;
+                                    return `<option value="${bid}" ${isDisabled ? 'disabled' : ''}>
+                                        ${escapeHtml(b.brandName || 'Generic')} (SN: ${b.serialNumber}) - [Available: ${available}]
+                                    </option>`;
+                                }).join('')}
+                            </select>
+                            ${batches.length === 0 ? '<small class="text-danger mt-1 d-block">Error: No stock batches found for this item!</small>' : ''}
+                        </div>
+                    `;
+                }
+                selectionEl.innerHTML = html;
             }
         }
     } catch (err) {
         console.error("Order fetch error:", err);
+        if (selectionEl) selectionEl.innerHTML = `<div class="alert alert-danger">Failed to load order data.</div>`;
     }
 
     const modalEl = document.getElementById('handoverModal');
@@ -114,7 +152,6 @@ window.handleFinalHandover = async function(event, orderId) {
         const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
         modal.show();
 
-        // Use standard event listener for shown.bs.modal to ensure canvas size is correct
         if (!modalEl.hasAttribute('data-listener-attached')) {
             modalEl.addEventListener('shown.bs.modal', function () {
                 const canvas = document.getElementById('handover-signature-pad');
@@ -126,65 +163,6 @@ window.handleFinalHandover = async function(event, orderId) {
             });
             modalEl.setAttribute('data-listener-attached', 'true');
         }
-    } else {
-        alert(`Confirm handover for Order ${orderId}?`);
-    }
-};
-
-window.initSignaturePad = function(canvas) {
-    const ctx = canvas.getContext('2d');
-    let isDrawing = false;
-    window.isSignatureProvided = false;
-
-    function getPos(e) {
-        const rect = canvas.getBoundingClientRect();
-        return {
-            x: (e.touches ? e.touches[0].clientX : e.clientX) - rect.left,
-            y: (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
-        };
-    }
-
-    function start(e) {
-        if (e.touches) e.preventDefault();
-        isDrawing = true;
-        const pos = getPos(e);
-        ctx.beginPath();
-        ctx.moveTo(pos.x, pos.y);
-        ctx.lineWidth = 2.5;
-        ctx.lineCap = 'round';
-        ctx.strokeStyle = '#000000';
-    }
-
-    function draw(e) {
-        if (!isDrawing) return;
-        if (e.touches) e.preventDefault();
-        const pos = getPos(e);
-        ctx.lineTo(pos.x, pos.y);
-        ctx.stroke();
-        window.isSignatureProvided = true;
-    }
-
-    function stop() {
-        isDrawing = false;
-        ctx.closePath();
-    }
-
-    canvas.onmousedown = start;
-    canvas.onmousemove = draw;
-    canvas.onmouseup = stop;
-    canvas.onmouseleave = stop;
-
-    canvas.addEventListener('touchstart', start, { passive: false });
-    canvas.addEventListener('touchmove', draw, { passive: false });
-    canvas.addEventListener('touchend', stop);
-
-    // Bind clear button
-    const clearBtn = document.getElementById('clear-handover-sig');
-    if (clearBtn) {
-        clearBtn.onclick = () => {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            window.isSignatureProvided = false;
-        };
     }
 };
 
@@ -192,6 +170,16 @@ window.submitHandoverWithSignature = async function(event) {
     if (event) {
         event.preventDefault();
         event.stopPropagation();
+    }
+
+    // Check if all items have a batch selected
+    const dropdowns = document.querySelectorAll('.handover-batch-dropdown');
+    let allSelected = true;
+    dropdowns.forEach(d => { if (!d.value) allSelected = false; });
+
+    if (!allSelected) {
+        alert("Please select a valid stock batch for every item in this order.");
+        return;
     }
 
     if (!window.isSignatureProvided) {
@@ -205,9 +193,9 @@ window.submitHandoverWithSignature = async function(event) {
     const adminName = sessionStorage.getItem('userName') || (currentUser && currentUser.name) || 'Admin';
 
     try {
-        console.log("Saving final handover for:", orderId);
+        showToast("Processing handover and updating stock...", "info");
 
-        // 1. Upload Signature to Google Drive with enhanced payload
+        // 1. Upload Signature
         let driveSignatureUrl = base64Signature;
         try {
             const signaturePayload = {
@@ -217,65 +205,65 @@ window.submitHandoverWithSignature = async function(event) {
                 orderId: orderId,
                 issuedBy: adminName
             };
-
             const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
             if (url) {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify(signaturePayload)
-                });
+                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(signaturePayload) });
                 const result = await response.json();
                 if (result.status === 'success') driveSignatureUrl = result.fileUrl;
             }
-        } catch (uploadErr) {
-            console.warn("Signature upload failed, falling back to base64:", uploadErr);
-        }
+        } catch (e) { console.warn("Signature upload fallback"); }
 
-        // 2. Deduct Inventory Quantities & Prepare Stock Balance Data
-        const snap = await get(ref(db, `orders/${orderId}`));
-        const orderData = snap.val();
+        // 2. Process Batch Deductions
+        const updatedItems = [];
+        for (const drop of dropdowns) {
+            const catName = drop.dataset.itemName;
+            const batchId = drop.value;
+            const qtyToDeduct = parseInt(drop.dataset.itemQty);
 
-        if (orderData && orderData.items) {
-            for (const item of orderData.items) {
-                const itemRef = ref(db, `inventory/${item.itemId}/quantity`);
-                const currentQtySnap = await get(itemRef);
-                const currentQty = currentQtySnap.val() || 0;
-                const remainingStock = Math.max(0, currentQty - item.requestQuantity);
+            const batchRef = ref(db, `inventory/${catName}/batches/${batchId}`);
+            const batchSnap = await get(batchRef);
 
-                // Update Main Inventory
-                await set(itemRef, remainingStock);
+            if (batchSnap.exists()) {
+                const bData = batchSnap.val();
+                const newStock = Math.max(0, (parseInt(bData.currentStock) || 0) - qtyToDeduct);
 
-                // Save current balance snapshot into the order item for the audit ledger
-                item.stockBalance = remainingStock;
+                // Update Firebase
+                await update(batchRef, { currentStock: newStock });
+
+                // Recalculate Category Total for Audit Snapshot
+                const allBatchesSnap = await get(ref(db, `inventory/${catName}/batches`));
+                const totalCatStock = Object.values(allBatchesSnap.val() || {}).reduce((s, b) => s + (parseInt(b.currentStock) || 0), 0);
+
+                updatedItems.push({
+                    itemName: catName,
+                    batchSerialNumber: bData.serialNumber,
+                    brandName: bData.brandName,
+                    requestQuantity: qtyToDeduct,
+                    stockBalance: newStock, // Batch balance
+                    totalCategoryStock: totalCatStock
+                });
             }
         }
 
-        // 3. Update Order Record with Admin Name and Stock Snapshot
+        // 3. Seal Order
         await update(ref(db, `orders/${orderId}`), {
             status: 'Completed',
             handoverSignatureUrl: driveSignatureUrl,
-            handoverSignature: driveSignatureUrl, // Maintain for backward compatibility
-            completedAt: new Date().toISOString(),
             handedOverBy: adminName,
             issuedBy: adminName,
-            items: orderData.items // Re-save items with their stockBalance snapshots
+            completedAt: new Date().toISOString(),
+            items: updatedItems // Save enriched items with batch details
         });
 
-        // 4. Close Modal
         const modalEl = document.getElementById('handoverModal');
-        if (modalEl) {
-            const modal = bootstrap.Modal.getInstance(modalEl);
-            if (modal) modal.hide();
-            modalEl.classList.remove('active'); // Ensure custom active class is also removed
-        }
+        if (modalEl) bootstrap.Modal.getInstance(modalEl).hide();
 
-        showToast(`Handover for ${orderId} complete by ${adminName}!`, "success");
-        await logActivity("Handover Complete", `Order: ${orderId} by ${adminName}`);
+        showToast("Handover Complete!", "success");
+        await logActivity("Handover Complete", `Order ${orderId} finalized by ${adminName}`);
 
     } catch (err) {
-        console.error("Handover error:", err);
-        showToast("Handover failed: " + err.message, "error");
+        console.error("Handover Crash:", err);
+        alert("Transaction failed: " + err.message);
     }
 };
 
@@ -1083,6 +1071,25 @@ window.uploadPhotoToGoogleDrive = async function(base64Image, fileName, folderTy
 };
 
 // ==================== MAIN LIFECYCLE ====================
+async function seedDefaultCategoriesIfEmpty() {
+    const categoriesRef = ref(db, 'settings/categories');
+    const snapshot = await get(categoriesRef);
+    if (!snapshot.exists()) {
+        console.log("No categories found. Seeding default stationery categories...");
+        const defaultCategories = [
+            "Writing & Marking",
+            "Paper & Registers",
+            "Desk Tools & Adhesives",
+            "Filing & Envelopes",
+            "Classroom & Board Supplies",
+            "Art & Craft"
+        ];
+        for (const cat of defaultCategories) {
+            await push(categoriesRef, cat);
+        }
+    }
+}
+
 function seedDefaultUsersIfEmpty() {
     const usersRef = ref(db, 'users');
     get(usersRef).then((snapshot) => {
@@ -1260,6 +1267,7 @@ window.submitCartOrder = function() {
 document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
     window.loadCartFromStorage();
+    seedDefaultCategoriesIfEmpty();
     seedDefaultUsersIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
@@ -1522,6 +1530,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (inventoryForm) inventoryForm.addEventListener('submit', saveInventoryItem);
+
+    const addStockForm = $('add-stock-form');
+    if (addStockForm) {
+        addStockForm.addEventListener('submit', handleAddStockBatch);
+    }
+
     if (categorySelect) categorySelect.onchange = () => {
         const customGroup = $('custom-category-group');
         if (customGroup) customGroup.style.display = categorySelect.value === 'Other' ? 'block' : 'none';
@@ -1565,8 +1579,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const video = $('ocr-video');
         const canvas = $('ocr-canvas');
         if (!video || !video.srcObject) return;
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        canvas.getContext('2d').drawImage(video, 0, 0);
+
+        // --- ROI (Region of Interest) Cropping ---
+        // We capture only the center 80% width and 40% height of the frame
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const cropWidth = vw * 0.8;
+        const cropHeight = vh * 0.4;
+        const cropX = (vw - cropWidth) / 2;
+        const cropY = (vh - cropHeight) / 2;
+
+        canvas.width = cropWidth;
+        canvas.height = cropHeight;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
         runOcrScan(canvas);
     };
     if (closeOcrBtn) closeOcrBtn.onclick = stopOcrCamera;
@@ -1578,10 +1605,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // Audit Ledger Filters
     const auditFilterTeacher = $('audit-filter-teacher');
     const auditFilterItem = $('audit-filter-item');
+    const auditFilterCategory = $('audit-filter-category');
     const auditFilterDate = $('audit-filter-date');
 
-    [auditFilterTeacher, auditFilterItem, auditFilterDate].forEach(el => {
+    [auditFilterTeacher, auditFilterItem, auditFilterCategory, auditFilterDate].forEach(el => {
         if (el) el.addEventListener('input', applyAuditFilters);
+    });
+
+    // Inventory Filter Category
+    const invFilterCategory = $('inventory-filter-category');
+    if (invFilterCategory) invFilterCategory.addEventListener('change', () => {
+        adminInventoryState.currentPage = 1;
+        renderMasterInventory();
     });
 
     $('notification-bell')?.addEventListener('click', () => {
@@ -1722,18 +1757,36 @@ async function startOcrCamera() {
     stopOcrCamera();
     const videoEl = $('ocr-video');
     const fallbackInput = $('ocr-file-fallback');
+
+    // Request HD resolution and continuous focus
     const constraintsList = [
-        { video: { facingMode: "environment" } },
+        {
+            video: {
+                facingMode: "environment",
+                width: { ideal: 1920, min: 1280 },
+                height: { ideal: 1080, min: 720 }
+            }
+        },
         { video: { facingMode: "user" } },
         { video: true }
     ];
+
     let activeStream = null;
     for (const constraints of constraintsList) {
         try {
             activeStream = await navigator.mediaDevices.getUserMedia(constraints);
-            if (activeStream) break;
+            if (activeStream) {
+                // Attempt to enable continuous focus if supported
+                const track = activeStream.getVideoTracks()[0];
+                const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+                if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+                    track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+                }
+                break;
+            }
         } catch (e) { }
     }
+
     if (activeStream && videoEl) {
         ocrStream = activeStream;
         videoEl.srcObject = activeStream;
@@ -1807,55 +1860,36 @@ function sharpenCanvas(sourceCanvas) {
     return canvas;
 }
 
-function preprocessImageForOcr(sourceCanvas, mode = 'balanced') {
+function preprocessImageForOcr(sourceCanvas) {
+    const width = sourceCanvas.width;
+    const height = sourceCanvas.height;
     const processedCanvas = document.createElement('canvas');
-    const ctx = processedCanvas.getContext('2d');
-    processedCanvas.width = sourceCanvas.width;
-    processedCanvas.height = sourceCanvas.height;
+    processedCanvas.width = width;
+    processedCanvas.height = height;
+    const ctx = processedCanvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(sourceCanvas, 0, 0);
-    const imgData = ctx.getImageData(0, 0, processedCanvas.width, processedCanvas.height);
+
+    const imgData = ctx.getImageData(0, 0, width, height);
     const data = imgData.data;
-    const width = processedCanvas.width;
-    const height = processedCanvas.height;
-    const grayData = new Uint8ClampedArray(width * height);
+
+    // 1. Grayscale + 2. Contrast Boost + 3. Thresholding (Binarization)
+    const contrast = 1.5; // Multiply contrast
+    const threshold = 130; // Adaptive midpoint
+
     for (let i = 0; i < data.length; i += 4) {
-        grayData[i / 4] = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+        // Grayscale conversion: Y = 0.299R + 0.587G + 0.114B
+        let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+
+        // Contrast adjustment
+        gray = (gray - 128) * contrast + 128;
+
+        // Binarization (Pure Black/White)
+        const v = gray > threshold ? 255 : 0;
+        data[i] = data[i + 1] = data[i + 2] = v;
     }
-    if (mode === 'grayscale') {
-        for (let i = 0; i < data.length; i += 4) { const v = grayData[i / 4]; data[i] = data[i + 1] = data[i + 2] = v; }
-        ctx.putImageData(imgData, 0, 0); return processedCanvas;
-    }
-    if (mode === 'high_contrast') {
-        const contrast = 1.6;
-        const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
-        for (let i = 0; i < data.length; i += 4) {
-            let avg = grayData[i / 4];
-            avg = factor * (avg - 128) + 128;
-            const finalVal = avg >= 128 ? 255 : 0;
-            data[i] = data[i+1] = data[i+2] = finalVal;
-        }
-        ctx.putImageData(imgData, 0, 0); return processedCanvas;
-    }
-    const blockSize = 20, C = 5;
-    const outputData = ctx.createImageData(width, height);
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const i = y * width + x;
-            let sum = 0, count = 0;
-            for (let dy = -blockSize; dy <= blockSize; dy += 4) {
-                for (let dx = -blockSize; dx <= blockSize; dx += 4) {
-                    const nx = x + dx, ny = y + dy;
-                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) { sum += grayData[ny * width + nx]; count++; }
-                }
-            }
-            const mean = sum / count;
-            const pixelValue = grayData[i] > mean - C ? 255 : 0;
-            const idx = i * 4;
-            outputData.data[idx] = outputData.data[idx + 1] = outputData.data[idx + 2] = pixelValue;
-            outputData.data[idx + 3] = 255;
-        }
-    }
-    ctx.putImageData(outputData, 0, 0); return processedCanvas;
+
+    ctx.putImageData(imgData, 0, 0);
+    return processedCanvas;
 }
 
 function speakExtractedText(text) {
@@ -1871,45 +1905,32 @@ async function runOcrScan(canvasElement) {
     const loader = $('ocr-loader');
     const statusText = $('ocr-status-text');
     if (loader) loader.style.display = 'flex';
+
     try {
         const worker = await Tesseract.createWorker('eng');
         await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -./()@#&',
+            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK, // PSM 6: Uniform block of text
+            tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:-./ ',
             preserve_interword_spaces: '1'
         });
-        let bestResult = { text: '', confidence: 0 };
-        const runPass = async (canvas, label) => {
-            if (statusText) statusText.textContent = `Analyzing: ${label}...`;
-            const { data } = await worker.recognize(canvas);
-            const sanitized = data.text.replace(/[^a-zA-Z0-9\s-./()@#&]/g, '').replace(/\s+/g, ' ').trim();
-            if (data.confidence > bestResult.confidence && sanitized.length > 2) { bestResult = { text: sanitized, confidence: data.confidence }; }
-        };
-        const baseCrop = document.createElement('canvas');
-        const bcCtx = baseCrop.getContext('2d');
-        const cw = canvasElement.width * 0.8, ch = canvasElement.height * 0.5;
-        baseCrop.width = cw; baseCrop.height = ch;
-        bcCtx.drawImage(canvasElement, (canvasElement.width - cw) / 2, (canvasElement.height - ch) / 2, cw, ch, 0, 0, cw, ch);
-        await runPass(baseCrop, "Base Crop");
-        await runPass(sharpenCanvas(baseCrop), "Sharpened");
-        await runPass(preprocessImageForOcr(baseCrop, 'high_contrast'), "High Contrast");
-        await runPass(preprocessImageForOcr(baseCrop, 'balanced'), "Adaptive Threshold");
-        if (bestResult.confidence < 60) {
-            for (let angle of [90, 270, 180]) {
-                const rotated = rotateCanvas(baseCrop, angle);
-                await runPass(rotated, `Rotated ${angle}°`);
-                if (bestResult.confidence > 80) break;
-            }
-        }
+
+        if (statusText) statusText.textContent = "Enhancing image for OCR...";
+        const enhancedCanvas = preprocessImageForOcr(canvasElement);
+
+        if (statusText) statusText.textContent = "Reading text from label...";
+        const { data } = await worker.recognize(enhancedCanvas);
+        const sanitized = data.text.trim();
+
         await worker.terminate();
+
         const inputEl = $(currentOcrTarget);
-        if (inputEl && bestResult.text) {
-            inputEl.value = bestResult.text;
+        if (inputEl && sanitized.length > 1) {
+            inputEl.value = sanitized;
             inputEl.dispatchEvent(new Event('input'));
-            speakExtractedText(bestResult.text);
-            showToast(`Captured: ${bestResult.text}`, 'success');
+            speakExtractedText(sanitized);
+            showToast(`Captured: ${sanitized}`, 'success');
         } else {
-            alert("Unable to read label clearly. Please adjust lighting and try again.");
+            alert("Could not extract clear text. Please ensure the label is in focus and well-lit.");
         }
         stopOcrCamera();
     } catch (error) {
@@ -2011,8 +2032,28 @@ function fetchInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
-        catalogState.allItems = Object.entries(data).map(([id, d]) => ({ id, data: d }));
-        window.allCatalogItems = catalogState.allItems; // For modal lookup
+
+        // Transform new structure into unique categories for the catalog
+        const categoriesForCatalog = Object.entries(data).map(([catName, catData]) => {
+            const batches = Object.values(catData.batches || {});
+            const totalStock = batches.reduce((sum, b) => sum + (parseInt(b.currentStock) || 0), 0);
+
+            // Use the first batch image or the fallback
+            const firstImg = batches.find(b => b.imageUrl && b.imageUrl !== FALLBACK_IMG)?.imageUrl || FALLBACK_IMG;
+
+            return {
+                id: catName,
+                data: {
+                    itemName: catName,
+                    quantity: totalStock,
+                    imageUrl: firstImg,
+                    description: batches[0]?.brandName ? `Multiple brands available including ${batches[0].brandName}.` : "Stationery supplies."
+                }
+            };
+        });
+
+        catalogState.allItems = categoriesForCatalog;
+        window.allCatalogItems = categoriesForCatalog;
         resetCatalog();
     });
 }
@@ -2147,13 +2188,69 @@ window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
     $('item-detail-modal').classList.add('active');
 };
 
-// ==================== MASTER INVENTORY ====================
+// ==================== BATCH INVENTORY LOGIC ====================
+
+window.handleAddStockBatch = async function(e) {
+    if (e) e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+
+    try {
+        const category = $('stock-category-name').value;
+        const brand = $('stock-brand-name').value.trim();
+        const sn = $('stock-serial-number').value.trim();
+        const qty = parseInt($('stock-quantity').value) || 0;
+        const date = $('stock-date').value;
+        const supplier = $('stock-supplier').value.trim();
+        const file = $('stock-image').files[0];
+
+        if (!category || !sn || qty <= 0) throw new Error("Category, SN and Qty required");
+
+        let imageUrl = FALLBACK_IMG;
+        if (file) {
+            showToast("Processing image...");
+            const compressed = await window.compressAndScaleImage(file);
+            const studio = await window.generateStudioProductPhoto(compressed);
+            const driveUrl = await uploadPhotoToGoogleDrive(studio, `Stock_${sn}_${Date.now()}.jpg`);
+            imageUrl = driveUrl || studio;
+        }
+
+        const batchId = sn.replace(/[.#$[\]]/g, "_");
+        const batchData = {
+            brandName: brand,
+            serialNumber: sn,
+            initialQty: qty,
+            currentStock: qty,
+            receivedDate: date,
+            supplier: supplier,
+            imageUrl: imageUrl,
+            createdAt: new Date().toISOString()
+        };
+
+        // Save under /inventory/{category}/batches/{batchId}
+        await set(ref(db, `inventory/${category}/batches/${batchId}`), batchData);
+
+        showToast(`Stock batch ${sn} added to ${category}!`);
+        bootstrap.Modal.getInstance($('addStockModal')).hide();
+        $('add-stock-form').reset();
+
+    } catch (err) {
+        alert("Error: " + err.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+};
+
+window.startStockScanner = function() {
+    currentOcrTarget = 'stock-serial-number';
+    startOcrCamera();
+};
+
+// ==================== MASTER INVENTORY (BATCH-AWARE) ====================
 function fetchMasterInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
-        adminInventoryState.allItems = Object.entries(data).map(([id, val]) => ({...val, id}));
-        window.allInventoryItems = adminInventoryState.allItems; // For Edit Modal lookup
         renderMasterInventory();
     });
 }
@@ -2161,75 +2258,112 @@ function fetchMasterInventory() {
 function renderMasterInventory() {
     const container = $('inventory-container');
     if (!container) return;
+
     try {
         const term = adminInventoryState.searchTerm;
-        adminInventoryState.filtered = term ? adminInventoryState.allItems.filter(i => (i.itemName || '').toLowerCase().includes(term) || (i.serialNumber || '').toLowerCase().includes(term)) : adminInventoryState.allItems.slice();
-        const start = (adminInventoryState.currentPage - 1) * PAGE_SIZE;
-        const end = start + PAGE_SIZE;
-        const pageItems = adminInventoryState.filtered.slice(start, end);
+        const catFilter = $('inventory-filter-category')?.value;
 
-        if (pageItems.length === 0) { container.innerHTML = '<div class="text-center text-muted p-4">No records found.</div>'; return; }
+        let html = '';
 
-        const desktopTable = `
-            <div class="table-responsive d-none d-md-block">
-                <table class="table table-hover align-middle history-table">
-                    <thead class="table-light">
+        // Group items by category from the new structure
+        Object.entries(inventoryData).forEach(([catName, catData]) => {
+            if (catFilter && catName !== catFilter) return;
+
+            const batches = catData.batches || {};
+            const batchEntries = Object.entries(batches);
+
+            // Calculate category total
+            const totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentStock) || 0), 0);
+
+            // Search filter check for category or any batch in it
+            const matchesTerm = !term ||
+                                catName.toLowerCase().includes(term) ||
+                                batchEntries.some(([id, b]) => (b.brandName || '').toLowerCase().includes(term) || (b.serialNumber || '').toLowerCase().includes(term));
+
+            if (!matchesTerm) return;
+
+            html += `
+                <div class="card mb-4 border-0 shadow-sm overflow-hidden" style="border-radius: 12px;">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center border-bottom">
+                        <h5 class="mb-0 fw-bold text-primary"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(catName)}</h5>
+                        <div class="d-flex align-items-center gap-3">
+                            <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} p-2 px-3 fs-6">
+                                Total Stock: ${totalStock}
+                            </span>
+                            <button class="btn btn-sm btn-outline-primary fw-bold" onclick="window.openAddStockModal('${escapeHtml(catName)}')">
+                                + Add Stock
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0 batch-inventory-table" style="font-size: 13px;">
+                            <thead class="bg-light text-muted">
+                                <tr>
+                                    <th style="width: 60px;">Image</th>
+                                    <th>Brand / Manufacturer</th>
+                                    <th>Serial / Batch No.</th>
+                                    <th>Received Date</th>
+                                    <th class="text-center">Current Stock</th>
+                                    <th class="text-center">Initial Qty</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+
+            if (batchEntries.length === 0) {
+                html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active batches for this category.</td></tr>`;
+            } else {
+                batchEntries.forEach(([batchId, batch]) => {
+                    const cStock = parseInt(batch.currentStock) || 0;
+                    html += `
                         <tr>
-                            <th>Image</th>
-                            <th>Serial Number</th>
-                            <th>Item</th>
-                            <th>Category</th>
-                            <th>Description</th>
-                            <th>Opening Quantity</th>
-                            <th>Quantity Available</th>
-                            <th>Status</th>
-                            <th class="action-column">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${pageItems.map(item => {
-                            const qty = parseInt(item.quantity) || 0;
-                            return `
-                            <tr class="${qty < 5 ? 'row-low-stock' : ''}">
-                                <td><img src="${getDirectDriveUrl(item.imageUrl)}" class="rounded inventory-thumb" onerror="handleImageError(this, '${item.imageUrl}')"></td>
-                                <td><code>${item.serialNumber || 'N/A'}</code></td>
-                                <td><strong>${escapeHtml(item.itemName)}</strong></td>
-                                <td><span class="badge bg-light text-dark">${escapeHtml(item.category || 'General')}</span></td>
-                                <td><small class="text-muted" style="display:inline-block; max-width:150px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(item.description || '-')}</small></td>
-                                <td>${item.openingQuantity || '-'}</td>
-                                <td><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty}</span></td>
-                                <td>${getStatusBadge(qty)}</td>
-                                <td class="action-column">
-                                    <div class="action-btn-group">
-                                        <button class="btn btn-outline-primary btn-sm" onclick="showJanamKundaliModal('${item.id}', null, true)">View</button>
-                                        <button class="btn btn-outline-secondary btn-sm" onclick="openEditItemModal('${item.id}')">Edit</button>
-                                        <button class="btn btn-outline-danger btn-sm" onclick="deleteInventoryItem('${item.id}', '${item.itemName.replace(/'/g, "\\'")}')">Delete</button>
-                                    </div>
-                                </td>
-                            </tr>`;
-                        }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        `;
+                            <td data-label="Image"><img src="${getDirectDriveUrl(batch.imageUrl)}" class="rounded" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;"></td>
+                            <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
+                            <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
+                            <td data-label="Received Date">${batch.receivedDate || '-'}</td>
+                            <td data-label="Current Stock" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'}">${cStock}</span></td>
+                            <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'}</td>
+                            <td data-label="Status">${getStatusBadge(cStock)}</td>
+                            <td data-label="Actions" class="text-end">
+                                <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catName)}', '${batchId}')">Delete</button>
+                            </td>
+                        </tr>`;
+                });
+            }
 
-        const mobileCards = `<div class="d-block d-md-none inventory-cards-wrapper">${pageItems.map(item => {
-            const qty = parseInt(item.quantity) || 0;
-            return `<div class="inventory-card-mobile"><div class="inventory-card-header"><img src="${getDirectDriveUrl(item.imageUrl)}" class="inventory-card-img" onerror="handleImageError(this, '${item.imageUrl}')"><div style="flex:1;"><h6 class="mb-0">${escapeHtml(item.itemName)}</h6><small class="text-muted d-block">Serial: <code>${item.serialNumber || 'N/A'}</code></small>${getStatusBadge(qty)}</div></div><div class="mb-2"><span class="badge bg-light text-secondary border me-1">${escapeHtml(item.category || 'General')}</span></div><p class="small text-secondary mb-3">${escapeHtml(item.description || 'No description.')}</p><div class="d-flex justify-content-between align-items-center bg-light p-2 rounded mb-3"><span class="small text-muted">Current Quantity:</span><span class="fw-bold ${qty <= 5 ? 'text-danger' : 'text-success'}">${qty} Units</span></div>
-            <div class="action-btn-group w-100">
-                <button class="btn btn-outline-primary btn-sm flex-grow-1" onclick="showJanamKundaliModal('${item.id}', null, true)">View</button>
-                <button class="btn btn-outline-secondary btn-sm flex-grow-1" onclick="openEditItemModal('${item.id}')">Edit</button>
-                <button class="btn btn-outline-danger btn-sm flex-grow-1" onclick="deleteInventoryItem('${item.id}', '${item.itemName.replace(/'/g, "\\'")}')">Delete</button>
-            </div>
-            </div>`;
-        }).join('')}</div>`;
+            html += `</tbody></table></div></div>`;
+        });
 
-        container.innerHTML = desktopTable + mobileCards;
-        renderPaginationControls('admin-inventory-pagination', adminInventoryState, renderMasterInventory);
+        if (!html) html = '<div class="text-center text-muted p-5 bg-light rounded">No inventory categories found matching filters.</div>';
+
+        container.innerHTML = html;
+
     } catch (err) {
-        container.innerHTML = `<div class="alert alert-danger text-center">Failed to load data: ${err.message}</div>`;
+        console.error("Render Error:", err);
+        container.innerHTML = `<div class="alert alert-danger">Error rendering inventory: ${err.message}</div>`;
     }
 }
+
+window.openAddStockModal = function(catName) {
+    const modalEl = $('addStockModal');
+    if (modalEl) {
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        if (catName) $('stock-category-name').value = catName;
+        modal.show();
+    }
+};
+
+window.deleteBatch = async function(catName, batchId) {
+    if (confirm(`Are you sure you want to delete this specific batch from ${catName}?`)) {
+        try {
+            await remove(ref(db, `inventory/${catName}/batches/${batchId}`));
+            showToast("Batch deleted successfully");
+        } catch (e) {
+            showToast("Delete failed", "error");
+        }
+    }
+};
 
 // ==================== ANALYTICS & LEDGER ====================
 function fetchOrderHistoryForAnalytics() {
@@ -2256,11 +2390,6 @@ function fetchAuditLedger() {
         const data = snap.val() || {}; const ledgerData = [];
         Object.entries(data).reverse().forEach(([id, order]) => {
             (order.items || []).forEach(item => {
-                const serial = item.serial || 'N/A';
-                let balance = 'N/A';
-                const it = Object.values(inventoryData).find(i => i.serialNumber === serial);
-                if (it) balance = it.quantity;
-
                 const ts = new Date(order.timestamp);
 
                 ledgerData.push({
@@ -2272,12 +2401,13 @@ function fetchAuditLedger() {
                     teacherId: order.teacherUid || "N/A",
                     itemImageUrl: item.imageUrl || FALLBACK_IMG,
                     itemName: item.itemName || "N/A",
-                    itemSn: serial,
+                    itemSn: item.batchSerialNumber || item.itemSn || 'N/A',
+                    brandName: item.brandName || '-',
                     qtyIssued: item.requestQuantity || 0,
                     teacherSignatureUrl: order.teacherRequestSignature || (order.signatures ? order.signatures.teacher : null),
                     issuerName: order.issuedBy || order.handedOverBy || (order.status.includes('Done') ? "Admin" : "Pending"),
                     issuerSignatureUrl: order.handoverSignatureUrl || order.handoverSignature || (order.signatures ? order.signatures.admin : null),
-                    stockBalance: item.stockBalance !== undefined ? item.stockBalance : balance,
+                    stockBalance: item.stockBalance !== undefined ? item.stockBalance : (item.totalCategoryStock || 'N/A'),
                     status: order.status
                 });
             });
@@ -2290,6 +2420,7 @@ function fetchAuditLedger() {
 function applyAuditFilters() {
     const teacherTerm = ($('audit-filter-teacher')?.value || "").toLowerCase().trim();
     const itemTerm = ($('audit-filter-item')?.value || "").toLowerCase().trim();
+    const categoryTerm = $('audit-filter-category')?.value;
     const dateVal = $('audit-filter-date')?.value; // YYYY-MM-DD
 
     auditLedgerState.filtered = auditLedgerState.allItems.filter(row => {
@@ -2301,6 +2432,8 @@ function applyAuditFilters() {
                             (row.itemName.toLowerCase().includes(itemTerm) ||
                              row.itemSn.toLowerCase().includes(itemTerm));
 
+        const matchesCategory = !categoryTerm || row.category === categoryTerm;
+
         let matchesDate = true;
         if (dateVal) {
             // Convert row.timestamp to YYYY-MM-DD for comparison
@@ -2308,7 +2441,7 @@ function applyAuditFilters() {
             matchesDate = (rowDate === dateVal);
         }
 
-        return matchesTeacher && matchesItem && matchesDate;
+        return matchesTeacher && matchesItem && matchesCategory && matchesDate;
     });
 
     auditLedgerState.currentPage = 1;
@@ -2862,6 +2995,7 @@ window.listenAndPopulateCategories = function() {
         const list = $('system-categories-list');
 
         let optionsHtml = '<option value="" disabled selected>Select Category</option>';
+        let filterOptionsHtml = '<option value="">All Categories</option>';
         if (list) list.innerHTML = '';
 
         if (snapshot.exists()) {
@@ -2869,6 +3003,7 @@ window.listenAndPopulateCategories = function() {
             Object.entries(data).forEach(([key, name]) => {
                 // Populate Dropdowns
                 optionsHtml += `<option value="${name}">${name}</option>`;
+                filterOptionsHtml += `<option value="${name}">${name}</option>`;
 
                 // Populate Management List
                 if (list) {
@@ -2887,8 +3022,9 @@ window.listenAndPopulateCategories = function() {
 
         dropdownElements.forEach((selectEl) => {
             if (selectEl) {
+                const isFilter = selectEl.id.includes('filter');
                 const currentVal = selectEl.value;
-                selectEl.innerHTML = optionsHtml;
+                selectEl.innerHTML = isFilter ? filterOptionsHtml : optionsHtml;
                 if (currentVal) selectEl.value = currentVal;
             }
         });

@@ -1252,6 +1252,62 @@ body.modal-open {
 }
 
 @media (max-width: 768px) {
+    /* Hide traditional desktop table header */
+    .batch-inventory-table thead {
+        display: none !important;
+    }
+
+    /* Display table body and rows as card blocks */
+    .batch-inventory-table,
+    .batch-inventory-table tbody,
+    .batch-inventory-table tr {
+        display: block !important;
+        width: 100% !important;
+    }
+
+    .batch-inventory-table tr {
+        background: #ffffff;
+        border: 1px solid #e3e6f0 !important;
+        border-radius: 12px;
+        margin-bottom: 12px;
+        padding: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    }
+
+    /* Format individual table cells as flex rows with labels */
+    .batch-inventory-table td {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        padding: 8px 4px !important;
+        border-bottom: 1px dashed #f0f0f0 !important;
+        text-align: right !important;
+    }
+
+    .batch-inventory-table td:last-child {
+        border-bottom: none !important;
+    }
+
+    /* Render label heading on the left side of the card row */
+    .batch-inventory-table td::before {
+        content: attr(data-label);
+        font-weight: 700;
+        color: #4e73df;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        margin-right: 10px;
+        text-align: left;
+    }
+
+    /* Fix empty state message styling */
+    .batch-inventory-table td.empty-batch-cell {
+        display: block !important;
+        text-align: center !important;
+    }
+    .batch-inventory-table td.empty-batch-cell::before {
+        display: none !important;
+    }
+
     .content { padding: 14px; }
     .form-container { padding: 18px 16px; }
     .modal-content { padding: 18px; }
