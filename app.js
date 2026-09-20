@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.4.3";
+const APP_VERSION = "1.4.4";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {

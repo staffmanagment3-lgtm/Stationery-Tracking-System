@@ -340,7 +340,42 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
     box-shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 
-.header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.header-actions {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: nowrap !important;
+}
+
+/* Compact Styles for Header Buttons (v1.4.4) */
+.cart-btn-main, #cart-btn {
+    padding: 5px 12px !important;
+    font-size: 0.85rem !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    white-space: nowrap;
+    border-radius: 8px;
+    margin: 0 !important;
+}
+
+.header-actions .btn-danger {
+    padding: 5px 12px !important;
+    font-size: 0.85rem !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    border-radius: 8px;
+    margin: 0 !important;
+}
 
 .logout-btn {
     background-color: #e74c3c;
@@ -404,16 +439,18 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
     flex-shrink: 0;
 }
 
-/* ==================== INVENTORY CARD ==================== */
+/* ==================== INVENTORY CARD (v1.4.4) ==================== */
 .inventory-card {
     background: #fff;
     border: 1px solid #e5e7eb;
     border-radius: 12px;
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
     transition: box-shadow 0.2s, transform 0.15s;
     will-change: transform;
+    justify-content: space-between;
 }
 .inventory-card:hover {
     box-shadow: 0 6px 16px rgba(0,0,0,0.08);
@@ -427,6 +464,7 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
     overflow: hidden;
     border-radius: 8px 8px 0 0;
     margin: 8px;
+    flex-shrink: 0;
 }
 .card-img-wrap img {
     width: 100%;
@@ -462,13 +500,24 @@ img.lazy-load {
     100% { background-position: -200% 0; }
 }
 
-.card-body { padding: 12px; display: flex; flex-direction: column; gap: 4px; flex-grow: 1; }
+.card-body {
+    padding: 12px;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 6px;
+    flex-grow: 1 !important;
+}
 .card-title { font-size: 15px; font-weight: 700; color: #1e293b; line-height: 1.3; }
 .serial { font-size: 11px; color: #94a3b8; }
 .description {
-    font-size: 13px; color: #475569; margin: 4px 0;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    font-size: 13px;
+    color: #475569;
+    margin: 4px 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
+    min-height: 2.8em; /* Keeps fixed height for text alignment */
 }
 .quantity { font-weight: 700; font-size: 13px; color: #27ae60; margin: 4px 0 8px; }
 .quantity.low { color: #e67e22; }
@@ -486,6 +535,7 @@ img.lazy-load {
     font-size: 14px;
     min-height: 44px;
     box-shadow: 0 3px 0 #2472a4;
+    margin-top: auto !important; /* Pushes button to bottom */
 }
 .add-to-cart-btn:hover { background-color: #2980b9; }
 .add-to-cart-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #2472a4; }
