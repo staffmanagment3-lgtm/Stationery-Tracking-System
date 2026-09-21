@@ -57,31 +57,90 @@ function isValidImageUrl(url) {
 }
 
 function getItemImageHtml(imageUrl) {
-    const src = isValidImageUrl(imageUrl) ? imageUrl : OFFLINE_PLACEHOLDER;
-    return `<img src="${src}"
-                 alt="Item Image"
-                 class="img-thumbnail"
-                 style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px;"
-                 loading="lazy"
-                 onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />`;
+    return window.createReloadableImgHtml(imageUrl, 'Item', '', true);
 }
 
 /**
- * Optimized Catalog Card Image HTML (v1.5.9)
+ * Optimized Catalog Card Image HTML (v1.6.5)
+ * Supports Universal Manual Reload Overlay
  */
 function getCatalogCardImageHtml(item) {
     const imgUrl = item.imageUrl || item.image || item.photoUrl;
-    const validSrc = isValidImageUrl(imgUrl) ? imgUrl : OFFLINE_PLACEHOLDER;
+    return window.createReloadableImgHtml(imgUrl, item.name || item.itemName, 'height: 130px; width: 100%;', false);
+}
+
+/**
+ * Universal Reloadable Image System (v1.6.5)
+ */
+window.handleUniversalImageError = function(imgElement, originalUrl, isCompact = false) {
+    if (!imgElement) return;
+
+    imgElement.style.display = 'none';
+    const container = imgElement.parentElement;
+    if (!container) return;
+
+    // Check if reload overlay already exists
+    let overlay = container.querySelector('.img-reload-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'img-reload-overlay' + (isCompact ? ' compact' : '');
+        overlay.innerHTML = `
+            <button type="button" class="btn-reload-img" onclick="window.retryUniversalImage(this, '${originalUrl}', ${isCompact})">
+                ${isCompact ? '🔄 Retry' : '🔄 Reload Photo'}
+            </button>
+        `;
+        container.appendChild(overlay);
+    } else {
+        overlay.style.display = 'flex';
+    }
+};
+
+window.retryUniversalImage = function(btnElement, originalUrl, isCompact) {
+    const overlay = btnElement.closest('.img-reload-overlay');
+    const container = btnElement.closest('.reloadable-img-container') || btnElement.parentElement;
+    const imgElement = container.querySelector('img');
+
+    if (!imgElement) return;
+
+    btnElement.disabled = true;
+    btnElement.innerHTML = isCompact ? '⏳...' : '⏳ Loading...';
+
+    // Append cache-buster timestamp parameter
+    const cacheBusterUrl = (originalUrl && originalUrl.startsWith('http'))
+        ? originalUrl + (originalUrl.includes('?') ? '&' : '?') + 't=' + Date.now()
+        : originalUrl;
+
+    const newImg = new Image();
+    newImg.onload = function() {
+        imgElement.src = cacheBusterUrl;
+        imgElement.style.display = 'block';
+        if (overlay) overlay.style.display = 'none';
+        btnElement.disabled = false;
+        btnElement.innerHTML = isCompact ? '🔄 Retry' : '🔄 Reload Photo';
+    };
+    newImg.onerror = function() {
+        btnElement.disabled = false;
+        btnElement.innerHTML = isCompact ? '❌' : '❌ Retry Again';
+    };
+    newImg.src = cacheBusterUrl;
+};
+
+window.createReloadableImgHtml = function(imageUrl, altText = 'Image', styleCustom = '', isCompact = false) {
+    const validSrc = isValidImageUrl(imageUrl) ? imageUrl : OFFLINE_PLACEHOLDER;
+    const defaultWrapperStyle = isCompact
+        ? "position: relative; width: 50px; height: 50px; display: inline-flex; align-items: center; justify-content: center; background: #f0f0f0; border-radius: 6px; overflow: hidden;"
+        : "position: relative; width: 100%; min-height: 120px; display: flex; align-items: center; justify-content: center; background: #f8f9fa; border-radius: 8px; overflow: hidden;";
 
     return `
-        <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; margin-bottom: 10px;">
+        <div class="reloadable-img-container" style="${defaultWrapperStyle} ${styleCustom}">
             <img src="${validSrc}"
-                 alt="${escapeHtml(item.name || item.itemName || 'Item Image')}"
-                 style="max-width: 100%; max-height: 100%; object-fit: contain;"
-                 onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />
+                 alt="${escapeHtml(altText)}"
+                 style="max-width: 100%; max-height: 100%; object-fit: contain; display: block;"
+                 onerror="window.handleUniversalImageError(this, '${validSrc}', ${isCompact})"
+                 loading="lazy" />
         </div>
     `;
-}
+};
 
 // ==================== STATE ====================
 let currentUser = null;
@@ -307,7 +366,7 @@ window.handleFinalHandover = async function(event, orderId) {
                     existingSigEl.innerHTML = `
                         <div class="p-2 border rounded bg-light mb-3 text-start">
                             <p class="text-muted small mb-1 fw-bold">Stored Request Signature:</p>
-                            <img src="${savedSig}" style="max-height:80px; border:1px solid #ddd; border-radius:4px; background:white; padding:2px;">
+                            ${window.createReloadableImgHtml(savedSig, 'Request Signature', 'max-height:80px; background:white; padding:2px;', false)}
                         </div>`;
                 } else {
                     existingSigEl.innerHTML = '';
@@ -645,7 +704,7 @@ window.viewOrderReceipt = async function(orderId) {
         return `
         <tr>
             <td class="text-center">
-                <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 60px; height: 50px; object-fit: contain; border-radius: 4px;" loading="lazy">
+                ${window.createReloadableImgHtml(itemImg, item.itemName, '', true)}
             </td>
             <td>
                 <div class="fw-bold">${escapeHtml(item.itemName)}</div>
@@ -661,8 +720,8 @@ window.viewOrderReceipt = async function(orderId) {
         window.loadCachedImage(img, img.dataset.url);
     });
 
-        $('receipt-teacher-sig').src = order.teacherRequestSignature || order.handoverSignature || "";
-        $('receipt-admin-sig').src = order.handoverSignatureUrl || order.handoverSignature || "";
+        $('receipt-teacher-sig').parentElement.innerHTML = window.createReloadableImgHtml(order.teacherRequestSignature || order.handoverSignature || "", 'Requester Signature', 'min-height: 80px; width: 100%;', false);
+        $('receipt-admin-sig').parentElement.innerHTML = window.createReloadableImgHtml(order.handoverSignatureUrl || order.handoverSignature || "", 'Authorized Signature', 'min-height: 80px; width: 100%;', false);
 
         bootstrap.Modal.getOrCreateInstance($('receiptModal')).show();
     } catch (e) {
@@ -2623,7 +2682,9 @@ window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
     const isOut = (parseInt(itemData.quantity) || 0) <= 0;
 
     content.innerHTML = `
-        <img class="item-detail-img" src="${FALLBACK_IMG}">
+        <div style="margin-bottom: 15px;">
+            ${window.createReloadableImgHtml(itemData.imageUrl, itemData.itemName, 'height: 130px; width: 100%;', false)}
+        </div>
         <div class="item-detail-info">
             <span class="badge bg-info">${escapeHtml(itemData.category || 'General')}</span>
             <h3 id="detail-item-name">${escapeHtml(itemData.itemName)}</h3>
@@ -2638,8 +2699,6 @@ window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
                 </button>
             </div>
         </div>`;
-
-    attachSmartImage(content.querySelector('img'), itemData.imageUrl);
 
     if (!isAdmin) {
         const addBtn = $('detail-add-btn');
@@ -2785,7 +2844,9 @@ function renderMasterInventory() {
                     // Render synthetic fallback batch row for legacy items
                     html += `
                         <tr>
-                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                            <td data-label="Image">
+                                ${window.createReloadableImgHtml(catData.imageUrl, catData.itemName, '', true)}
+                            </td>
                             <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
                             <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
                             <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
@@ -2804,7 +2865,9 @@ function renderMasterInventory() {
                     const cStock = parseInt(batch.currentStock) || 0;
                     html += `
                         <tr>
-                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${batch.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                            <td data-label="Image">
+                                ${window.createReloadableImgHtml(batch.imageUrl, batch.brandName, '', true)}
+                            </td>
                             <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
                             <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
                             <td data-label="Received Date">${batch.receivedDate || '-'}</td>
@@ -3071,24 +3134,35 @@ function renderAuditLedger() {
             <td>${sNo}</td>
             <td>${row.date}</td>
             <td><small>${row.time}</small></td>
-            <td><strong>${escapeHtml(row.teacherName)}</strong></td>
+            <td><strong>${escapeHtml(row.teacherId)}</strong></td>
             <td><code>${escapeHtml(row.teacherId)}</code></td>
-            <td><img src="${FALLBACK_IMG}" class="inventory-thumb audit-thumb" data-url="${row.itemImageUrl}" loading="lazy"></td>
+            <td>
+                <div style="width: 50px;">
+                    ${window.createReloadableImgHtml(row.itemImageUrl, row.itemName, '', true)}
+                </div>
+            </td>
             <td>${escapeHtml(row.itemName)}</td>
             <td><code>${row.itemSn}</code></td>
             <td class="text-center"><strong>${row.qtyIssued}</strong></td>
-            <td>${row.teacherSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
+            <td>
+                ${row.teacherSignatureUrl ? `
+                <div style="width: 60px;">
+                    ${window.createReloadableImgHtml(row.teacherSignatureUrl, "Teacher Sign", 'height: 30px; width: 60px;', true)}
+                </div>` : '-'}
+            </td>
             <td>${escapeHtml(row.issuerName)}</td>
-            <td>${row.issuerSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.issuerSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
+            <td>
+                ${row.issuerSignatureUrl ? `
+                <div style="width: 60px;">
+                    ${window.createReloadableImgHtml(row.issuerSignatureUrl, "Issuer Sign", 'height: 30px; width: 60px;', true)}
+                </div>` : '-'}
+            </td>
             <td class="text-center"><span class="badge bg-secondary">${row.stockBalance}</span></td>
             <td><span class="badge ${statusBadge}">${row.status}</span></td>
         `;
         list.appendChild(tr);
     });
 
-    document.querySelectorAll('.audit-thumb').forEach(img => {
-        if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
-    });
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
 }
 
@@ -3312,13 +3386,12 @@ function fetchAdminOrders() {
                 tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><button class="view-details-btn">View Voucher</button></td>`;
                 const wrap = tr.querySelector('.it-wrap');
                 (order.items || []).slice(0, 3).forEach(it => {
-                    const img = document.createElement('img');
-                    img.className = 'inventory-thumb admin-order-thumb';
-                    // Fallback for missing imageUrl in order record
                     const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
-                    img.dataset.url = finalImg;
-                    img.loading = "lazy";
-                    wrap.appendChild(img);
+                    const imgHtml = `
+                        <div style="width: 40px;">
+                            ${window.createReloadableImgHtml(finalImg, it.itemName, '', true)}
+                        </div>`;
+                    wrap.insertAdjacentHTML('beforeend', imgHtml);
                 });
                 tr.querySelector('button').onclick = () => window.viewOrderReceipt(id);
                 historyList.appendChild(tr);
@@ -3338,7 +3411,9 @@ function fetchAdminOrders() {
                     ${order.teacherRequestSignature ? `
                         <div class="mb-2 text-center border rounded p-1 bg-light">
                             <small class="d-block text-muted">Teacher's Order Signature</small>
-                            <img src="${order.teacherRequestSignature}" style="max-height:60px; max-width:100%;">
+                            <div style="max-height: 60px;">
+                                ${window.createReloadableImgHtml(order.teacherRequestSignature, 'Teacher Signature', 'height: 60px; width: 100%;', false)}
+                            </div>
                         </div>
                     ` : ''}
                     <div class="request-actions">
@@ -3354,8 +3429,14 @@ function fetchAdminOrders() {
                 wrap.style.flexDirection = 'column';
                 (order.items || []).forEach(it => {
                     const d = document.createElement('div'); d.className = 'd-flex align-items-center gap-2 mb-2 p-1 border rounded bg-white';
+
+                    // Fallback for missing imageUrl in order record
+                    const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
+
                     d.innerHTML = `
-                        <img class="inventory-thumb admin-order-thumb" width="45" height="45" style="object-fit: contain;" data-url="${it.imageUrl}" loading="lazy">
+                        <div style="width: 50px; flex-shrink: 0;">
+                            ${window.createReloadableImgHtml(finalImg, it.itemName, '', true)}
+                        </div>
                         <div style="flex: 1; overflow: hidden;">
                             <h6 class="mb-0 small fw-bold text-truncate">${escapeHtml(it.itemName)}</h6>
                             <small class="text-muted d-block" style="font-size: 9px;">SN: ${it.serial}</small>
@@ -3367,11 +3448,6 @@ function fetchAdminOrders() {
 
                 list.appendChild(card);
             }
-        });
-
-        // Lazy load admin order images
-        document.querySelectorAll('.admin-order-thumb').forEach(img => {
-            if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
         });
     });
 }
@@ -3491,19 +3567,15 @@ function renderTeacherOrderHistory() {
             <button class="primary-btn blue omc-view-btn">View Receipt</button>`;
         const cardItemsWrap = card.querySelector('.omc-items');
         (order.items || []).slice(0, 3).forEach(it => {
-            const img = document.createElement('img');
-            img.className = 'inventory-thumb teacher-order-thumb';
-            img.dataset.url = it.imageUrl;
-            img.loading = "lazy";
-            cardItemsWrap.appendChild(img);
+            const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
+            const imgHtml = `
+                <div style="width: 45px; display: inline-block; margin-right: 4px;">
+                    ${window.createReloadableImgHtml(finalImg, it.itemName, '', true)}
+                </div>`;
+            cardItemsWrap.insertAdjacentHTML('beforeend', imgHtml);
         });
         card.querySelector('.omc-view-btn').onclick = () => window.viewOrderReceipt(id);
         cards.appendChild(card);
-    });
-
-    // Lazy load teacher order images
-    document.querySelectorAll('.teacher-order-thumb').forEach(img => {
-        if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
     });
 
     renderPaginationControls('teacher-orders-pagination', teacherOrdersState, renderTeacherOrderHistory);
