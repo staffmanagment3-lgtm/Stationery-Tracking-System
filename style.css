@@ -187,6 +187,24 @@ h2 { margin-bottom: 25px; color: #2c3e50; font-size: 22px; }
 .input-btn-group textarea {
     flex: 1 !important;
 }
+
+/* Enforce strict vertical form field layout (v1.5.8) */
+.form-group {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    margin-bottom: 1rem !important;
+}
+
+.form-group label {
+    display: block !important;
+    font-weight: 600 !important;
+    margin-bottom: 6px !important;
+    color: #333 !important;
+    text-align: left !important;
+    width: 100% !important;
+}
 .input-group label {
     display: block; margin-bottom: 6px; font-weight: 600;
     color: #475569; font-size: 13px;
@@ -1449,7 +1467,49 @@ body.modal-open {
     background-color: rgba(0, 0, 0, 0.5) !important;
 }
 
+/* Mobile Header Layout Adjustments (v1.6.3) */
 @media (max-width: 768px) {
+    .app-header {
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+        padding: 8px 12px !important;
+    }
+
+    .header-actions {
+        width: 100% !important;
+        justify-content: space-between !important;
+        border-top: 1px solid #f1f5f9;
+        padding-top: 8px;
+        margin-top: 4px;
+    }
+
+    .user-profile-badge {
+        display: flex !important; /* Force visibility on mobile */
+        border-right: none !important;
+        padding-right: 0 !important;
+        margin-right: 0 !important;
+        gap: 6px !important;
+    }
+
+    .user-profile-badge i {
+        font-size: 1.5rem !important;
+    }
+
+    .user-profile-badge .text-start div:first-child {
+        font-size: 0.8rem !important;
+    }
+
+    .user-profile-badge .text-muted {
+        font-size: 9px !important;
+    }
+
+    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
+        height: 32px !important;
+        min-height: 32px !important;
+        font-size: 0.75rem !important;
+        padding: 2px 8px !important;
+    }
+
     .batch-inventory-table thead {
         display: none !important;
     }
@@ -1480,6 +1540,18 @@ body.modal-open {
     }
 
     .batch-inventory-table td:last-child {
+
+    .user-profile-badge .text-muted {
+        font-size: 9px !important;
+    }
+
+    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
+        height: 32px !important;
+        min-height: 32px !important;
+        font-size: 0.75rem !important;
+        padding: 2px 8px !important;
+    }
+}
         border-bottom: none !important;
     }
 

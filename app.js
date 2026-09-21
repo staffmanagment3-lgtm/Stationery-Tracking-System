@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.5.7";
+const APP_VERSION = "1.6.5";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -64,6 +64,23 @@ function getItemImageHtml(imageUrl) {
                  style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px;"
                  loading="lazy"
                  onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />`;
+}
+
+/**
+ * Optimized Catalog Card Image HTML (v1.5.9)
+ */
+function getCatalogCardImageHtml(item) {
+    const imgUrl = item.imageUrl || item.image || item.photoUrl;
+    const validSrc = isValidImageUrl(imgUrl) ? imgUrl : OFFLINE_PLACEHOLDER;
+
+    return `
+        <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; margin-bottom: 10px;">
+            <img src="${validSrc}"
+                 alt="${escapeHtml(item.name || item.itemName || 'Item Image')}"
+                 style="max-width: 100%; max-height: 100%; object-fit: contain;"
+                 onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />
+        </div>
+    `;
 }
 
 // ==================== STATE ====================
@@ -628,11 +645,11 @@ window.viewOrderReceipt = async function(orderId) {
         return `
         <tr>
             <td class="text-center">
-                <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 50px; height: 40px; object-fit: contain; border-radius: 4px;" loading="lazy">
+                <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 60px; height: 50px; object-fit: contain; border-radius: 4px;" loading="lazy">
             </td>
             <td>
                 <div class="fw-bold">${escapeHtml(item.itemName)}</div>
-                <small class="text-muted" style="font-size:9px; word-break: break-all;">Source: ${itemImg}</small>
+                <small class="text-muted" style="font-size:9px; word-break: break-all; display:block; margin-top:4px;">Image URL: ${itemImg}</small>
             </td>
             <td class="text-center"><code>${item.batchSerialNumber || item.serial || item.itemSn || '-'}</code></td>
             <td class="text-center fw-bold">${item.requestQuantity}</td>
@@ -2428,24 +2445,35 @@ function fetchInventory() {
         const data = snapshot.val() || {};
         inventoryData = data;
 
-        const categoriesForCatalog = Object.entries(data).map(([catName, catData]) => {
+        const categoriesForCatalog = Object.entries(data).map(([catId, catData]) => {
+            if (!catData) return null; // Defensive check (v1.6.2)
+
             const batches = Object.values(catData.batches || {});
             const totalStock = batches.reduce((sum, b) => sum + (parseInt(b.currentStock) || 0), 0);
 
             const firstImg = batches.find(b => b.imageUrl && b.imageUrl !== FALLBACK_IMG)?.imageUrl || catData.imageUrl || FALLBACK_IMG;
             const topSerial = batches[0]?.serialNumber || catData.serialNumber || 'N/A';
+            const actualName = catData.itemName || catData.name || catId;
+
+            // Defensive description to prevent TypeError on undefined brandName (v1.6.5)
+            let desc = catData.description || "";
+            if (!desc && batches.length > 0 && batches[0]?.brandName) {
+                desc = `Brand: ${batches[0].brandName}.`;
+            } else if (!desc) {
+                desc = "Stationery supplies.";
+            }
 
             return {
-                id: catName,
+                id: catId,
                 data: {
-                    itemName: catName,
+                    itemName: actualName,
                     quantity: totalStock,
                     imageUrl: firstImg,
                     serialNumber: topSerial,
-                    description: batches[0]?.brandName ? `Multiple brands available including ${batches[0].brandName}.` : (catData.description || "Stationery supplies.")
+                    description: desc
                 }
             };
-        });
+        }).filter(Boolean); // Filter out any null entries
 
         catalogState.allItems = categoriesForCatalog;
         window.allCatalogItems = categoriesForCatalog;
@@ -2468,19 +2496,46 @@ function renderCatalogPage() {
     const end = start + PAGE_SIZE;
     const pageItems = catalogState.filtered.slice(start, end);
     if (pageItems.length === 0) { list.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#64748b;padding:30px;">No items found.</p>'; return; }
+
     pageItems.forEach(({ id, data }) => {
         const card = document.createElement('div'); card.className = 'inventory-card';
+
+        // Root-Cause Fix: Strict Name Priority (v1.6.2)
+        const titleToDisplay = data.itemName && data.itemName !== 'Unnamed Item' ? data.itemName : (data.name || 'Stationery Item');
+        const snToDisplay = data.serialNumber && data.serialNumber !== 'N/A' ? data.serialNumber : (data.sn || 'N/A');
+        const productDesc = data.description || data.desc || '';
+
+        console.log("DEBUG CATALOG ITEM:", { id, titleToDisplay, snToDisplay });
+
         card.innerHTML = `
-            <div class="card-img-wrap skeleton">
-                <img alt="" loading="lazy">
-            </div>
-            <div class="card-body">
-                <h4 class="card-title">${escapeHtml(data.itemName)}</h4>
-                <p class="serial">SN: ${escapeHtml(data.serialNumber || 'N/A')}</p>
-                <p class="description">${escapeHtml(data.description || '')}</p>
-                <button class="add-to-cart-btn" onclick="window.viewItemDetails('${id}')">View Details</button>
+            <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px;">
+                <!-- 1. ITEM PHOTO -->
+                <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden;">
+                    <img src="${data.imageUrl || data.image || FALLBACK_IMG}"
+                         alt="${escapeHtml(titleToDisplay)}"
+                         style="max-width: 100%; max-height: 100%; object-fit: contain;"
+                         onerror="this.onerror=null; this.src='${FALLBACK_IMG}';"
+                         loading="lazy" />
+                </div>
+
+                <!-- 2. BOLD TITLE (STRICTLY PRODUCT NAME ONLY) -->
+                <h4 class="card-item-name" style="font-weight: 700; color: #111; margin-top: 10px; margin-bottom: 2px; font-size: 1.1rem;">
+                    ${escapeHtml(titleToDisplay)}
+                </h4>
+
+                <!-- 3. SERIAL NUMBER (STRICTLY SN ONLY) -->
+                <p class="card-item-sn" style="font-size: 0.85rem; color: #6c757d; margin-bottom: 6px;">
+                    SN: ${escapeHtml(snToDisplay)}
+                </p>
+
+                <!-- 4. DESCRIPTION -->
+                <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
+                    ${escapeHtml(productDesc)}
+                </p>
+
+                <!-- 5. VIEW DETAILS BUTTON -->
+                <button class="add-to-cart-btn w-100" style="margin-top: auto;" onclick="window.viewItemDetails('${id}')">View Details</button>
             </div>`;
-        attachSmartImage(card.querySelector('img'), data.imageUrl);
         list.appendChild(card);
     });
     renderPaginationControls('stationery-list', catalogState, renderCatalogPage);
@@ -2495,20 +2550,31 @@ window.viewItemDetails = function(itemId) {
         alert("Item details not found!");
         return;
     }
-    const item = itemObj.data;
+    const data = itemObj.data;
 
-    $('detail-item-title').innerText = item.itemName || 'Item Details';
-    $('detail-item-name').innerText = item.itemName || 'N/A';
-    $('detail-item-sn').innerText = item.serialNumber || 'N/A';
-    $('detail-item-description').innerText = item.description || 'No description available.';
-    $('detail-item-stock').innerText = item.quantity || '0';
-    $('detail-item-image').src = getDirectDriveUrl(item.imageUrl) || FALLBACK_IMG;
+    // Strict Data Mapping (v1.6.1)
+    let productName = data.itemName || data.name || data.title || 'Unnamed Item';
+    const productSN = (data.serialNumber && data.serialNumber !== 'N/A') ? data.serialNumber : (data.sn || 'N/A');
+    const productDesc = data.description || data.desc || 'No description available.';
+
+    if (productName === productSN && data.itemName !== productName) {
+        productName = data.itemName || productName;
+    }
+
+    $('detail-item-title').innerText = productName;
+    $('detail-item-name').innerText = productName;
+    $('detail-item-sn').innerText = productSN;
+    $('detail-item-description').innerText = "Description: " + productDesc;
+    $('detail-item-stock').innerText = data.quantity || '0';
+
+    const imgUrl = data.imageUrl || data.image || data.photoUrl;
+    $('detail-item-image').src = getDirectDriveUrl(imgUrl) || FALLBACK_IMG;
 
     const addBtn = $('modal-add-to-cart-btn');
     if (addBtn) {
         addBtn.onclick = () => {
             const qty = parseInt($('modal-item-qty').value) || 1;
-            addToCart(itemId, item, qty);
+            addToCart(itemId, data, qty);
             bootstrap.Modal.getOrCreateInstance($('itemDetailsModal')).hide();
         };
     }
@@ -2664,8 +2730,8 @@ function renderMasterInventory() {
 
         let html = '';
 
-        Object.entries(inventoryData).forEach(([catName, catData]) => {
-            if (catFilter && catName !== catFilter) return;
+        Object.entries(inventoryData).forEach(([catId, catData]) => {
+            if (catFilter && catId !== catFilter) return;
 
             const batches = catData.batches || {};
             const batchEntries = Object.entries(batches);
@@ -2676,8 +2742,11 @@ function renderMasterInventory() {
                 totalStock = parseInt(catData.quantity || catData.currentStock || 0);
             }
 
+            const itemNameDisplay = catData.itemName || catData.name || catId;
+
             const matchesTerm = !term ||
-                                catName.toLowerCase().includes(term) ||
+                                itemNameDisplay.toLowerCase().includes(term) ||
+                                catId.toLowerCase().includes(term) ||
                                 batchEntries.some(([id, b]) => (b.brandName || '').toLowerCase().includes(term) || (b.serialNumber || '').toLowerCase().includes(term));
 
             if (!matchesTerm) return;
@@ -2685,12 +2754,12 @@ function renderMasterInventory() {
             html += `
                 <div class="card mb-4 border-0 shadow-sm overflow-hidden" style="border-radius: 12px;">
                     <div class="card-header bg-white py-3 inventory-item-header border-bottom">
-                        <h5 class="mb-0 fw-bold text-primary inventory-item-title"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(catName)}</h5>
+                        <h5 class="mb-0 fw-bold text-primary inventory-item-title"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(itemNameDisplay)}</h5>
                         <div class="inventory-item-actions d-flex align-items-center gap-3">
                             <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} total-stock-badge p-2 px-3 fs-6">
                                 Total Stock: ${totalStock}
                             </span>
-                            <button class="btn btn-sm btn-outline-primary fw-bold add-stock-btn" onclick="window.openAddStockModal('${escapeHtml(catName)}')">
+                            <button class="btn btn-sm btn-outline-primary fw-bold add-stock-btn" onclick="window.openAddStockModal('${escapeHtml(catId)}')">
                                 + Add Stock
                             </button>
                         </div>
@@ -2743,7 +2812,7 @@ function renderMasterInventory() {
                             <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'}</td>
                             <td data-label="Status">${getStatusBadge(cStock)}</td>
                             <td data-label="Actions" class="text-end">
-                                <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catName)}', '${batchId}')">Delete</button>
+                                <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')">Delete</button>
                             </td>
                         </tr>`;
                 });
@@ -2776,10 +2845,10 @@ window.openAddStockModal = function(catName) {
     }
 };
 
-window.deleteBatch = async function(catName, batchId) {
-    if (confirm(`Are you sure you want to delete this specific batch from ${catName}?`)) {
+window.deleteBatch = async function(catId, batchId) {
+    if (confirm(`Are you sure you want to delete this specific batch from ${catId}?`)) {
         try {
-            await remove(ref(db, `inventory/${catName}/batches/${batchId}`));
+            await remove(ref(db, `inventory/${catId}/batches/${batchId}`));
             showToast("Batch deleted successfully");
         } catch (e) {
             showToast("Delete failed", "error");
