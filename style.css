@@ -149,6 +149,44 @@ body {
 h2 { margin-bottom: 25px; color: #2c3e50; font-size: 22px; }
 
 .input-group { text-align: left; margin-bottom: 18px; }
+
+/* Admin Dashboard Form Alignment (v1.5.7) */
+.form-group {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    margin-bottom: 1rem !important;
+}
+
+.form-group label {
+    display: block !important;
+    font-weight: 600 !important;
+    margin-bottom: 6px !important;
+    color: #333 !important;
+    text-align: left !important;
+    width: 100% !important;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.input-btn-group {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 8px !important;
+    width: 100% !important;
+    align-items: center !important;
+}
+
+.input-btn-group input,
+.input-btn-group textarea {
+    flex: 1 !important;
+}
 .input-group label {
     display: block; margin-bottom: 6px; font-weight: 600;
     color: #475569; font-size: 13px;
@@ -935,6 +973,21 @@ img.lazy-load {
     border-radius: 12px; border: 1px solid #e2e8f0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
     text-align: center; transition: transform 0.2s;
+}
+
+/* Modal Table Styling (v1.5.1) */
+.sticky-top {
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+    background-color: #f8f9fa !important;
+}
+.table-responsive::-webkit-scrollbar {
+    width: 6px;
+}
+.table-responsive::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
 }
 .analytics-card:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,0.08); }
 .analytics-card h4 {

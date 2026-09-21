@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stationery-app-v1.4.4';
+const CACHE_NAME = 'stationery-app-v1.5.7';
 const ASSETS = [
   'index.html',
   'style.css',
@@ -19,32 +19,48 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            console.log('Deleting old Service Worker Cache:', cache);
-            return caches.delete(cache);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
-  );
+    event.waitUntil(
+        caches.keys().then((cacheNames) => {
+            return Promise.all(
+                cacheNames.map((cache) => {
+                    if (cache !== CACHE_NAME) {
+                        console.log('Deleting old Service Worker Cache:', cache);
+                        return caches.delete(cache);
+                    }
+                })
+            );
+        }).then(() => self.clients.claim())
+    );
 });
 
 self.addEventListener('fetch', (event) => {
-  const reqUrl = event.request.url;
-  // Bypass Service Worker for Google Apps Script, Firebase, and external APIs
-  if (reqUrl.includes('script.google.com') || reqUrl.includes('firebaseio.com') || reqUrl.includes('googleapis.com')) {
-    return; // Let the browser make a direct network request
-  }
+    const requestUrl = new URL(event.request.url);
 
-  event.respondWith(
-    caches.match(event.request).then((response) => {
-      return response || fetch(event.request);
-    }).catch(() => fetch(event.request))
-  );
+    // 1. Bypass non-GET requests and all external domains (Google Drive, Firebase, etc.)
+    if (event.request.method !== 'GET' ||
+        requestUrl.origin !== location.origin ||
+        requestUrl.hostname.includes('google') ||
+        requestUrl.hostname.includes('firebase') ||
+        requestUrl.hostname.includes('via.placeholder.com')) {
+        return; // Allow native browser fetch without SW interception
+    }
+
+    // 2. Handle local assets with Network-First, Cache-Fallback strategy
+    event.respondWith(
+        fetch(event.request)
+            .then((response) => {
+                if (response && response.status === 200 && response.type === 'basic') {
+                    const responseClone = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => {
+                        cache.put(event.request, responseClone);
+                    });
+                }
+                return response;
+            })
+            .catch(() => {
+                return caches.match(event.request);
+            })
+    );
 });
 
 self.addEventListener('push', (event) => {

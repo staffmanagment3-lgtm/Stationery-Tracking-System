@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.4.4";
+const APP_VERSION = "1.5.7";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -46,12 +46,25 @@ const PAGE_SIZE = 10;
 const IMG_RETRY_LIMIT = 3;
 const IMG_RETRY_BASE_MS = 1000;
 
-const FALLBACK_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
-        <rect width="100%" height="100%" fill="#f1f5f9"/>
-        <text x="50%" y="50%" font-size="14" fill="#94a3b8" text-anchor="middle" dy=".3em" font-family="sans-serif">No Image</text>
-    </svg>`
-);
+const OFF_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23e0e0e0'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%23757575' font-size='12' font-family='sans-serif'>No Image</text></svg>";
+const OFFLINE_PLACEHOLDER = "data:image/svg+xml;utf8," + OFF_SVG;
+const FALLBACK_IMG = OFFLINE_PLACEHOLDER;
+
+function isValidImageUrl(url) {
+    if (!url) return false;
+    const cleanUrl = String(url).trim().toLowerCase();
+    return cleanUrl !== '' && cleanUrl !== 'undefined' && cleanUrl !== 'null' && cleanUrl !== '[object object]';
+}
+
+function getItemImageHtml(imageUrl) {
+    const src = isValidImageUrl(imageUrl) ? imageUrl : OFFLINE_PLACEHOLDER;
+    return `<img src="${src}"
+                 alt="Item Image"
+                 class="img-thumbnail"
+                 style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px;"
+                 loading="lazy"
+                 onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />`;
+}
 
 // ==================== STATE ====================
 let currentUser = null;
@@ -69,11 +82,72 @@ let teacherRequestPad = null;
 let handoverPad = null;
 let selectedOrderIdForApproval = null;
 window.activeHandoverRequestId = null;
+window.currentHandoverOrder = null;
+
+window.initSignaturePad = function(canvasId, clearBtnId) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return null;
+
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width || 400;
+    canvas.height = 200;
+
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+
+    let isDrawing = false;
+
+    function getPos(e) {
+        const r = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return { x: clientX - r.left, y: clientY - r.top };
+    }
+
+    function startDraw(e) {
+        isDrawing = true;
+        const pos = getPos(e);
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        if (e.cancelable) e.preventDefault();
+        const pos = getPos(e);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+        window.isSignatureProvided = true;
+    }
+
+    function stopDraw() { isDrawing = false; }
+
+    canvas.onmousedown = startDraw;
+    canvas.onmousemove = draw;
+    canvas.onmouseup = stopDraw;
+
+    canvas.addEventListener('touchstart', startDraw, { passive: false });
+    canvas.addEventListener('touchmove', draw, { passive: false });
+    canvas.addEventListener('touchend', stopDraw);
+
+    const clearBtn = document.getElementById(clearBtnId);
+    if (clearBtn) {
+        clearBtn.onclick = function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            window.isSignatureProvided = false;
+        };
+    }
+
+    return canvas;
+};
 
 const catalogState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
 const adminInventoryState = { allItems: [], filtered: [], currentPage: 1, searchTerm: '' };
 const auditLedgerState = { allItems: [], filtered: [], currentPage: 1 };
 const teacherOrdersState = { allItems: [], filtered: [], currentPage: 1 };
+let teacherAnalyticsData = []; // Store stats for modal filtering (v1.5.1)
 
 const alertedRequests = new Set();
 
@@ -190,6 +264,7 @@ window.handleFinalHandover = async function(event, orderId) {
 
     const summaryEl = $('handover-order-summary');
     const selectionEl = $('handover-batch-selection');
+    const existingSigEl = document.getElementById('existingReceiverSigPreview');
 
     if (selectionEl) selectionEl.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm text-primary"></div> Loading batches...</div>';
 
@@ -197,6 +272,8 @@ window.handleFinalHandover = async function(event, orderId) {
         const snap = await get(ref(db, `orders/${orderId}`));
         if (snap.exists()) {
             const order = snap.val();
+            window.currentHandoverOrder = order; // Save order context for submission
+
             if (summaryEl) {
                 summaryEl.innerHTML = `
                     <div class="d-flex justify-content-between">
@@ -204,6 +281,20 @@ window.handleFinalHandover = async function(event, orderId) {
                         <span class="badge bg-white text-primary border">${order.items?.length || 0} Items</span>
                     </div>
                 `;
+            }
+
+            // Preview existing signature if available
+            if (existingSigEl) {
+                const savedSig = order.teacherRequestSignature || order.signatureUrl || order.receiverSignature;
+                if (savedSig) {
+                    existingSigEl.innerHTML = `
+                        <div class="p-2 border rounded bg-light mb-3 text-start">
+                            <p class="text-muted small mb-1 fw-bold">Stored Request Signature:</p>
+                            <img src="${savedSig}" style="max-height:80px; border:1px solid #ddd; border-radius:4px; background:white; padding:2px;">
+                        </div>`;
+                } else {
+                    existingSigEl.innerHTML = '';
+                }
             }
 
             if (selectionEl) {
@@ -248,12 +339,8 @@ window.handleFinalHandover = async function(event, orderId) {
 
         if (!modalEl.hasAttribute('data-listener-attached')) {
             modalEl.addEventListener('shown.bs.modal', function () {
-                const canvas = document.getElementById('handover-signature-pad');
-                if (canvas) {
-                    canvas.width = canvas.offsetWidth;
-                    canvas.height = 200;
-                    window.initSignaturePad(canvas);
-                }
+                window.initSignaturePad('handover-signature-pad', 'clear-handover-sig');
+                window.isSignatureProvided = false; // Reset for new session
             });
             modalEl.setAttribute('data-listener-attached', 'true');
         }
@@ -275,35 +362,51 @@ window.submitHandoverWithSignature = async function(event) {
         return;
     }
 
-    if (!window.isSignatureProvided) {
+    const orderId = window.activeHandoverRequestId;
+    const canvas = document.getElementById('handover-signature-pad');
+    const currentOrder = window.currentHandoverOrder;
+
+    // Determine handover signature (Canvas vs Stored)
+    let handoverSignature = null;
+    const canvasIsBlank = isCanvasBlank(canvas);
+
+    if (!canvasIsBlank) {
+        handoverSignature = canvas.toDataURL('image/png');
+    } else if (currentOrder && (currentOrder.teacherRequestSignature || currentOrder.signatureUrl || currentOrder.receiverSignature)) {
+        console.log("No new signature provided, falling back to stored request signature.");
+        handoverSignature = currentOrder.teacherRequestSignature || currentOrder.signatureUrl || currentOrder.receiverSignature;
+    }
+
+    if (!handoverSignature) {
         alert("Receiver signature is required to complete handover.");
         return;
     }
 
-    const orderId = window.activeHandoverRequestId;
-    const canvas = document.getElementById('handover-signature-pad');
-    const base64Signature = canvas.toDataURL('image/png');
     const adminName = sessionStorage.getItem('userName') || (currentUser && currentUser.name) || 'Admin';
 
     try {
         showToast("Processing handover and updating stock...", "info");
 
-        let driveSignatureUrl = base64Signature;
-        try {
-            const signaturePayload = {
-                image: base64Signature,
-                filename: `Handover_${orderId}.png`,
-                folderType: 'signatures',
-                orderId: orderId,
-                issuedBy: adminName
-            };
-            const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
-            if (url) {
-                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(signaturePayload) });
-                const result = await response.json();
-                if (result.status === 'success') driveSignatureUrl = result.fileUrl;
-            }
-        } catch (e) { console.warn("Signature upload fallback"); }
+        let driveSignatureUrl = handoverSignature;
+        // Only upload if it's a new dataURL from canvas
+        if (handoverSignature.startsWith('data:image')) {
+            try {
+                const compressedSig = await window.compressBase64Image(handoverSignature);
+                const signaturePayload = {
+                    image: compressedSig,
+                    filename: `Handover_${orderId}.jpg`,
+                    folderType: 'signatures',
+                    orderId: orderId,
+                    issuedBy: adminName
+                };
+                const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+                if (url) {
+                    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(signaturePayload) });
+                    const result = await response.json();
+                    if (result.status === 'success') driveSignatureUrl = result.fileUrl;
+                }
+            } catch (e) { console.warn("Signature upload fallback"); }
+        }
 
         const updatedItems = [];
         for (const drop of dropdowns) {
@@ -520,20 +623,26 @@ window.viewOrderReceipt = async function(orderId) {
         $('receipt-issuer-name').innerText = order.issuedBy || order.handedOverBy || "Authorized Admin";
         $('receipt-pickup-location').innerText = order.pickupLocation || "Main Store";
 
-        const list = $('receipt-items-list');
-        list.innerHTML = (order.items || []).map(item => `
-            <tr>
-                <td class="text-center">
-                    <img src="${getDirectDriveUrl(item.imageUrl)}" style="width: 50px; height: 40px; object-fit: contain; border-radius: 4px;">
-                </td>
-                <td>
-                    <div class="fw-bold">${escapeHtml(item.itemName)}</div>
-                    <small class="text-muted">${escapeHtml(item.brandName || '')}</small>
-                </td>
-                <td class="text-center"><code>${item.batchSerialNumber || item.itemSn || '-'}</code></td>
-                <td class="text-center fw-bold">${item.requestQuantity}</td>
-            </tr>
-        `).join('');
+    $('receipt-items-list').innerHTML = (order.items || []).map(item => {
+        const itemImg = isValidImageUrl(item.imageUrl) ? item.imageUrl : (inventoryData[item.itemName]?.imageUrl || FALLBACK_IMG);
+        return `
+        <tr>
+            <td class="text-center">
+                <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 50px; height: 40px; object-fit: contain; border-radius: 4px;" loading="lazy">
+            </td>
+            <td>
+                <div class="fw-bold">${escapeHtml(item.itemName)}</div>
+                <small class="text-muted" style="font-size:9px; word-break: break-all;">Source: ${itemImg}</small>
+            </td>
+            <td class="text-center"><code>${item.batchSerialNumber || item.serial || item.itemSn || '-'}</code></td>
+            <td class="text-center fw-bold">${item.requestQuantity}</td>
+        </tr>
+    `}).join('');
+
+    // Lazy load receipt images via cache
+    document.querySelectorAll('.receipt-thumb').forEach(img => {
+        window.loadCachedImage(img, img.dataset.url);
+    });
 
         $('receipt-teacher-sig').src = order.teacherRequestSignature || order.handoverSignature || "";
         $('receipt-admin-sig').src = order.handoverSignatureUrl || order.handoverSignature || "";
@@ -641,6 +750,17 @@ function setupResponsiveSignaturePad(canvasId) {
     };
 }
 
+function isCanvasBlank(canvas) {
+    if (!canvas) return true;
+    try {
+        const context = canvas.getContext('2d');
+        const pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        return !pixelData.some(channel => channel !== 0);
+    } catch (e) {
+        return true;
+    }
+}
+
 function getStatusBadge(qty) {
   const numericQty = Number(qty) || 0;
   if (numericQty <= 0) return `<span class="badge bg-danger">Out of Stock</span>`;
@@ -677,20 +797,145 @@ window.handleImageError = function(imgElement, originalUrl) {
     imgElement.removeAttribute('data-retries');
 };
 
-function attachSmartImage(imgEl, rawUrl) {
-    const url = getDirectDriveUrl(rawUrl, 0);
-    imgEl.classList.add('lazy-load');
-    imgEl.setAttribute('data-retries', '0');
-    imgEl.onload = () => {
-        imgEl.classList.remove('lazy-load');
-        imgEl.classList.add('loaded');
-        imgEl.parentElement?.classList.remove('skeleton');
+/**
+ * Safely sets an image source with a reliable fallback (v1.5.5)
+ */
+function safeSetImage(imgElement, url) {
+    if (!imgElement) return;
+    imgElement.onerror = (e) => {
+        imgElement.onerror = null;
+        imgElement.src = OFFLINE_PLACEHOLDER;
     };
-    imgEl.onerror = () => handleImageError(imgEl, rawUrl);
-    imgEl.src = url;
+    if (!isValidImageUrl(url)) {
+        imgElement.src = OFFLINE_PLACEHOLDER;
+        return;
+    }
+    const finalUrl = getDirectDriveUrl(url);
+    imgElement.src = finalUrl;
 }
 
+function attachSmartImage(imgEl, rawUrl) {
+    imgEl.loading = "lazy"; // Native Lazy Loading
+    window.loadCachedImage(imgEl, rawUrl);
+}
+
+// ==================== IMAGE CACHING (v1.5.3) ====================
+const ImageCache = {
+    dbName: 'StationeryAppImageCache',
+    storeName: 'cached_images',
+
+    async openDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, 1);
+            request.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(this.storeName)) {
+                    db.createObjectStore(this.storeName);
+                }
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    },
+
+    async get(key) {
+        try {
+            const db = await this.openDB();
+            return new Promise((resolve) => {
+                const tx = db.transaction(this.storeName, 'readonly');
+                const store = tx.objectStore(this.storeName);
+                const req = store.get(key);
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => resolve(null);
+            });
+        } catch (e) { return null; }
+    },
+
+    async set(key, value) {
+        try {
+            const db = await this.openDB();
+            const tx = db.transaction(this.storeName, 'readwrite');
+            const store = tx.objectStore(this.storeName);
+            store.put(value, key);
+        } catch (e) { console.warn("Failed to cache image locally", e); }
+    }
+};
+
+window.loadCachedImage = async function(imgElement, imageSrcOrId) {
+    if (!imgElement) return;
+
+    imgElement.onerror = () => {
+        imgElement.onerror = null;
+        imgElement.src = OFFLINE_PLACEHOLDER;
+    };
+
+    if (!isValidImageUrl(imageSrcOrId) || imageSrcOrId === FALLBACK_IMG) {
+        imgElement.src = OFFLINE_PLACEHOLDER;
+        return;
+    }
+
+    // Step 1: Synchronously set the direct URL to prevent rendering delays (CORS-Safe)
+    const directUrl = getDirectDriveUrl(imageSrcOrId);
+    imgElement.src = directUrl;
+
+    // Step 2: Determine if we should attempt background caching in IndexedDB
+    const isExternal = directUrl.includes('drive.google.com') ||
+                       directUrl.includes('googleusercontent.com') ||
+                       directUrl.includes('firebasestorage');
+
+    if (isExternal) {
+        // Skip async fetch/cache for external images to avoid CORS policy blockages
+        imgElement.classList.add('loaded');
+        return;
+    }
+
+    // Local assets or Base64 can be cached/retrieved from IndexedDB
+    const cacheKey = imageSrcOrId;
+    const cachedData = await ImageCache.get(cacheKey);
+
+    if (cachedData) {
+        imgElement.src = cachedData;
+        imgElement.classList.add('loaded');
+        imgElement.parentElement?.classList.remove('skeleton');
+        return;
+    }
+
+    // If it's a data URL, cache it immediately
+    if (directUrl.startsWith('data:image')) {
+        imgElement.classList.add('loaded');
+        await ImageCache.set(cacheKey, directUrl);
+        return;
+    }
+};
+
 // ==================== IMAGE PROCESSING UTILITIES ====================
+
+window.compressBase64Image = async function(base64Str, maxWidth = 800, quality = 0.6) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.src = base64Str;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+
+            if (width > maxWidth) {
+                height = Math.round((height * maxWidth) / width);
+                width = maxWidth;
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => resolve(base64Str);
+    });
+};
 
 window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
   return new Promise((resolve) => {
@@ -764,6 +1009,16 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = String(text);
     return div.innerHTML;
+}
+
+/**
+ * Generic Firebase Sanitizer (v1.4.5)
+ * Strips 'undefined' values and converts them to empty strings to prevent RTDB set() errors.
+ */
+function sanitizeForFirebase(obj) {
+    return JSON.parse(JSON.stringify(obj, (key, value) => {
+        return value === undefined ? "" : value;
+    }));
 }
 
 function showToast(message, type = 'success') {
@@ -1117,9 +1372,11 @@ window.uploadPhotoToGoogleDrive = async function(base64Image, fileName, folderTy
   }
 
   try {
-    console.log("Uploading photo to Google Drive...");
+    console.log("Compressing and uploading photo to Google Drive...");
+    const compressed = await window.compressBase64Image(base64Image);
+
     const payload = {
-      image: base64Image,
+      image: compressed,
       filename: fileName || `Item_${Date.now()}.jpg`,
       folderType: folderType
     };
@@ -1669,6 +1926,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('input', applyAuditFilters);
     });
 
+    // Teacher Analytics Modal Search
+    $('teacherSearchInput')?.addEventListener('input', (e) => {
+        renderTeacherAnalyticsTable(e.target.value);
+    });
+
     const invFilterCategory = $('inventory-filter-category');
     if (invFilterCategory) invFilterCategory.addEventListener('change', () => {
         adminInventoryState.currentPage = 1;
@@ -2170,7 +2432,8 @@ function fetchInventory() {
             const batches = Object.values(catData.batches || {});
             const totalStock = batches.reduce((sum, b) => sum + (parseInt(b.currentStock) || 0), 0);
 
-            const firstImg = batches.find(b => b.imageUrl && b.imageUrl !== FALLBACK_IMG)?.imageUrl || FALLBACK_IMG;
+            const firstImg = batches.find(b => b.imageUrl && b.imageUrl !== FALLBACK_IMG)?.imageUrl || catData.imageUrl || FALLBACK_IMG;
+            const topSerial = batches[0]?.serialNumber || catData.serialNumber || 'N/A';
 
             return {
                 id: catName,
@@ -2178,7 +2441,8 @@ function fetchInventory() {
                     itemName: catName,
                     quantity: totalStock,
                     imageUrl: firstImg,
-                    description: batches[0]?.brandName ? `Multiple brands available including ${batches[0].brandName}.` : "Stationery supplies."
+                    serialNumber: topSerial,
+                    description: batches[0]?.brandName ? `Multiple brands available including ${batches[0].brandName}.` : (catData.description || "Stationery supplies.")
                 }
             };
         });
@@ -2206,7 +2470,16 @@ function renderCatalogPage() {
     if (pageItems.length === 0) { list.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#64748b;padding:30px;">No items found.</p>'; return; }
     pageItems.forEach(({ id, data }) => {
         const card = document.createElement('div'); card.className = 'inventory-card';
-        card.innerHTML = `<div class="card-img-wrap skeleton"><img alt="" loading="lazy"></div><div class="card-body"><h3 class="card-title">${escapeHtml(data.itemName)}</h3><p class="serial">SN: ${escapeHtml(data.serialNumber || 'N/A')}</p><p class="description">${escapeHtml(data.description || '')}</p><button class="add-to-cart-btn" onclick="window.viewItemDetails('${id}')">View Details</button></div>`;
+        card.innerHTML = `
+            <div class="card-img-wrap skeleton">
+                <img alt="" loading="lazy">
+            </div>
+            <div class="card-body">
+                <h4 class="card-title">${escapeHtml(data.itemName)}</h4>
+                <p class="serial">SN: ${escapeHtml(data.serialNumber || 'N/A')}</p>
+                <p class="description">${escapeHtml(data.description || '')}</p>
+                <button class="add-to-cart-btn" onclick="window.viewItemDetails('${id}')">View Details</button>
+            </div>`;
         attachSmartImage(card.querySelector('img'), data.imageUrl);
         list.appendChild(card);
     });
@@ -2443,7 +2716,7 @@ function renderMasterInventory() {
                     // Render synthetic fallback batch row for legacy items
                     html += `
                         <tr>
-                            <td data-label="Image"><img src="${getDirectDriveUrl(catData.imageUrl)}" class="rounded" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;"></td>
+                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
                             <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
                             <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
                             <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
@@ -2462,7 +2735,7 @@ function renderMasterInventory() {
                     const cStock = parseInt(batch.currentStock) || 0;
                     html += `
                         <tr>
-                            <td data-label="Image"><img src="${getDirectDriveUrl(batch.imageUrl)}" class="rounded" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;"></td>
+                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${batch.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
                             <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
                             <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
                             <td data-label="Received Date">${batch.receivedDate || '-'}</td>
@@ -2482,6 +2755,11 @@ function renderMasterInventory() {
         if (!html) html = '<div class="text-center text-muted p-5 bg-light rounded">No inventory categories found matching filters.</div>';
 
         container.innerHTML = html;
+
+        // Lazy load inventory batch images
+        document.querySelectorAll('.inventory-batch-thumb').forEach(img => {
+            if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
+        });
 
     } catch (err) {
         console.error("Render Error:", err);
@@ -2512,22 +2790,133 @@ window.deleteBatch = async function(catName, batchId) {
 // ==================== ANALYTICS & LEDGER ====================
 function fetchOrderHistoryForAnalytics() {
     addListener(ref(db, 'orders'), (snap) => {
-        const container = $('analytics-cards'); if (!container) return;
-        const data = snap.val() || {}; const entries = Object.values(data);
-        let total = entries.length, p = 0, a = 0, d = 0; const stats = {};
+        const container = $('analytics-cards');
+        if (!container) return;
+
+        const data = snap.val() || {};
+        const entries = Object.values(data);
+        let totalOrders = entries.length;
+        let p = 0, a = 0, d = 0;
+        const teacherStats = {};
+
         entries.forEach(o => {
-            if (o.status === 'Pending Approval') p++; else if (o.status === 'Approved') a++; else if (o.status === 'Handover Complete / Done') d++;
-            const name = o.teacherName || 'Staff'; const units = (o.items || []).reduce((s, i) => s + (parseInt(i.requestQuantity) || 0), 0);
-            stats[name] = (stats[name] || 0) + units;
+            // Pipeline calculation
+            if (o.status === 'Pending Approval') p++;
+            else if (o.status.includes('Approved') || o.status.includes('Ready')) a++;
+            else if (o.status.includes('Done') || o.status === 'Completed') d++;
+
+            // Per Teacher stats
+            const teacherId = o.teacherUid || 'Unknown';
+            const teacherName = o.teacherName || 'Staff Member';
+            const key = `${teacherId}_${teacherName}`;
+
+            if (!teacherStats[key]) {
+                teacherStats[key] = { id: teacherId, name: teacherName, orders: 0, units: 0, p: 0, a: 0, d: 0 };
+            }
+
+            teacherStats[key].orders++;
+            const units = (o.items || []).reduce((s, i) => s + (parseInt(i.requestQuantity) || 0), 0);
+            teacherStats[key].units += units;
+
+            if (o.status === 'Pending Approval') teacherStats[key].p++;
+            else if (o.status.includes('Approved') || o.status.includes('Ready')) teacherStats[key].a++;
+            else if (o.status.includes('Done') || o.status === 'Completed') teacherStats[key].d++;
         });
-        container.innerHTML = `<div class="analytics-card"><h4>Total Orders</h4><div class="total-items">${total}</div><p>Lifetime</p></div><div class="analytics-card"><h4>Pipeline</h4><div class="total-items" style="font-size:16px; margin-top:8px;"><span style="color:#f1c40f;">${p}P</span> | <span style="color:#3498db;">${a}A</span> | <span style="color:#27ae60;">${d}D</span></div><p>P/A/D Status</p></div>`;
-        Object.entries(stats).sort((a, b) => b[1] - a[1]).slice(0, 2).forEach(([name, count]) => {
-            const card = document.createElement('div'); card.className = 'analytics-card';
-            card.innerHTML = `<h4>${escapeHtml(name)}</h4><div class="total-items">${count}</div><p>Units Issued</p>`;
-            container.appendChild(card);
-        });
+
+        // Convert to array for filtering/rendering
+        teacherAnalyticsData = Object.values(teacherStats).sort((a, b) => b.units - a.units);
+
+        // 1. Total Orders Card
+        let html = `
+            <div class="analytics-card">
+                <i class="bi bi-cart-fill fs-3 text-primary mb-2 d-block"></i>
+                <h4>Total Orders</h4>
+                <div class="total-items">${totalOrders}</div>
+                <p class="text-muted small mb-0">Lifetime Volume</p>
+            </div>`;
+
+        // 2. Combined Pipeline Card
+        html += `
+            <div class="analytics-card">
+                <i class="bi bi-stack fs-3 text-warning mb-2 d-block"></i>
+                <h4>Pipeline Status</h4>
+                <div class="total-items" style="font-size:16px; margin-top:8px;">
+                    <span class="text-warning">${p}P</span> |
+                    <span class="text-primary">${a}A</span> |
+                    <span class="text-success">${d}D</span>
+                </div>
+                <p class="text-muted small mb-0">Pending / Approved / Done</p>
+            </div>`;
+
+        // 3. Teacher Breakdown Card
+        html += `
+            <div class="analytics-card" style="border: 1px solid #3498db; background: #f0f7ff !important;">
+                <i class="bi bi-people-fill fs-3 text-info mb-2 d-block"></i>
+                <h4>Teacher Usage</h4>
+                <div class="total-items">${teacherAnalyticsData.length} Staff</div>
+                <button class="btn btn-sm btn-primary fw-bold mt-2 w-100" data-bs-toggle="modal" data-bs-target="#teacherAnalyticsModal">
+                    View Breakdown 📊
+                </button>
+            </div>`;
+
+        container.innerHTML = html;
+
+        // Refresh modal table if it's already open
+        renderTeacherAnalyticsTable();
     });
 }
+
+function renderTeacherAnalyticsTable(filterText = '') {
+    const listBody = $('teacher-analytics-list-body');
+    if (!listBody) return;
+
+    const term = filterText.toLowerCase().trim();
+    const filtered = teacherAnalyticsData.filter(t =>
+        t.name.toLowerCase().includes(term) || t.id.toLowerCase().includes(term)
+    );
+
+    if (filtered.length === 0) {
+        listBody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-muted">No matching teachers found.</td></tr>`;
+        return;
+    }
+
+    listBody.innerHTML = filtered.map(t => `
+        <tr>
+            <td class="ps-3">
+                <div class="fw-bold text-dark">${escapeHtml(t.name)}</div>
+                <small class="text-muted">ID: ${escapeHtml(t.id)}</small>
+            </td>
+            <td class="text-center fw-semibold">${t.orders}</td>
+            <td class="text-center"><span class="badge bg-light text-primary border">${t.units} Units</span></td>
+            <td class="text-center">
+                <span class="small text-warning fw-bold">${t.p}P</span> /
+                <span class="small text-primary fw-bold">${t.a}A</span> /
+                <span class="small text-success fw-bold">${t.d}D</span>
+            </td>
+            <td class="text-end pe-3">
+                <button class="btn btn-link btn-sm p-0 text-decoration-none" onclick="showTeacherSpecificAudit('${escapeHtml(t.id)}')">View Audit</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+window.showTeacherSpecificAudit = function(teacherId) {
+    const modal = bootstrap.Modal.getInstance($('teacherAnalyticsModal'));
+    if (modal) modal.hide();
+
+    // Switch to Audit Ledger tab
+    const auditTabBtn = document.querySelector('[data-target="tab-audit-ledger"]');
+    if (auditTabBtn) auditTabBtn.click();
+
+    // Apply filter
+    const filterInput = $('audit-filter-teacher');
+    if (filterInput) {
+        filterInput.value = teacherId;
+        applyAuditFilters();
+    }
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+};
 
 function fetchAuditLedger() {
     addListener(ref(db, 'orders'), (snap) => {
@@ -2615,17 +3004,21 @@ function renderAuditLedger() {
             <td><small>${row.time}</small></td>
             <td><strong>${escapeHtml(row.teacherName)}</strong></td>
             <td><code>${escapeHtml(row.teacherId)}</code></td>
-            <td><img src="${getDirectDriveUrl(row.itemImageUrl)}" class="inventory-thumb" onerror="this.src='${FALLBACK_IMG}'"></td>
+            <td><img src="${FALLBACK_IMG}" class="inventory-thumb audit-thumb" data-url="${row.itemImageUrl}" loading="lazy"></td>
             <td>${escapeHtml(row.itemName)}</td>
             <td><code>${row.itemSn}</code></td>
             <td class="text-center"><strong>${row.qtyIssued}</strong></td>
-            <td>${row.teacherSignatureUrl ? `<img src="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;">` : '-'}</td>
+            <td>${row.teacherSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
             <td>${escapeHtml(row.issuerName)}</td>
-            <td>${row.issuerSignatureUrl ? `<img src="${row.issuerSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;">` : '-'}</td>
+            <td>${row.issuerSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.issuerSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
             <td class="text-center"><span class="badge bg-secondary">${row.stockBalance}</span></td>
             <td><span class="badge ${statusBadge}">${row.status}</span></td>
         `;
         list.appendChild(tr);
+    });
+
+    document.querySelectorAll('.audit-thumb').forEach(img => {
+        if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
     });
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
 }
@@ -2775,18 +3168,19 @@ window.submitFinalOrderWithSignature = async function() {
     try {
         let driveSignatureUrl = signatureDataUrl;
         try {
-            const uploadedUrl = await uploadPhotoToGoogleDrive(signatureDataUrl, `TeacherSign_${orderId}.png`, 'signatures');
+            const compressedSig = await window.compressBase64Image(signatureDataUrl);
+            const uploadedUrl = await uploadPhotoToGoogleDrive(compressedSig, `TeacherSign_${orderId}.jpg`, 'signatures');
             if (uploadedUrl) driveSignatureUrl = uploadedUrl;
         } catch (uploadErr) {
             console.warn("Teacher signature upload failed, using local data:", uploadErr);
         }
 
         const items = window.stationeryCart.map(item => ({
-            itemId: item.id,
-            itemName: item.itemName,
-            serial: item.serialNumber,
-            requestQuantity: item.requestQuantity,
-            imageUrl: item.imageUrl
+            itemId: item.id || '',
+            itemName: item.itemName || 'Stationery Item',
+            serial: item.serialNumber || item.serial || item.sn || 'N/A',
+            requestQuantity: Number(item.requestQuantity || 1),
+            imageUrl: item.imageUrl || item.image || ''
         }));
 
         const orderData = {
@@ -2801,7 +3195,9 @@ window.submitFinalOrderWithSignature = async function() {
             requestedAt: new Date().toISOString()
         };
 
-        await set(ref(db, 'orders/' + orderId), orderData);
+        // Sanitize payload before Firebase submission
+        const cleanOrderData = sanitizeForFirebase(orderData);
+        await set(ref(db, 'orders/' + orderId), cleanOrderData);
         await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
 
         window.stationeryCart = [];
@@ -2845,7 +3241,16 @@ function fetchAdminOrders() {
             if (order.status === 'Handover Complete / Done' || order.status === 'Completed') {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><button class="view-details-btn">View Voucher</button></td>`;
-                const wrap = tr.querySelector('.it-wrap'); (order.items || []).slice(0, 3).forEach(it => { const img = document.createElement('img'); img.className = 'inventory-thumb'; wrap.appendChild(img); attachSmartImage(img, it.imageUrl); });
+                const wrap = tr.querySelector('.it-wrap');
+                (order.items || []).slice(0, 3).forEach(it => {
+                    const img = document.createElement('img');
+                    img.className = 'inventory-thumb admin-order-thumb';
+                    // Fallback for missing imageUrl in order record
+                    const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
+                    img.dataset.url = finalImg;
+                    img.loading = "lazy";
+                    wrap.appendChild(img);
+                });
                 tr.querySelector('button').onclick = () => window.viewOrderReceipt(id);
                 historyList.appendChild(tr);
             } else {
@@ -2881,18 +3286,23 @@ function fetchAdminOrders() {
                 (order.items || []).forEach(it => {
                     const d = document.createElement('div'); d.className = 'd-flex align-items-center gap-2 mb-2 p-1 border rounded bg-white';
                     d.innerHTML = `
-                        <img class="inventory-thumb" width="45" height="45" style="object-fit: contain;">
+                        <img class="inventory-thumb admin-order-thumb" width="45" height="45" style="object-fit: contain;" data-url="${it.imageUrl}" loading="lazy">
                         <div style="flex: 1; overflow: hidden;">
                             <h6 class="mb-0 small fw-bold text-truncate">${escapeHtml(it.itemName)}</h6>
                             <small class="text-muted d-block" style="font-size: 9px;">SN: ${it.serial}</small>
                         </div>
                         <span class="badge bg-primary" style="font-size: 9px;">x${it.requestQuantity}</span>
                     `;
-                    wrap.appendChild(d); attachSmartImage(d.querySelector('img'), it.imageUrl);
+                    wrap.appendChild(d);
                 });
 
                 list.appendChild(card);
             }
+        });
+
+        // Lazy load admin order images
+        document.querySelectorAll('.admin-order-thumb').forEach(img => {
+            if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
         });
     });
 }
@@ -3010,10 +3420,23 @@ function renderTeacherOrderHistory() {
                 </div>
             </div>
             <button class="primary-btn blue omc-view-btn">View Receipt</button>`;
-        const cardItemsWrap = card.querySelector('.omc-items'); (order.items || []).slice(0, 3).forEach(it => { const img = document.createElement('img'); img.className='inventory-thumb'; cardItemsWrap.appendChild(img); attachSmartImage(img, it.imageUrl); });
+        const cardItemsWrap = card.querySelector('.omc-items');
+        (order.items || []).slice(0, 3).forEach(it => {
+            const img = document.createElement('img');
+            img.className = 'inventory-thumb teacher-order-thumb';
+            img.dataset.url = it.imageUrl;
+            img.loading = "lazy";
+            cardItemsWrap.appendChild(img);
+        });
         card.querySelector('.omc-view-btn').onclick = () => window.viewOrderReceipt(id);
         cards.appendChild(card);
     });
+
+    // Lazy load teacher order images
+    document.querySelectorAll('.teacher-order-thumb').forEach(img => {
+        if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
+    });
+
     renderPaginationControls('teacher-orders-pagination', teacherOrdersState, renderTeacherOrderHistory);
 }
 
@@ -3183,40 +3606,6 @@ async function exportHistory() {
     const data = []; Object.values((await get(ref(db, 'orders'))).val() || {}).forEach(o => { (o.items || []).forEach(i => { data.push({ 'ID': o.orderId, 'Staff': o.teacherName, 'Item': i.itemName, 'Qty': i.requestQuantity, 'Date': o.timestamp }); }); });
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Order_History"); XLSX.writeFile(wb, `History_${Date.now()}.xlsx`);
 }
-
-window.uploadPhotoToGoogleDrive = async function(base64Image, fileName) {
-  const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
-  if (!url) {
-      console.warn("Google Drive Script URL not configured.");
-      return null;
-  }
-
-  try {
-    console.log("Uploading photo to Google Drive...");
-    const payload = {
-      image: base64Image,
-      filename: fileName || `Item_${Date.now()}.jpg`
-    };
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
-      },
-      body: JSON.stringify(payload)
-    });
-    const result = await response.json();
-    if (result.status === 'success') {
-      return result.fileUrl;
-    } else {
-      console.error("Drive upload failed:", result.message);
-      return null;
-    }
-  } catch (error) {
-    console.error("Google Drive Fetch Error:", error);
-    return null;
-  }
-};
 
 window.openEditItemModal = function(itemId) {
     console.log("Editing item ID:", itemId);
