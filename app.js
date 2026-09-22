@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.6.5";
+const APP_VERSION = "1.6.6";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -711,7 +711,7 @@ window.viewOrderReceipt = async function(orderId) {
                 <small class="text-muted" style="font-size:9px; word-break: break-all; display:block; margin-top:4px;">Image URL: ${itemImg}</small>
             </td>
             <td class="text-center"><code>${item.batchSerialNumber || item.serial || item.itemSn || '-'}</code></td>
-            <td class="text-center fw-bold">${item.requestQuantity}</td>
+            <td class="text-center fw-bold">${item.requestQuantity} ${item.unit || 'Pcs'}</td>
         </tr>
     `}).join('');
 
@@ -1536,15 +1536,16 @@ window.renderCartModalItems = function() {
                 <img src="${item.imageUrl || item.image || FALLBACK_IMG}" style="width: 50px; height: 50px; object-fit: contain;" class="rounded border">
                 <div>
                     <h6 class="mb-0 fw-bold">${item.itemName || 'Stationery Item'}</h6>
-                    <small class="text-muted">SN: ${item.serialNumber || 'N/A'}</small>
+                    <small class="text-muted">SN: ${item.serialNumber || 'N/A'} | Unit: ${item.unit || 'Pcs'}</small>
                 </div>
             </div>
-            <div class="d-flex align-items-center gap-3">
+            <div class="d-flex flex-column align-items-end gap-2">
                 <div class="input-group input-group-sm" style="width: 110px;">
                     <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, -1)">-</button>
                     <input type="text" class="form-control text-center bg-white" value="${item.requestQuantity || 1}" readonly>
                     <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, 1)">+</button>
                 </div>
+                <small class="text-primary fw-bold">Qty: ${item.requestQuantity} ${item.unit || 'Pcs'}</small>
                 <button class="btn btn-outline-danger btn-sm" onclick="window.removeFromCart(${index})">🗑️</button>
             </div>
         </li>`;
@@ -2527,6 +2528,7 @@ function fetchInventory() {
                 data: {
                     itemName: actualName,
                     quantity: totalStock,
+                    unit: catData.unit || 'Pcs',
                     imageUrl: firstImg,
                     serialNumber: topSerial,
                     description: desc
@@ -2588,9 +2590,14 @@ function renderCatalogPage() {
                 </p>
 
                 <!-- 4. DESCRIPTION -->
-                <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
+                <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
                     ${escapeHtml(productDesc)}
                 </p>
+                <div class="mb-3">
+                    <span class="badge ${data.quantity > 0 ? 'bg-success' : 'bg-danger'} w-100 py-2">
+                        Stock: ${data.quantity} ${data.unit || 'Pcs'}
+                    </span>
+                </div>
 
                 <!-- 5. VIEW DETAILS BUTTON -->
                 <button class="add-to-cart-btn w-100" style="margin-top: auto;" onclick="window.viewItemDetails('${id}')">View Details</button>
@@ -2624,7 +2631,7 @@ window.viewItemDetails = function(itemId) {
     $('detail-item-name').innerText = productName;
     $('detail-item-sn').innerText = productSN;
     $('detail-item-description').innerText = "Description: " + productDesc;
-    $('detail-item-stock').innerText = data.quantity || '0';
+    $('detail-item-stock').innerText = (data.quantity || '0') + " " + (data.unit || 'Pcs');
 
     const imgUrl = data.imageUrl || data.image || data.photoUrl;
     $('detail-item-image').src = getDirectDriveUrl(imgUrl) || FALLBACK_IMG;
@@ -2816,7 +2823,7 @@ function renderMasterInventory() {
                         <h5 class="mb-0 fw-bold text-primary inventory-item-title"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(itemNameDisplay)}</h5>
                         <div class="inventory-item-actions d-flex align-items-center gap-3">
                             <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} total-stock-badge p-2 px-3 fs-6">
-                                Total Stock: ${totalStock}
+                                Total Stock: ${totalStock} ${catData.unit || 'Pcs'}
                             </span>
                             <button class="btn btn-sm btn-outline-primary fw-bold add-stock-btn" onclick="window.openAddStockModal('${escapeHtml(catId)}')">
                                 + Add Stock
@@ -2850,8 +2857,8 @@ function renderMasterInventory() {
                             <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
                             <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
                             <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
-                            <td data-label="Current Stock" class="text-center"><span class="badge bg-light text-dark border">${totalStock}</span></td>
-                            <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock}</td>
+                            <td data-label="Current Stock" class="text-center"><span class="badge bg-light text-dark border">${totalStock} ${catData.unit || 'Pcs'}</span></td>
+                            <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock} ${catData.unit || 'Pcs'}</td>
                             <td data-label="Status">${getStatusBadge(totalStock)}</td>
                             <td data-label="Actions" class="text-end">
                                 <span class="text-muted small">Legacy Record</span>
@@ -2871,8 +2878,8 @@ function renderMasterInventory() {
                             <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
                             <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
                             <td data-label="Received Date">${batch.receivedDate || '-'}</td>
-                            <td data-label="Current Stock" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'}">${cStock}</span></td>
-                            <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'}</td>
+                            <td data-label="Current Stock" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'}">${cStock} ${batch.unit || 'Pcs'}</span></td>
+                            <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'} ${batch.unit || 'Pcs'}</td>
                             <td data-label="Status">${getStatusBadge(cStock)}</td>
                             <td data-label="Actions" class="text-end">
                                 <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')">Delete</button>
@@ -3068,7 +3075,7 @@ function fetchAuditLedger() {
                     itemName: item.itemName || "N/A",
                     itemSn: item.batchSerialNumber || item.itemSn || 'N/A',
                     brandName: item.brandName || '-',
-                    qtyIssued: item.requestQuantity || 0,
+                    qtyIssued: (item.requestQuantity || 0) + " " + (item.unit || 'Pcs'),
                     teacherSignatureUrl: order.teacherRequestSignature || (order.signatures ? order.signatures.teacher : null),
                     issuerName: order.issuedBy || order.handedOverBy || (order.status.includes('Done') ? "Admin" : "Pending"),
                     issuerSignatureUrl: order.handoverSignatureUrl || order.handoverSignature || (order.signatures ? order.signatures.admin : null),
@@ -3272,6 +3279,7 @@ function addToCart(id, data, customQty = 1) {
             itemName: data.itemName,
             serialNumber: data.serialNumber,
             quantity: data.quantity,
+            unit: data.unit || 'Pcs',
             imageUrl: data.imageUrl,
             requestQuantity: customQty
         });
@@ -3323,6 +3331,7 @@ window.submitFinalOrderWithSignature = async function() {
             itemName: item.itemName || 'Stationery Item',
             serial: item.serialNumber || item.serial || item.sn || 'N/A',
             requestQuantity: Number(item.requestQuantity || 1),
+            unit: item.unit || 'Pcs',
             imageUrl: item.imageUrl || item.image || ''
         }));
 
@@ -3541,7 +3550,7 @@ function renderTeacherOrderHistory() {
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td>
-                <strong>${order.items ? order.items.map(i => i.itemName).join(', ') : 'Stationery'}</strong>
+                <strong>${order.items ? order.items.map(i => `${i.itemName} (${i.requestQuantity} ${i.unit || 'Pcs'})`).join(', ') : 'Stationery'}</strong>
                 <br><small class="text-muted">ID: ${id} | ${dateStr}</small>
             </td>
             <td><span class="badge ${statusBadge}">${order.status}</span></td>
@@ -3584,7 +3593,7 @@ function renderTeacherOrderHistory() {
 async function viewOrderDetails(id) {
     const snap = await get(ref(db, `orders/${id}`)); const order = snap.val();
     const content = $('order-detail-content');
-    content.innerHTML = `<div style="text-align:center;margin-bottom:15px;"><h3>Requisition Receipt</h3><p>ID: ${id}</p></div><p><strong>Staff:</strong> ${escapeHtml(order.teacherName)} (${order.teacherUid})</p><table class="history-table" style="margin:15px 0;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${order.items.map(i => `<tr><td>${escapeHtml(i.itemName)}</td><td>${i.requestQuantity}</td></tr>`).join('')}</tbody></table>${order.signatures ? `<div class="order-detail-signatures"><div class="signature-display-box"><small>Admin</small><br><img src="${order.signatures.admin}"></div><div class="signature-display-box"><small>Staff</small><br><img src="${order.signatures.teacher}"></div></div>` : ''}`;
+    content.innerHTML = `<div style="text-align:center;margin-bottom:15px;"><h3>Requisition Receipt</h3><p>ID: ${id}</p></div><p><strong>Staff:</strong> ${escapeHtml(order.teacherName)} (${order.teacherUid})</p><table class="history-table" style="margin:15px 0;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${order.items.map(i => `<tr><td>${escapeHtml(i.itemName)}</td><td>${i.requestQuantity} ${i.unit || 'Pcs'}</td></tr>`).join('')}</tbody></table>${order.signatures ? `<div class="order-detail-signatures"><div class="signature-display-box"><small>Admin</small><br><img src="${order.signatures.admin}"></div><div class="signature-display-box"><small>Staff</small><br><img src="${order.signatures.teacher}"></div></div>` : ''}`;
     $('order-detail-modal').classList.add('active');
 }
 
@@ -3800,6 +3809,7 @@ async function saveInventoryItem(e) {
         const itemDescription = $('inv-description').value.trim();
         const serialNumber = $('inv-serial-number').value.trim();
         const currentQty = parseInt($('inv-quantity').value) || 0;
+        const itemUnit = $('itemUnit')?.value || 'Pcs';
         const openingQty = parseInt($('inv-opening-quantity').value) || 0;
         const file = $('inv-image').files[0];
         const itemCategory = cat === 'Other' ? $('inv-custom-category').value.trim() : cat;
@@ -3827,6 +3837,7 @@ async function saveInventoryItem(e) {
             serialNumber: serialNumber,
             initialQty: currentQty,
             currentStock: currentQty,
+            unit: itemUnit,
             receivedDate: new Date().toISOString().split('T')[0],
             imageUrl: finalImageUrl,
             status: currentQty > 0 ? 'Active' : 'Out of Stock',
@@ -3839,6 +3850,7 @@ async function saveInventoryItem(e) {
             category: itemCategory,
             description: itemDescription,
             quantity: currentQty,
+            unit: itemUnit,
             openingQuantity: openingQty,
             imageUrl: finalImageUrl,
             createdAt: new Date().toISOString(),
