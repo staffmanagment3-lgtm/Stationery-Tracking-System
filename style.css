@@ -455,12 +455,31 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
     flex-grow: 1;
 }
 
-/* ==================== GRID (Catalog) ==================== */
+/* Responsive Auto-Filling Catalog Grid */
+#catalogGridContainer,
+.catalog-grid,
+.stationery-catalog-grid,
+#stationery-list,
 .grid-container {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 14px;
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)) !important;
+    gap: 16px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    align-items: stretch !important;
     margin-top: 16px;
+}
+
+/* Ensure catalog cards scale smoothly inside grid cells */
+.catalog-card,
+.stationery-card,
+.inventory-card {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
 }
 
 /* ==================== INVENTORY ITEM HEADER (BATCH AWARE) ==================== */
@@ -1510,6 +1529,8 @@ body.modal-open {
         padding: 2px 8px !important;
     }
 
+/* Responsive Batch Inventory Table (Mobile Only) */
+@media (max-width: 768px) {
     .batch-inventory-table thead {
         display: none !important;
     }
@@ -1540,18 +1561,6 @@ body.modal-open {
     }
 
     .batch-inventory-table td:last-child {
-
-    .user-profile-badge .text-muted {
-        font-size: 9px !important;
-    }
-
-    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
-        height: 32px !important;
-        min-height: 32px !important;
-        font-size: 0.75rem !important;
-        padding: 2px 8px !important;
-    }
-}
         border-bottom: none !important;
     }
 
@@ -1572,6 +1581,18 @@ body.modal-open {
     .batch-inventory-table td.empty-batch-cell::before {
         display: none !important;
     }
+}
+
+/* Ensure no duplicate labels inside table cells on Desktop */
+@media (min-width: 769px) {
+    #master-inventory-table td::before,
+    .batch-inventory-table td::before,
+    .table td::before,
+    .history-table td::before {
+        display: none !important;
+        content: "" !important;
+    }
+}
 
     .content { padding: 14px; }
     .form-container { padding: 18px 16px; }

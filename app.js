@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.6.6";
+const APP_VERSION = "1.7.6";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -2523,10 +2523,14 @@ function fetchInventory() {
                 desc = "Stationery supplies.";
             }
 
+            const categoryName = catData.category || catData.itemCategory || catData.type || catId;
+
             return {
                 id: catId,
+                category: categoryName,
                 data: {
                     itemName: actualName,
+                    category: categoryName,
                     quantity: totalStock,
                     unit: catData.unit || 'Pcs',
                     imageUrl: firstImg,
@@ -2542,12 +2546,85 @@ function fetchInventory() {
     });
 }
 
+// 1. Populate Dropdown Options Dynamically from Loaded Firebase Items
+window.populateCategoryDropdown = function(items) {
+    const categorySelect = document.getElementById('categoryFilterSelect');
+    const catalogList = items || window.allCatalogItems || catalogState.allItems || [];
+    if (!categorySelect || !Array.isArray(catalogList)) return;
+
+    const currentSelected = categorySelect.value || 'ALL';
+
+    // Extract unique categories from items list
+    const categories = new Set();
+    catalogList.forEach(item => {
+        const data = item.data || item;
+        const cat = item.category || data.category || data.itemCategory || data.type;
+        if (cat && typeof cat === 'string' && cat.trim() !== '') {
+            categories.add(cat.trim());
+        }
+    });
+
+    // Build Dropdown HTML Options
+    let optionsHtml = `<option value="ALL">📁 All Categories</option>`;
+    Array.from(categories).sort().forEach(cat => {
+        optionsHtml += `<option value="${cat}">${cat}</option>`;
+    });
+
+    categorySelect.innerHTML = optionsHtml;
+
+    // Restore selection if category still exists
+    if (categories.has(currentSelected)) {
+        categorySelect.value = currentSelected;
+    } else {
+        categorySelect.value = 'ALL';
+    }
+};
+
+// 2. Combined Search + Category Filter Function
+window.applyCatalogFilters = function() {
+    const searchInput = document.getElementById('searchCatalogInput') || document.getElementById('stationery-search');
+    const categorySelect = document.getElementById('categoryFilterSelect');
+
+    const searchQuery = searchInput ? searchInput.value.trim().toLowerCase() : (catalogState.searchTerm || '');
+    const selectedCategory = categorySelect ? categorySelect.value : 'ALL';
+
+    catalogState.searchTerm = searchQuery;
+    const allItems = window.allCatalogItems || catalogState.allItems || [];
+
+    // Filter by BOTH search query AND selected category simultaneously
+    const filteredItems = allItems.filter(item => {
+        const data = item.data || item;
+        // Match Search Query
+        const name = (data.itemName || data.name || '').toString().toLowerCase();
+        const serial = (data.serialNumber || data.sn || data.code || '').toString().toLowerCase();
+        const brand = (data.brandName || data.brand || '').toString().toLowerCase();
+
+        const matchesSearch = searchQuery === '' ||
+                              name.includes(searchQuery) ||
+                              serial.includes(searchQuery) ||
+                              brand.includes(searchQuery);
+
+        // Match Selected Category
+        const itemCategory = (item.category || data.category || data.itemCategory || data.type || '').toString();
+        const matchesCategory = (selectedCategory === 'ALL') ||
+                                (itemCategory.trim().toLowerCase() === selectedCategory.trim().toLowerCase());
+
+        return matchesSearch && matchesCategory;
+    });
+
+    window.filteredCatalogItems = filteredItems;
+    catalogState.filtered = filteredItems;
+    catalogState.currentPage = 1;
+
+    // Re-render catalog page with filtered results starting at Page 1
+    if (typeof renderCatalogPage === 'function') {
+        renderCatalogPage(1);
+    }
+};
+
 function resetCatalog() {
-    const term = catalogState.searchTerm;
-    catalogState.filtered = term
-        ? catalogState.allItems.filter(({ data }) => (data.itemName || '').toLowerCase().includes(term) || (data.serialNumber || '').toLowerCase().includes(term))
-        : catalogState.allItems.slice();
-    renderCatalogPage();
+    populateCategoryDropdown(catalogState.allItems);
+    applyCatalogFilters();
 }
 
 function renderCatalogPage() {
@@ -2851,17 +2928,24 @@ function renderMasterInventory() {
                     // Render synthetic fallback batch row for legacy items
                     html += `
                         <tr>
-                            <td data-label="Image">
+                            <td class="text-center align-middle">
                                 ${window.createReloadableImgHtml(catData.imageUrl, catData.itemName, '', true)}
                             </td>
-                            <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
-                            <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
-                            <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
-                            <td data-label="Current Stock" class="text-center"><span class="badge bg-light text-dark border">${totalStock} ${catData.unit || 'Pcs'}</span></td>
-                            <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock} ${catData.unit || 'Pcs'}</td>
-                            <td data-label="Status">${getStatusBadge(totalStock)}</td>
-                            <td data-label="Actions" class="text-end">
-                                <span class="text-muted small">Legacy Record</span>
+                            <td class="align-middle"><span class="fw-bold text-dark">Initial / Legacy Stock</span></td>
+                            <td class="align-middle"><span class="text-danger fw-bold">${escapeHtml(catData.serialNumber || 'N/A')}</span></td>
+                            <td class="align-middle"><span>${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</span></td>
+                            <td class="align-middle text-center"><span class="badge bg-light text-dark border px-2 py-1 fw-bold">${totalStock} ${catData.unit || 'Pcs'}</span></td>
+                            <td class="align-middle text-center"><span>${catData.openingQuantity || totalStock} ${catData.unit || 'Pcs'}</span></td>
+                            <td class="align-middle text-center">${getStatusBadge(totalStock)}</td>
+                            <td class="align-middle text-center">
+                                <div class="d-flex gap-1 justify-content-center">
+                                    <button type="button" class="btn btn-sm btn-warning fw-bold" onclick="openEditItemModal('${escapeHtml(catId)}')" title="Edit Photo, Quantity & Details">
+                                        ✏️ Edit
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-danger fw-bold" onclick="deleteInventoryItem('${escapeHtml(catId)}')" title="Delete Item">
+                                        🗑️ Delete
+                                    </button>
+                                </div>
                             </td>
                         </tr>`;
                 } else {
@@ -2870,19 +2954,33 @@ function renderMasterInventory() {
             } else {
                 batchEntries.forEach(([batchId, batch]) => {
                     const cStock = parseInt(batch.currentStock) || 0;
+                    const unit = batch.unit || 'Pcs';
                     html += `
                         <tr>
-                            <td data-label="Image">
+                            <td class="text-center align-middle">
                                 ${window.createReloadableImgHtml(batch.imageUrl, batch.brandName, '', true)}
                             </td>
-                            <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
-                            <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
-                            <td data-label="Received Date">${batch.receivedDate || '-'}</td>
-                            <td data-label="Current Stock" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'}">${cStock} ${batch.unit || 'Pcs'}</span></td>
-                            <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'} ${batch.unit || 'Pcs'}</td>
-                            <td data-label="Status">${getStatusBadge(cStock)}</td>
-                            <td data-label="Actions" class="text-end">
-                                <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')">Delete</button>
+                            <td class="align-middle">
+                                <span class="fw-bold text-dark">${escapeHtml(batch.brandName || 'Standard')}</span>
+                                ${batch.manufacturer ? `<br><small class="text-muted">${escapeHtml(batch.manufacturer)}</small>` : ''}
+                            </td>
+                            <td class="align-middle">
+                                <span class="text-danger fw-bold">${escapeHtml(batch.serialNumber || 'N/A')}</span>
+                                ${batch.batchNumber ? `<br><small class="text-muted">Batch: ${escapeHtml(batch.batchNumber)}</small>` : ''}
+                            </td>
+                            <td class="align-middle"><span>${escapeHtml(batch.receivedDate || 'N/A')}</span></td>
+                            <td class="align-middle text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} px-2 py-1 fw-bold">${cStock} ${unit}</span></td>
+                            <td class="align-middle text-center"><span>${batch.initialQty || '-'} ${unit}</span></td>
+                            <td class="align-middle text-center">${getStatusBadge(cStock)}</td>
+                            <td class="align-middle text-center">
+                                <div class="d-flex gap-1 justify-content-center">
+                                    <button type="button" class="btn btn-sm btn-warning fw-bold" onclick="openEditItemModal('${escapeHtml(batchId)}')" title="Edit Photo, Quantity & Details">
+                                        ✏️ Edit
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-danger fw-bold" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')" title="Delete Batch">
+                                        🗑️ Delete
+                                    </button>
+                                </div>
                             </td>
                         </tr>`;
                 });
@@ -2895,6 +2993,11 @@ function renderMasterInventory() {
 
         container.innerHTML = html;
 
+        // Also populate master-inventory-list table if present in DOM
+        if (typeof renderMasterInventoryTable === 'function') {
+            renderMasterInventoryTable(inventoryData);
+        }
+
         // Lazy load inventory batch images
         document.querySelectorAll('.inventory-batch-thumb').forEach(img => {
             if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
@@ -2905,6 +3008,62 @@ function renderMasterInventory() {
         container.innerHTML = `<div class="alert alert-danger">Error rendering inventory: ${err.message}</div>`;
     }
 }
+
+// Dedicated function to render Master Inventory Table rows into #master-inventory-list
+window.renderMasterInventoryTable = function(items) {
+    const listBody = $('master-inventory-list');
+    if (!listBody) return;
+
+    const inventoryList = items || inventoryData || {};
+    const entries = Object.entries(inventoryList);
+
+    // Keep window.masterInventoryList in sync for instant offline/local lookup
+    window.masterInventoryList = entries.map(([key, item]) => ({
+        id: item.id || item.key || item.itemId || key,
+        key: key,
+        itemId: key,
+        ...item
+    }));
+
+    if (entries.length === 0) {
+        listBody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">No inventory items found.</td></tr>`;
+        return;
+    }
+
+    let html = '';
+    entries.forEach(([key, item]) => {
+        // Ensure key fallback inside row iteration
+        const itemId = item.id || item.key || item.itemId || key || '';
+        const cStock = (item.currentStock !== undefined) ? item.currentStock : (item.quantity !== undefined ? item.quantity : 0);
+        const imgUrl = item.imageUrl || item.image || '';
+        const imgHtml = window.createReloadableImgHtml ? window.createReloadableImgHtml(imgUrl, item.itemName || item.name, '', true) : `<img src="${imgUrl || 'https://via.placeholder.com/50'}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;">`;
+
+        html += `
+            <tr>
+                <td class="text-center align-middle">${imgHtml}</td>
+                <td class="align-middle"><span class="text-danger fw-bold">${escapeHtml(item.serialNumber || item.sn || 'N/A')}</span></td>
+                <td class="align-middle"><span class="fw-bold text-dark">${escapeHtml(item.itemName || item.name || itemId)}</span></td>
+                <td class="align-middle">${escapeHtml(item.category || item.brandName || '-')}</td>
+                <td class="align-middle">${escapeHtml(item.description || '-')}</td>
+                <td class="align-middle text-center">${item.openingQuantity || cStock}</td>
+                <td class="align-middle text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-success'} px-2 py-1 fw-bold">${cStock} ${item.unit || 'Pcs'}</span></td>
+                <td class="align-middle text-center">${typeof getStatusBadge === 'function' ? getStatusBadge(cStock) : (cStock > 0 ? 'In Stock' : 'Out of Stock')}</td>
+                <td class="align-middle text-center">
+                    <div class="d-flex gap-1 justify-content-center">
+                        <button type="button" class="btn btn-sm btn-warning fw-bold" onclick="openEditItemModal('${itemId}')">
+                            ✏️ Edit
+                        </button>
+                        <button type="button" class="btn btn-sm btn-danger fw-bold" onclick="deleteInventoryItem('${itemId}')" title="Delete Item">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    listBody.innerHTML = html;
+};
 
 window.openAddStockModal = function(catName) {
     const modalEl = $('addStockModal');
@@ -3757,25 +3916,188 @@ async function exportHistory() {
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Order_History"); XLSX.writeFile(wb, `History_${Date.now()}.xlsx`);
 }
 
-window.openEditItemModal = function(itemId) {
-    console.log("Editing item ID:", itemId);
-    const item = window.allInventoryItems ? window.allInventoryItems.find(i => i.id === itemId) : null;
+// Helper to create Firebase Realtime DB snapshot objects for window.firebase compatibility layer
+function createFirebaseSnapWrapper(data, keyName) {
+    const valData = data !== undefined ? data : null;
+    return {
+        key: keyName || null,
+        val: () => valData,
+        exists: () => valData !== null && valData !== undefined,
+        hasChild: (childKey) => {
+            if (!valData || typeof valData !== 'object') return false;
+            return childKey in valData;
+        },
+        child: (childKey) => {
+            const childVal = (valData && typeof valData === 'object') ? valData[childKey] : null;
+            return createFirebaseSnapWrapper(childVal, childKey);
+        },
+        forEach: (callback) => {
+            if (!valData || typeof valData !== 'object') return false;
+            for (const [k, v] of Object.entries(valData)) {
+                const childSnap = createFirebaseSnapWrapper(v, k);
+                if (callback(childSnap) === true) break;
+            }
+        }
+    };
+}
 
-    if (!item) {
-        alert("Item data not found!");
+// Firebase global database compatibility wrapper for legacy ref calls
+if (!window.firebase) {
+    window.firebase = {
+        database: function() {
+            return {
+                ref: function(path) {
+                    return {
+                        once: function(eventType) {
+                            return get(ref(db, path)).then(snapshot => {
+                                let valData = snapshot.val();
+                                if ((!valData || (typeof valData === 'object' && Object.keys(valData).length === 0)) && (path === 'items' || path.startsWith('items/'))) {
+                                    const altPath = path.startsWith('items/') ? 'inventory/' + path.replace('items/', '') : 'inventory';
+                                    return get(ref(db, altPath)).then(snap2 => createFirebaseSnapWrapper(snap2.val(), snap2.key));
+                                }
+                                return createFirebaseSnapWrapper(valData, snapshot.key);
+                            });
+                        },
+                        update: function(data) {
+                            return update(ref(db, path), data).then(() => {
+                                if (path.startsWith('items/')) {
+                                    const altPath = 'inventory/' + path.replace('items/', '');
+                                    return update(ref(db, altPath), data).catch(() => {});
+                                }
+                            });
+                        },
+                        set: function(data) {
+                            return set(ref(db, path), data);
+                        },
+                        remove: function() {
+                            return remove(ref(db, path));
+                        }
+                    };
+                }
+            };
+        }
+    };
+}
+
+// Robust Edit Item Modal Handler
+window.openEditItemModal = function(itemId) {
+    if (!itemId || itemId === 'undefined' || itemId === 'null') {
+        alert("Error: Invalid or missing Item ID!");
         return;
     }
 
-    if ($('edit-item-id')) $('edit-item-id').value = item.id;
-    if ($('edit-item-name')) $('edit-item-name').value = item.itemName || '';
-    if ($('edit-item-sn')) $('edit-item-sn').value = item.serialNumber || '';
-    if ($('edit-item-category')) $('edit-item-category').value = item.category || '';
-    if ($('edit-item-opening-qty')) $('edit-item-opening-qty').value = item.openingQuantity || 0;
-    if ($('edit-item-available-qty')) $('edit-item-available-qty').value = item.quantity || 0;
-    if ($('edit-item-description')) $('edit-item-description').value = item.description || '';
+    // Fallback 1: Search in locally loaded inventory array first (Instant & Offline-friendly)
+    let localItem = null;
+    if (window.masterInventoryList && Array.isArray(window.masterInventoryList)) {
+        localItem = window.masterInventoryList.find(i => (i.id === itemId || i.key === itemId || i.itemId === itemId));
+    }
+    if (!localItem && typeof inventoryData === 'object' && inventoryData) {
+        if (inventoryData[itemId]) {
+            localItem = { id: itemId, key: itemId, ...inventoryData[itemId] };
+        } else {
+            const foundCat = Object.entries(inventoryData).find(([k, v]) => k === itemId || (v.batches && v.batches[itemId]));
+            if (foundCat) {
+                if (foundCat[0] === itemId) localItem = { id: itemId, key: itemId, ...foundCat[1] };
+                else if (foundCat[1].batches && foundCat[1].batches[itemId]) localItem = { id: itemId, key: itemId, ...foundCat[1].batches[itemId] };
+            }
+        }
+    }
 
-    const editModal = new bootstrap.Modal($('editItemModal'));
-    editModal.show();
+    if (localItem) {
+        populateAndShowEditModal(itemId, localItem);
+        return;
+    }
+
+    // Fallback 2: Direct Firebase Lookup
+    firebase.database().ref(`items/${itemId}`).once('value').then(snapshot => {
+        let itemData = snapshot.val();
+
+        if (itemData) {
+            populateAndShowEditModal(itemId, itemData);
+        } else {
+            // Fallback 3: Global items node search in case data is nested
+            firebase.database().ref('items').once('value').then(parentSnap => {
+                let foundData = null;
+                parentSnap.forEach(childSnap => {
+                    if (childSnap.key === itemId) {
+                        foundData = childSnap.val();
+                    } else if (childSnap.hasChild && childSnap.hasChild(itemId)) {
+                        foundData = childSnap.child(itemId).val();
+                    }
+                });
+
+                if (foundData) {
+                    populateAndShowEditModal(itemId, foundData);
+                } else {
+                    alert("Item data not found in Database! (ID: " + itemId + ")");
+                }
+            });
+        }
+    }).catch(err => alert("Error reading item data: " + err.message));
+};
+
+// Helper Function to Fill Modal Fields & Show Modal
+function populateAndShowEditModal(itemId, item) {
+    document.getElementById('editItemId').value = itemId;
+    document.getElementById('editItemName').value = item.itemName || item.name || item.title || '';
+    document.getElementById('editBrandName').value = item.brandName || item.brand || '';
+    document.getElementById('editManufacturer').value = item.manufacturer || '';
+    document.getElementById('editSerialNumber').value = item.serialNumber || item.sn || item.serialNo || '';
+    document.getElementById('editBatchNumber').value = item.batchNumber || item.batchNo || '';
+    document.getElementById('editCurrentStock').value = (item.currentStock !== undefined) ? item.currentStock : (item.quantity !== undefined ? item.quantity : 0);
+    document.getElementById('editUnit').value = item.unit || 'Pcs';
+    document.getElementById('editReceiptDate').value = item.receiptDate || item.receivedDate || item.dateAdded || '';
+
+    const photoUrl = item.imageUrl || item.image || item.photo || '';
+    document.getElementById('editImageUrl').value = photoUrl;
+
+    if (typeof updateEditPhotoPreview === 'function') {
+        updateEditPhotoPreview(photoUrl);
+    }
+
+    const editModalEl = document.getElementById('editItemModal');
+    if (editModalEl) {
+        const editModal = new bootstrap.Modal(editModalEl);
+        editModal.show();
+    } else {
+        alert("Edit modal HTML container not found in DOM!");
+    }
+}
+
+// Preview Photo inside Modal when URL changes
+window.updateEditPhotoPreview = function(url) {
+    const imgEl = document.getElementById('editPhotoPreview');
+    if (imgEl) {
+        imgEl.src = (url && url.trim() !== '') ? url : 'https://via.placeholder.com/100?text=No+Photo';
+    }
+};
+
+// Save Edited Values to Firebase
+window.saveInventoryItemEdits = function() {
+    const itemId = document.getElementById('editItemId').value;
+    if (!itemId) return;
+
+    const updatedData = {
+        itemName: document.getElementById('editItemName').value.trim(),
+        brandName: document.getElementById('editBrandName').value.trim(),
+        manufacturer: document.getElementById('editManufacturer').value.trim(),
+        serialNumber: document.getElementById('editSerialNumber').value.trim(),
+        batchNumber: document.getElementById('editBatchNumber').value.trim(),
+        currentStock: parseInt(document.getElementById('editCurrentStock').value, 10) || 0,
+        unit: document.getElementById('editUnit').value,
+        receiptDate: document.getElementById('editReceiptDate').value,
+        imageUrl: document.getElementById('editImageUrl').value.trim()
+    };
+
+    firebase.database().ref(`items/${itemId}`).update(updatedData)
+        .then(() => {
+            alert("✅ Item updated successfully!");
+            const modalEl = document.getElementById('editItemModal');
+            const modalInstance = bootstrap.Modal.getInstance(modalEl);
+            if (modalInstance) modalInstance.hide();
+            if (typeof fetchMasterInventory === 'function') fetchMasterInventory();
+        })
+        .catch(err => alert("❌ Failed to update item: " + err.message));
 };
 
 window.deleteInventoryItem = async function(itemId, itemName) {
@@ -3786,8 +4108,10 @@ window.deleteInventoryItem = async function(itemId, itemName) {
     try {
         console.log("Deleting item from Firebase:", itemId);
         await remove(ref(db, 'inventory/' + itemId));
+        await remove(ref(db, 'items/' + itemId));
         await logActivity("Inventory Deleted", `Item: ${itemName} (${itemId})`);
         showToast(`"${itemName || 'Item'}" deleted successfully!`);
+        if (typeof fetchMasterInventory === 'function') fetchMasterInventory();
     } catch (error) {
         console.error("Error deleting item:", error);
         showToast("Failed to delete item: " + error.message, "error");
