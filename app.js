@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.9";
+const APP_VERSION = "1.8.16";
 
 // Safe Image URL Helper (Uses offline inline SVG data URI to avoid network errors)
 function getSafeImageUrl(item) {
@@ -3981,11 +3981,21 @@ try {
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function(OneSignal) {
         try {
+            // Resolve subfolder path dynamically
+            const path = window.location.pathname;
+            const basePath = path.substring(0, path.lastIndexOf('/') + 1) || '/';
+
+            console.log("OneSignal Auto-Detected Base Scope:", basePath);
+
             await OneSignal.init({
                 appId: ONESIGNAL_APP_ID,
                 allowLocalhostAsSecureOrigin: true,
-                autoRegister: false, // Strict manual permission request mode
+                autoRegister: false,
+                serviceWorkerPath: 'OneSignalSDKWorker.js',
+                serviceWorkerParam: { scope: basePath }
             });
+
+            console.log("✅ OneSignal Service Worker Initialized Successfully.");
 
             // Listen for permission & subscription changes
             OneSignal.Notifications.addEventListener("permissionChange", function(permission) {
@@ -4015,7 +4025,7 @@ try {
                 window.updateNotificationUIStatus();
             }
         } catch (err) {
-            console.warn("OneSignal Network Initialization Bypassed (Offline/Timeout):", err.message || err);
+            console.warn("OneSignal Initialization Warning:", err.message || err);
         }
     });
 } catch (e) {
@@ -4023,8 +4033,7 @@ try {
 }
 
 window.updateNotificationUIStatus = function() {
-    const subId = localStorage.getItem("onesignal_sub_id");
-    const isGranted = (typeof Notification !== 'undefined' && Notification.permission === 'granted') && !!subId;
+    const isGranted = (typeof Notification !== 'undefined' && Notification.permission === 'granted');
 
     const badgeAdmin = document.getElementById('notification-status-badge-admin');
     const badgeTeacher = document.getElementById('notification-status-badge-teacher');
@@ -4051,63 +4060,75 @@ window.updateNotificationUIStatus = function() {
 };
 
 window.toggleOneSignalNotifications = async function() {
-    console.log("🔔 [Step 1/5] Enable Notification Button Clicked...");
+    console.log("🔔 Enable Notification Button Clicked...");
 
     if (!('Notification' in window)) {
         alert("This browser does not support web notifications.");
         return;
     }
 
-    if (typeof OneSignalDeferred === 'undefined') {
-        console.error("❌ OneSignalDeferred is not defined on window object.");
-        alert("OneSignal SDK failed to load. Check internet connection or ad-blockers.");
+    if (Notification.permission === 'denied') {
+        alert("⚠️ Notifications are blocked in your browser settings. Unblock them from the browser lock icon near the URL bar.");
         return;
     }
 
-    console.log("🔔 [Step 2/5] Pushing request to OneSignalDeferred...");
+    try {
+        let granted = false;
 
-    OneSignalDeferred.push(async function(OneSignal) {
-        try {
-            console.log("🔔 [Step 3/5] Requesting notification permission...");
+        // Try OneSignal Permission request with a 3-second safety race
+        if (typeof OneSignalDeferred !== 'undefined') {
+            try {
+                const osPromise = new Promise((resolve) => {
+                    OneSignalDeferred.push(async (OneSignal) => {
+                        const res = await OneSignal.Notifications.requestPermission();
+                        resolve(res);
+                    });
+                });
 
-            // Timeout safety race
-            const permissionPromise = OneSignal.Notifications.requestPermission();
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("OneSignal permission request timed out")), 10000)
-            );
+                const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), 3000));
+                const result = await Promise.race([osPromise, timeoutPromise]);
 
-            const permission = await Promise.race([permissionPromise, timeoutPromise]);
-            console.log("🔔 [Step 4/5] Permission result received:", permission);
-
-            if (permission) {
-                console.log("🔔 [Step 5/5] Requesting OneSignal Opt-In...");
-                await OneSignal.User.PushSubscription.optIn();
-
-                // Allow generation delay
-                await new Promise(res => setTimeout(res, 2000));
-
-                const subId = OneSignal.User.PushSubscription.id;
-                console.log("✅ Final OneSignal Push Subscription ID:", subId);
-
-                if (subId) {
-                    alert("✅ Success! Notifications activated.\nSub ID: " + subId);
-                    localStorage.setItem("onesignal_sub_id", subId);
-                } else {
-                    alert("⚠️ Permission granted, but OneSignal Subscription ID was not generated. Please check OneSignal Dashboard settings.");
+                if (result === true || result === 'granted') {
+                    granted = true;
                 }
-            } else {
-                alert("⚠️ Permission blocked/denied by browser.");
+            } catch (err) {
+                console.warn("OneSignal Request Exception:", err);
             }
-
-            if (typeof window.updateNotificationUIStatus === 'function') {
-                window.updateNotificationUIStatus();
-            }
-
-        } catch (err) {
-            console.error("❌ OneSignal Execution Error:", err);
-            alert("Error activating notifications: " + err.message);
         }
-    });
+
+        // Native Browser Fallback if OneSignal timed out or failed
+        if (!granted) {
+            const nativePerm = await Notification.requestPermission();
+            if (nativePerm === 'granted') granted = true;
+        }
+
+        if (granted) {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.ready.then(reg => {
+                    reg.showNotification("🎉 Notifications Activated!", {
+                        body: "Welcome! System notifications are active.",
+                        icon: "school.png"
+                    });
+                });
+            } else {
+                new Notification("🎉 Notifications Activated!", {
+                    body: "Welcome! System notifications are active.",
+                    icon: "school.png"
+                });
+            }
+            alert("✅ Notifications Activated Successfully!");
+        } else {
+            alert("⚠️ Notification permission was not granted.");
+        }
+
+        if (typeof window.updateNotificationUIStatus === 'function') {
+            window.updateNotificationUIStatus();
+        }
+
+    } catch (err) {
+        console.error("Toggle Execution Error:", err);
+        alert("Error: " + err.message);
+    }
 };
 
 window.syncOneSignalSubscriptionToFirebase = function() {
