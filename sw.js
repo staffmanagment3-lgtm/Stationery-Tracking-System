@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stationery-app-v1.8.16';
+const CACHE_NAME = 'stationery-app-v1.8.18';
 const ASSETS = [
   'index.html',
   'style.css',
@@ -11,6 +11,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS);

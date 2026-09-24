@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.16";
+const APP_VERSION = "1.8.18";
 
 // Safe Image URL Helper (Uses offline inline SVG data URI to avoid network errors)
 function getSafeImageUrl(item) {
@@ -3981,21 +3981,21 @@ try {
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function(OneSignal) {
         try {
-            // Resolve subfolder path dynamically
+            const origin = window.location.origin;
             const path = window.location.pathname;
-            const basePath = path.substring(0, path.lastIndexOf('/') + 1) || '/';
+            const dir = path.substring(0, path.lastIndexOf('/') + 1);
 
-            console.log("OneSignal Auto-Detected Base Scope:", basePath);
+            console.log("OneSignal Target Scope Directory:", dir);
 
             await OneSignal.init({
                 appId: ONESIGNAL_APP_ID,
                 allowLocalhostAsSecureOrigin: true,
                 autoRegister: false,
                 serviceWorkerPath: 'OneSignalSDKWorker.js',
-                serviceWorkerParam: { scope: basePath }
+                serviceWorkerParam: { scope: dir }
             });
 
-            console.log("✅ OneSignal Service Worker Initialized Successfully.");
+            console.log("✅ OneSignal initialized successfully with scope:", dir);
 
             // Listen for permission & subscription changes
             OneSignal.Notifications.addEventListener("permissionChange", function(permission) {
@@ -4024,8 +4024,8 @@ try {
             if (typeof window.updateNotificationUIStatus === 'function') {
                 window.updateNotificationUIStatus();
             }
-        } catch (err) {
-            console.warn("OneSignal Initialization Warning:", err.message || err);
+        } catch (e) {
+            console.warn("OneSignal Silent Init Warning:", e.message);
         }
     });
 } catch (e) {
@@ -4059,8 +4059,8 @@ window.updateNotificationUIStatus = function() {
     });
 };
 
-window.toggleOneSignalNotifications = async function() {
-    console.log("🔔 Enable Notification Button Clicked...");
+window.toggleOneSignalNotifications = function() {
+    console.log("🔔 Enable Notification Clicked (v1.8.17)...");
 
     if (!('Notification' in window)) {
         alert("This browser does not support web notifications.");
@@ -4068,55 +4068,50 @@ window.toggleOneSignalNotifications = async function() {
     }
 
     if (Notification.permission === 'denied') {
-        alert("⚠️ Notifications are blocked in your browser settings. Unblock them from the browser lock icon near the URL bar.");
+        alert("⚠️ Notifications are blocked in browser settings. Please unblock them from the browser URL lock icon.");
         return;
     }
 
-    try {
-        let granted = false;
+    // 1. Direct Native Permission Call (Zero Waiting / No Timeout)
+    Notification.requestPermission().then(function(permission) {
+        console.log("Native Permission Result:", permission);
 
-        // Try OneSignal Permission request with a 3-second safety race
-        if (typeof OneSignalDeferred !== 'undefined') {
-            try {
-                const osPromise = new Promise((resolve) => {
-                    OneSignalDeferred.push(async (OneSignal) => {
-                        const res = await OneSignal.Notifications.requestPermission();
-                        resolve(res);
-                    });
-                });
-
-                const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), 3000));
-                const result = await Promise.race([osPromise, timeoutPromise]);
-
-                if (result === true || result === 'granted') {
-                    granted = true;
-                }
-            } catch (err) {
-                console.warn("OneSignal Request Exception:", err);
-            }
-        }
-
-        // Native Browser Fallback if OneSignal timed out or failed
-        if (!granted) {
-            const nativePerm = await Notification.requestPermission();
-            if (nativePerm === 'granted') granted = true;
-        }
-
-        if (granted) {
+        if (permission === 'granted') {
+            // 2. Fire Immediate Welcome Notification
             if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
                 navigator.serviceWorker.ready.then(reg => {
                     reg.showNotification("🎉 Notifications Activated!", {
-                        body: "Welcome! System notifications are active.",
+                        body: "Welcome! You are now subscribed to real-time updates.",
+                        icon: "school.png",
+                        badge: "school.png"
+                    });
+                }).catch(() => {
+                    new Notification("🎉 Notifications Activated!", {
+                        body: "Welcome! You are now subscribed to real-time updates.",
                         icon: "school.png"
                     });
                 });
             } else {
                 new Notification("🎉 Notifications Activated!", {
-                    body: "Welcome! System notifications are active.",
+                    body: "Welcome! You are now subscribed to real-time updates.",
                     icon: "school.png"
                 });
             }
+
             alert("✅ Notifications Activated Successfully!");
+
+            // 3. Sync Subscription with OneSignal in Background
+            if (typeof OneSignalDeferred !== 'undefined') {
+                OneSignalDeferred.push(async function(OneSignal) {
+                    try {
+                        await OneSignal.User.PushSubscription.optIn();
+                        console.log("✅ OneSignal Background Opt-In Completed. Sub ID:", OneSignal.User.PushSubscription.id);
+                    } catch (e) {
+                        console.warn("OneSignal Background Opt-In Warning:", e.message);
+                    }
+                });
+            }
+
         } else {
             alert("⚠️ Notification permission was not granted.");
         }
@@ -4125,10 +4120,10 @@ window.toggleOneSignalNotifications = async function() {
             window.updateNotificationUIStatus();
         }
 
-    } catch (err) {
-        console.error("Toggle Execution Error:", err);
-        alert("Error: " + err.message);
-    }
+    }).catch(function(err) {
+        console.error("Native Permission Prompt Error:", err);
+        alert("Permission Request Error: " + err.message);
+    });
 };
 
 window.syncOneSignalSubscriptionToFirebase = function() {
