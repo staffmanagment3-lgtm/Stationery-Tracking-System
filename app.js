@@ -4023,7 +4023,8 @@ try {
 }
 
 window.updateNotificationUIStatus = function() {
-    const isGranted = (typeof Notification !== 'undefined' && Notification.permission === 'granted');
+    const subId = localStorage.getItem("onesignal_sub_id");
+    const isGranted = (typeof Notification !== 'undefined' && Notification.permission === 'granted') && !!subId;
 
     const badgeAdmin = document.getElementById('notification-status-badge-admin');
     const badgeTeacher = document.getElementById('notification-status-badge-teacher');
@@ -4049,39 +4050,63 @@ window.updateNotificationUIStatus = function() {
     });
 };
 
-window.toggleOneSignalNotifications = function() {
-    console.log("👉 Activate/Enable Notification Clicked");
+window.toggleOneSignalNotifications = async function() {
+    console.log("🔔 [Step 1/5] Enable Notification Button Clicked...");
 
     if (!('Notification' in window)) {
-        alert("Notifications are not supported on this browser.");
+        alert("This browser does not support web notifications.");
         return;
     }
 
-    // Direct Native Browser Prompt Call
-    Notification.requestPermission().then(function(permission) {
-        console.log("Permission result:", permission);
+    if (typeof OneSignalDeferred === 'undefined') {
+        console.error("❌ OneSignalDeferred is not defined on window object.");
+        alert("OneSignal SDK failed to load. Check internet connection or ad-blockers.");
+        return;
+    }
 
-        if (permission === 'granted') {
-            // Background sync with OneSignal v16 if loaded
-            if (window.OneSignalDeferred) {
-                OneSignalDeferred.push(async function(OneSignal) {
-                    try {
-                        await OneSignal.User.PushSubscription.optIn();
-                    } catch(e) {
-                        console.warn("OneSignal optIn background warning:", e);
-                    }
-                });
+    console.log("🔔 [Step 2/5] Pushing request to OneSignalDeferred...");
+
+    OneSignalDeferred.push(async function(OneSignal) {
+        try {
+            console.log("🔔 [Step 3/5] Requesting notification permission...");
+
+            // Timeout safety race
+            const permissionPromise = OneSignal.Notifications.requestPermission();
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("OneSignal permission request timed out")), 10000)
+            );
+
+            const permission = await Promise.race([permissionPromise, timeoutPromise]);
+            console.log("🔔 [Step 4/5] Permission result received:", permission);
+
+            if (permission) {
+                console.log("🔔 [Step 5/5] Requesting OneSignal Opt-In...");
+                await OneSignal.User.PushSubscription.optIn();
+
+                // Allow generation delay
+                await new Promise(res => setTimeout(res, 2000));
+
+                const subId = OneSignal.User.PushSubscription.id;
+                console.log("✅ Final OneSignal Push Subscription ID:", subId);
+
+                if (subId) {
+                    alert("✅ Success! Notifications activated.\nSub ID: " + subId);
+                    localStorage.setItem("onesignal_sub_id", subId);
+                } else {
+                    alert("⚠️ Permission granted, but OneSignal Subscription ID was not generated. Please check OneSignal Dashboard settings.");
+                }
+            } else {
+                alert("⚠️ Permission blocked/denied by browser.");
             }
-            alert("✅ Push Notifications Activated Successfully!");
-        } else if (permission === 'denied') {
-            alert("⚠️ Notifications are blocked in your browser settings. Please unblock them from the browser address bar.");
-        }
 
-        if (typeof window.updateNotificationUIStatus === 'function') {
-            window.updateNotificationUIStatus();
+            if (typeof window.updateNotificationUIStatus === 'function') {
+                window.updateNotificationUIStatus();
+            }
+
+        } catch (err) {
+            console.error("❌ OneSignal Execution Error:", err);
+            alert("Error activating notifications: " + err.message);
         }
-    }).catch(function(err) {
-        console.error("Native Notification Request Error:", err);
     });
 };
 
