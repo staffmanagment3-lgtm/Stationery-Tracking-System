@@ -4,7 +4,19 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.7.6";
+const APP_VERSION = "1.8.9";
+
+// Safe Image URL Helper (Uses offline inline SVG data URI to avoid network errors)
+function getSafeImageUrl(item) {
+    const defaultPlaceholder = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23e0e0e0'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%23757575' font-size='12' font-family='sans-serif'>No Image</text></svg>";
+    if (!item) return typeof FALLBACK_IMG !== 'undefined' ? FALLBACK_IMG : defaultPlaceholder;
+    let url = item.imageUrl || item.image || item.photoUrl || item.img || item.itemImageUrl;
+    if (!url || typeof url !== 'string' || url.trim() === '' || url === 'null' || url === 'undefined') {
+        return typeof FALLBACK_IMG !== 'undefined' ? FALLBACK_IMG : defaultPlaceholder;
+    }
+    return url.trim();
+}
+window.getSafeImageUrl = getSafeImageUrl;
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -1231,6 +1243,12 @@ window.handleUserLogout = function(event) {
     if (confirm("Are you sure you want to logout?")) {
         console.log("Clearing user session...");
 
+        if (window.OneSignalDeferred) {
+            OneSignalDeferred.push(async function(OneSignal) {
+                await OneSignal.logout().catch(() => {});
+            });
+        }
+
         localStorage.removeItem('stationery_user_adec');
         localStorage.removeItem('currentUserPass');
         localStorage.removeItem('currentUserRole');
@@ -1753,12 +1771,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
-                .then(reg => {
-                    console.log('SW Registered successfully:', reg.scope);
-                    reg.update();
-                })
-                .catch(err => console.warn('ServiceWorker registration failed:', err));
+            try {
+                navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
+                    .then(reg => {
+                        console.log('SW Registered successfully:', reg.scope);
+                        reg.update();
+                    })
+                    .catch(err => console.warn('ServiceWorker registration bypassed:', err));
+            } catch (swErr) {
+                console.warn('ServiceWorker registration exception bypassed:', swErr);
+            }
         });
     }
 
@@ -2093,14 +2115,25 @@ function addSystemNotification(title, message, timestamp = new Date()) {
 }
 
 function updateNotificationBadge() {
-    const badgeEl = $('notif-badge');
-    if (badgeEl) {
-        badgeEl.textContent = notificationsList.length;
-        if (notificationsList.length > 0) {
-            badgeEl.classList.remove('d-none');
-            badgeEl.style.display = 'flex';
+    const badgeCount = notificationsList.length;
+    const badgeElements = [
+        $('notif-badge'),
+        document.getElementById('notificationBadge'),
+        document.getElementById('notificationBadgeAdmin'),
+        document.getElementById('notificationBadgeTeacher')
+    ];
+
+    badgeElements.forEach(badgeEl => {
+        if (badgeEl) {
+            badgeEl.textContent = badgeCount;
+            if (badgeCount > 0) {
+                badgeEl.classList.remove('d-none');
+                badgeEl.style.display = 'inline-block';
+            } else {
+                badgeEl.style.display = 'none';
+            }
         }
-    }
+    });
 }
 
 function renderNotificationList() {
@@ -2449,6 +2482,16 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
     } else {
         showView('login-view');
     }
+
+    if (currentUser && (currentUser.adecPassNumber || currentUser.uid)) {
+        const userId = (currentUser.adecPassNumber || currentUser.uid).toString();
+        if (window.OneSignalDeferred) {
+            OneSignalDeferred.push(async function(OneSignal) {
+                await OneSignal.login(userId).catch(() => {});
+                window.updateNotificationUIStatus();
+            });
+        }
+    }
 };
 
 async function handleUserRole(adecNumber) {
@@ -2461,8 +2504,6 @@ async function handleUserRole(adecNumber) {
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
 
             fetchSystemBranding(); fetchCategories();
-
-            if ("Notification" in window) Notification.requestPermission();
 
             window.renderDashboardForRole(userData.role, adecNumber);
         } else {
@@ -2649,7 +2690,7 @@ function renderCatalogPage() {
             <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px;">
                 <!-- 1. ITEM PHOTO -->
                 <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden;">
-                    <img src="${data.imageUrl || data.image || FALLBACK_IMG}"
+                    <img src="${getSafeImageUrl(data)}"
                          alt="${escapeHtml(titleToDisplay)}"
                          style="max-width: 100%; max-height: 100%; object-fit: contain;"
                          onerror="this.onerror=null; this.src='${FALLBACK_IMG}';"
@@ -3511,6 +3552,30 @@ window.submitFinalOrderWithSignature = async function() {
         await set(ref(db, 'orders/' + orderId), cleanOrderData);
         await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
 
+        // Notify Admin Users (AFTER Firebase RTDB save completes successfully)
+        try {
+            const adminUserIds = [];
+            if (window.allStaffList && Array.isArray(window.allStaffList)) {
+                window.allStaffList.forEach(user => {
+                    const role = (user.role || '').toUpperCase();
+                    if (role === 'ADMIN' || role === 'DEVELOPER' || role === 'SUPER_ADMIN') {
+                        adminUserIds.push((user.adecPassNumber || user.id || user.uid).toString());
+                    }
+                });
+            }
+            if (adminUserIds.length === 0) adminUserIds.push('Asif', 'DEV001');
+
+            const teacherId = currentUser.adecPassNumber || currentUser.uid || '1025';
+            sendSecureOneSignalNotification({
+                targetExternalIds: adminUserIds,
+                title: 'New Stationery Request',
+                message: `Teacher ${teacherId} has submitted a new stationery request. Please review it.`,
+                url: window.location.origin + window.location.pathname + '#tab-orders'
+            });
+        } catch (notifErr) {
+            console.warn("Failed to dispatch Admin notification:", notifErr);
+        }
+
         window.stationeryCart = [];
         window.saveCartToStorage();
 
@@ -3584,10 +3649,13 @@ function fetchAdminOrders() {
                             </div>
                         </div>
                     ` : ''}
-                    <div class="request-actions">
-                        ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>` : ''}
+                    <div class="request-actions d-flex gap-2">
+                        ${isPending ? `
+                            <button class="action-btn prepare-btn btn-success flex-fill" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>
+                            <button class="action-btn btn-danger flex-fill" onclick="window.confirmAdminOrderRejection(event, '${id}')">Reject Order</button>
+                        ` : ''}
                         ${order.status.includes('Approved') ? `
-                            <button class="action-btn handover-btn" style="flex:1;" onclick="window.handleFinalHandover(event, '${id}')">
+                            <button class="action-btn handover-btn flex-fill" onclick="window.handleFinalHandover(event, '${id}')">
                                 Final Handover & Sign
                             </button>
                         ` : ''}
@@ -3670,9 +3738,73 @@ window.confirmAdminOrderApproval = async function(event) {
 
         $('pickup-location-input').value = '';
         showToast("Order approved successfully! User view maintained.", "success");
+
+        // Notify specific Teacher AFTER Firebase RTDB update succeeds
+        try {
+            const orderSnap = await get(ref(db, `orders/${selectedOrderIdForApproval}`));
+            if (orderSnap.exists()) {
+                const orderData = orderSnap.val();
+                const teacherUid = orderData.teacherUid || orderData.teacherId;
+                if (teacherUid) {
+                    sendSecureOneSignalNotification({
+                        targetExternalIds: [teacherUid.toString()],
+                        title: "Stationery Request Approved",
+                        message: "Your stationery request has been approved. Please check the app for details.",
+                        url: window.location.origin + window.location.pathname + '#order-history-section'
+                    });
+                }
+            }
+        } catch (notifErr) {
+            console.warn("Failed to dispatch approval notification:", notifErr);
+        }
     } catch (err) {
         console.error("Error approving order:", err);
         showToast("Failed to approve order: " + err.message, "error");
+    }
+};
+
+window.confirmAdminOrderRejection = async function(event, orderId) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    if (!orderId) return;
+
+    const reason = prompt("Enter reason for rejection (optional):", "Items currently out of stock");
+    if (reason === null) return; // User cancelled prompt
+
+    try {
+        console.log("Rejecting Order:", orderId);
+        await update(ref(db, `orders/${orderId}`), {
+            status: "Rejected",
+            rejectionReason: reason || "No reason specified",
+            rejectedAt: new Date().toISOString()
+        });
+
+        showToast("Order rejected successfully.", "warning");
+
+        // Notify specific Teacher AFTER Firebase RTDB update succeeds
+        try {
+            const orderSnap = await get(ref(db, `orders/${orderId}`));
+            if (orderSnap.exists()) {
+                const orderData = orderSnap.val();
+                const teacherUid = orderData.teacherUid || orderData.teacherId;
+                if (teacherUid) {
+                    sendSecureOneSignalNotification({
+                        targetExternalIds: [teacherUid.toString()],
+                        title: "Stationery Request Update",
+                        message: "Your stationery request has been rejected. Please check the app for details.",
+                        url: window.location.origin + window.location.pathname + '#order-history-section'
+                    });
+                }
+            }
+        } catch (notifErr) {
+            console.warn("Failed to dispatch rejection notification:", notifErr);
+        }
+    } catch (err) {
+        console.error("Error rejecting order:", err);
+        showToast("Failed to reject order: " + err.message, "error");
     }
 };
 
@@ -3797,6 +3929,184 @@ async function updateDriveStatus() {
 }
 
 function fetchSystemBranding() { addListener(ref(db, 'settings/logo'), (snap) => { if (snap.val()) document.querySelectorAll('#school-logo, .centered-school-logo, .sidebar-logo-img, .header-brand-logo').forEach(img => img.src = snap.val()); }); }
+
+// Hash / Deep-link handler for notification clicks
+function handleHashNavigation() {
+    const hash = window.location.hash;
+    if (!hash) return;
+
+    if (hash.includes('tab-orders') || hash.includes('orders')) {
+        const btnOrders = document.querySelector('button[data-target="tab-orders"]');
+        if (btnOrders) btnOrders.click();
+    } else if (hash.includes('order-history-section') || hash.includes('history')) {
+        if (typeof window.showDashboardSection === 'function') {
+            window.showDashboardSection('order-history-section');
+        }
+    }
+}
+
+window.addEventListener('hashchange', handleHashNavigation);
+window.addEventListener('load', handleHashNavigation);
+
+// Notification Panel Handler (In-App Fallback & Local Notification View)
+window.openNotificationPanel = function(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    const notifModalEl = document.getElementById('notificationModal') || document.getElementById('notification-modal') || document.getElementById('notificationDropdown');
+
+    if (notifModalEl) {
+        if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+            const notifModal = bootstrap.Modal.getOrCreateInstance(notifModalEl);
+            notifModal.show();
+        } else {
+            notifModalEl.classList.add('active');
+            notifModalEl.style.display = (notifModalEl.style.display === 'none' || !notifModalEl.style.display) ? 'block' : 'none';
+        }
+
+        if (typeof renderNotificationList === 'function') {
+            renderNotificationList();
+        }
+    } else {
+        alert("Notification Panel: No new notifications at this time.");
+    }
+};
+
+// ==================== ONESIGNAL WEB PUSH INTEGRATION ====================
+const ONESIGNAL_APP_ID = "87270c54-9e9d-46de-8070-a0c4b66c7478";
+
+try {
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+        try {
+            await OneSignal.init({
+                appId: ONESIGNAL_APP_ID,
+                allowLocalhostAsSecureOrigin: true,
+                autoRegister: false, // Strict manual permission request mode
+            });
+
+            // Listen for permission & subscription changes
+            OneSignal.Notifications.addEventListener("permissionChange", function(permission) {
+                console.log("OneSignal Permission Changed:", permission);
+                if (typeof window.updateNotificationUIStatus === 'function') {
+                    window.updateNotificationUIStatus();
+                }
+            });
+
+            OneSignal.User.PushSubscription.addEventListener("change", function(change) {
+                console.log("OneSignal Subscription Changed:", change);
+                if (typeof window.updateNotificationUIStatus === 'function') {
+                    window.updateNotificationUIStatus();
+                }
+                if (typeof window.syncOneSignalSubscriptionToFirebase === 'function') {
+                    window.syncOneSignalSubscriptionToFirebase();
+                }
+            });
+
+            // Sync identity if user is already logged in
+            if (currentUser && (currentUser.adecPassNumber || currentUser.uid)) {
+                const userId = (currentUser.adecPassNumber || currentUser.uid).toString();
+                OneSignal.login(userId).catch(err => console.warn("OneSignal Login Error:", err));
+            }
+
+            if (typeof window.updateNotificationUIStatus === 'function') {
+                window.updateNotificationUIStatus();
+            }
+        } catch (err) {
+            console.warn("OneSignal Network Initialization Bypassed (Offline/Timeout):", err.message || err);
+        }
+    });
+} catch (e) {
+    console.warn("OneSignal isolated error caught silently:", e);
+}
+
+window.updateNotificationUIStatus = function() {
+    const isGranted = (typeof Notification !== 'undefined' && Notification.permission === 'granted');
+
+    const badgeAdmin = document.getElementById('notification-status-badge-admin');
+    const badgeTeacher = document.getElementById('notification-status-badge-teacher');
+    const btnAdmin = document.getElementById('enable-notifications-btn-admin');
+    const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
+
+    const badgeText = isGranted ? 'Notifications Enabled' : 'Notifications Disabled';
+    const badgeClass = isGranted ? 'text-success fw-bold' : 'text-warning';
+    const btnText = isGranted ? 'Disable' : 'Enable';
+
+    [badgeAdmin, badgeTeacher].forEach(el => {
+        if (el) {
+            el.innerText = badgeText;
+            el.className = badgeClass;
+        }
+    });
+
+    [btnAdmin, btnTeacher].forEach(el => {
+        if (el) {
+            el.innerText = btnText;
+            el.className = isGranted ? 'btn btn-sm btn-outline-success fw-bold' : 'btn btn-sm btn-outline-light fw-bold';
+        }
+    });
+};
+
+window.toggleOneSignalNotifications = function() {
+    console.log("👉 Activate/Enable Notification Clicked");
+
+    if (!('Notification' in window)) {
+        alert("Notifications are not supported on this browser.");
+        return;
+    }
+
+    // Direct Native Browser Prompt Call
+    Notification.requestPermission().then(function(permission) {
+        console.log("Permission result:", permission);
+
+        if (permission === 'granted') {
+            // Background sync with OneSignal v16 if loaded
+            if (window.OneSignalDeferred) {
+                OneSignalDeferred.push(async function(OneSignal) {
+                    try {
+                        await OneSignal.User.PushSubscription.optIn();
+                    } catch(e) {
+                        console.warn("OneSignal optIn background warning:", e);
+                    }
+                });
+            }
+            alert("✅ Push Notifications Activated Successfully!");
+        } else if (permission === 'denied') {
+            alert("⚠️ Notifications are blocked in your browser settings. Please unblock them from the browser address bar.");
+        }
+
+        if (typeof window.updateNotificationUIStatus === 'function') {
+            window.updateNotificationUIStatus();
+        }
+    }).catch(function(err) {
+        console.error("Native Notification Request Error:", err);
+    });
+};
+
+window.syncOneSignalSubscriptionToFirebase = function() {
+    if (!currentUser || !(currentUser.adecPassNumber || currentUser.uid)) return;
+
+    const userId = (currentUser.adecPassNumber || currentUser.uid).toString();
+
+    OneSignalDeferred.push(async function(OneSignal) {
+        try {
+            const isOptedIn = OneSignal.User.PushSubscription.optedIn;
+            const subscriptionId = OneSignal.User.PushSubscription.id || '';
+            const notificationData = {
+                notificationEnabled: isOptedIn,
+                oneSignalSubscriptionId: subscriptionId,
+                lastNotificationUpdate: new Date().toISOString()
+            };
+
+            await update(ref(db, `users/${userId}`), notificationData);
+            console.log("Synced OneSignal subscription state to Firebase for user:", userId);
+        } catch (e) {
+            console.warn("Failed to sync OneSignal subscription to Firebase:", e);
+        }
+    });
+};
 
 window.handleAddCategory = async function(event) {
     if (event) event.preventDefault();
