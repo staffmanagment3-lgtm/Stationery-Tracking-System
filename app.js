@@ -4,7 +4,106 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.18";
+const APP_VERSION = "1.8.27";
+
+/**
+ * Deducts stock from main product inventory when item is ordered/issued
+ * @param {Array} orderItems - Array of items in order [{ itemId, requestedQty }]
+ */
+async function deductProductStockFromDatabase(orderItems) {
+    if (!orderItems || !Array.isArray(orderItems) || orderItems.length === 0) return;
+
+    const dbRef = ref(db);
+    const updates = {};
+
+    try {
+        for (const item of orderItems) {
+            const itemId = item.itemId || item.id || item.itemName || item.serialNumber || item.serial;
+            const requestedQty = parseInt(item.quantity || item.reqQty || item.requestedQty || item.requestQuantity || 1, 10);
+
+            if (!itemId) continue;
+
+            // Fetch current stock from primary locations
+            let targetPath = `inventory/${itemId}`;
+            let snapshot = await get(child(dbRef, targetPath));
+
+            if (!snapshot.exists()) {
+                targetPath = `products/${itemId}`;
+                snapshot = await get(child(dbRef, targetPath));
+            }
+
+            if (!snapshot.exists()) {
+                targetPath = `items/${itemId}`;
+                snapshot = await get(child(dbRef, targetPath));
+            }
+
+            if (snapshot.exists()) {
+                const productData = snapshot.val();
+                const currentQty = parseInt(
+                    productData.availableStock ?? productData.quantity ?? productData.currentStock ?? productData.stock ?? 0,
+                    10
+                );
+
+                // Calculate new remaining stock (prevent going below 0)
+                const newStock = Math.max(0, currentQty - requestedQty);
+                const updatedDate = new Date().toLocaleString();
+
+                // Update all key aliases across node locations so all screens read the updated value
+                updates[`/inventory/${itemId}/quantity`] = newStock;
+                updates[`/inventory/${itemId}/availableStock`] = newStock;
+                updates[`/inventory/${itemId}/currentStock`] = newStock;
+                updates[`/inventory/${itemId}/stock`] = newStock;
+                updates[`/inventory/${itemId}/lastUpdated`] = updatedDate;
+
+                updates[`/products/${itemId}/quantity`] = newStock;
+                updates[`/products/${itemId}/availableStock`] = newStock;
+                updates[`/products/${itemId}/currentStock`] = newStock;
+                updates[`/products/${itemId}/stock`] = newStock;
+                updates[`/products/${itemId}/lastUpdated`] = updatedDate;
+
+                updates[`/items/${itemId}/quantity`] = newStock;
+                updates[`/items/${itemId}/availableStock`] = newStock;
+                updates[`/items/${itemId}/currentStock`] = newStock;
+                updates[`/items/${itemId}/stock`] = newStock;
+                updates[`/items/${itemId}/lastUpdated`] = updatedDate;
+
+                console.log(`📉 Stock Deducted for ${itemId}: ${currentQty} ➔ ${newStock}`);
+            }
+        }
+
+        // Execute multi-location atomic update
+        if (Object.keys(updates).length > 0) {
+            await update(dbRef, updates);
+            console.log("✅ Database stock successfully updated across all ordered items!");
+        }
+
+    } catch (error) {
+        console.error("❌ Stock Deduction Error:", error);
+    }
+}
+window.deductProductStockFromDatabase = deductProductStockFromDatabase;
+
+// Helper to safely render Signature Images
+function renderSignatureHTML(rawSigData, labelTitle = "Teacher's Order Signature") {
+    if (!rawSigData || rawSigData === 'N/A' || rawSigData === 'null' || rawSigData === 'undefined') {
+        return `<div class="sig-placeholder text-muted" style="padding: 10px; text-align: center; font-size: 12px; color: #888;">No Signature Stored</div>`;
+    }
+
+    let srcUrl = String(rawSigData).trim();
+    // Fix missing Data URI scheme if raw base64 string is provided
+    if (!srcUrl.startsWith('data:image') && !srcUrl.startsWith('http')) {
+        srcUrl = `data:image/png;base64,${srcUrl}`;
+    }
+
+    return `
+        <div class="signature-box-container" style="width: 100%; text-align: center; margin: 10px 0; padding: 8px; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 6px;">
+            <span style="font-size: 11px; color: #666; display: block; margin-bottom: 4px;">${escapeHtml(labelTitle)}</span>
+            <img src="${srcUrl}" alt="Signature" style="max-height: 80px; max-width: 100%; object-fit: contain; border-bottom: 1px solid #ccc;"
+                 onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'text-danger\\' style=\\'font-size:12px;\\'>Signature Load Failed</span>';" />
+        </div>
+    `;
+}
+window.renderSignatureHTML = renderSignatureHTML;
 
 // Safe Image URL Helper (Uses offline inline SVG data URI to avoid network errors)
 function getSafeImageUrl(item) {
@@ -390,7 +489,29 @@ window.handleFinalHandover = async function(event, orderId) {
 
                 for (const [index, item] of (order.items || []).entries()) {
                     const catSnap = await get(ref(db, `inventory/${item.itemName}`));
+                    const itemData = catSnap.exists() ? catSnap.val() : {};
                     const batches = (catSnap.exists() && catSnap.val().batches) ? Object.entries(catSnap.val().batches) : [];
+
+                    let optionsHTML = '<option value="" disabled selected>-- Choose Batch / SN --</option>';
+                    let hasValidBatch = false;
+
+                    if (batches.length > 0) {
+                        batches.forEach(([bid, b]) => {
+                            const available = parseInt(b.currentStock || b.quantity || b.stock || 0) || 0;
+                            const isDisabled = available < item.requestQuantity;
+                            optionsHTML += `<option value="${bid}" ${isDisabled ? 'disabled' : ''}>
+                                Batch: ${escapeHtml(b.brandName || b.batchNo || bid)} (SN: ${escapeHtml(b.serialNumber || itemData.serialNumber || 'N/A')}) - [Available: ${available}]
+                            </option>`;
+                            if (!isDisabled) hasValidBatch = true;
+                        });
+                    }
+
+                    // 🚨 CRITICAL FALLBACK: If no explicit batch exists or has stock, generate Auto-Main-Stock Option
+                    if (!hasValidBatch) {
+                        const availQty = parseInt(itemData.availableStock ?? itemData.currentStock ?? itemData.quantity ?? itemData.stock ?? 0, 10);
+                        const snCode = itemData.serialNumber || itemData.barcode || itemData.sn || 'MAIN-STOCK';
+                        optionsHTML += `<option value="MAIN_STOCK_${index}" selected>Main Stock (SN: ${escapeHtml(snCode)}) - Avail: ${availQty} Pcs</option>`;
+                    }
 
                     html += `
                         <div class="item-batch-row mb-3 p-2 border rounded bg-light">
@@ -399,16 +520,8 @@ window.handleFinalHandover = async function(event, orderId) {
                                 <span class="badge bg-secondary">Req: ${item.requestQuantity}</span>
                             </div>
                             <select class="form-select form-select-sm handover-batch-dropdown" data-item-name="${escapeHtml(item.itemName)}" data-item-qty="${item.requestQuantity}" required>
-                                <option value="" disabled selected>-- Choose Batch / SN --</option>
-                                ${batches.map(([bid, b]) => {
-                                    const available = parseInt(b.currentStock) || 0;
-                                    const isDisabled = available < item.requestQuantity;
-                                    return `<option value="${bid}" ${isDisabled ? 'disabled' : ''}>
-                                        ${escapeHtml(b.brandName || 'Generic')} (SN: ${b.serialNumber}) - [Available: ${available}]
-                                    </option>`;
-                                }).join('')}
+                                ${optionsHTML}
                             </select>
-                            ${batches.length === 0 ? '<small class="text-danger mt-1 d-block">Error: No stock batches found for this item!</small>' : ''}
                         </div>
                     `;
                 }
@@ -502,26 +615,50 @@ window.submitHandoverWithSignature = async function(event) {
             const batchId = drop.value;
             const qtyToDeduct = parseInt(drop.dataset.itemQty);
 
-            const batchRef = ref(db, `inventory/${catName}/batches/${batchId}`);
-            const batchSnap = await get(batchRef);
+            if (batchId.startsWith('MAIN_STOCK_')) {
+                const catRef = ref(db, `inventory/${catName}`);
+                const catSnap = await get(catRef);
+                if (catSnap.exists()) {
+                    const cData = catSnap.val();
+                    const curQty = parseInt(cData.availableStock ?? cData.currentStock ?? cData.quantity ?? 0, 10);
+                    const newStock = Math.max(0, curQty - qtyToDeduct);
+                    await update(catRef, {
+                        quantity: newStock,
+                        availableStock: newStock,
+                        currentStock: newStock,
+                        stock: newStock
+                    });
+                    updatedItems.push({
+                        itemName: catName,
+                        batchSerialNumber: cData.serialNumber || 'MAIN-STOCK',
+                        brandName: cData.brandName || cData.itemName || 'Main Stock',
+                        requestQuantity: qtyToDeduct,
+                        stockBalance: newStock,
+                        totalCategoryStock: newStock
+                    });
+                }
+            } else {
+                const batchRef = ref(db, `inventory/${catName}/batches/${batchId}`);
+                const batchSnap = await get(batchRef);
 
-            if (batchSnap.exists()) {
-                const bData = batchSnap.val();
-                const newStock = Math.max(0, (parseInt(bData.currentStock) || 0) - qtyToDeduct);
+                if (batchSnap.exists()) {
+                    const bData = batchSnap.val();
+                    const newStock = Math.max(0, (parseInt(bData.currentStock) || 0) - qtyToDeduct);
 
-                await update(batchRef, { currentStock: newStock });
+                    await update(batchRef, { currentStock: newStock });
 
-                const allBatchesSnap = await get(ref(db, `inventory/${catName}/batches`));
-                const totalCatStock = Object.values(allBatchesSnap.val() || {}).reduce((s, b) => s + (parseInt(b.currentStock) || 0), 0);
+                    const allBatchesSnap = await get(ref(db, `inventory/${catName}/batches`));
+                    const totalCatStock = Object.values(allBatchesSnap.val() || {}).reduce((s, b) => s + (parseInt(b.currentStock) || 0), 0);
 
-                updatedItems.push({
-                    itemName: catName,
-                    batchSerialNumber: bData.serialNumber,
-                    brandName: bData.brandName,
-                    requestQuantity: qtyToDeduct,
-                    stockBalance: newStock,
-                    totalCategoryStock: totalCatStock
-                });
+                    updatedItems.push({
+                        itemName: catName,
+                        batchSerialNumber: bData.serialNumber,
+                        brandName: bData.brandName,
+                        requestQuantity: qtyToDeduct,
+                        stockBalance: newStock,
+                        totalCategoryStock: totalCatStock
+                    });
+                }
             }
         }
 
@@ -3552,6 +3689,9 @@ window.submitFinalOrderWithSignature = async function() {
         await set(ref(db, 'orders/' + orderId), cleanOrderData);
         await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
 
+        // Automatically deduct stock in Realtime Database upon requisition submission
+        await deductProductStockFromDatabase(items);
+
         // Notify Admin Users (AFTER Firebase RTDB save completes successfully)
         try {
             const adminUserIds = [];
@@ -3596,6 +3736,12 @@ window.submitFinalOrderWithSignature = async function() {
         if (currentUser.role === 'TEACHER') {
             fetchTeacherOrderHistory(currentUser.adecPassNumber || currentUser.uid);
         }
+
+        // Re-render UI views immediately
+        if (typeof renderTeacherDashboard === 'function') renderTeacherDashboard();
+        if (typeof renderCatalogPage === 'function') renderCatalogPage();
+        if (typeof fetchMasterInventory === 'function') fetchMasterInventory();
+        if (typeof loadMasterInventory === 'function') loadMasterInventory();
     } catch (e) {
         console.error("Order Submission Error:", e);
         showToast("Error submitting order request", 'error');
@@ -3641,14 +3787,7 @@ function fetchAdminOrders() {
                         ADEK: ${order.teacherUid} | Items: ${order.items?.length || 0}
                     </div>
                     <div class="request-items" style="display:flex;gap:10px;padding:10px 0;"></div>
-                    ${order.teacherRequestSignature ? `
-                        <div class="mb-2 text-center border rounded p-1 bg-light">
-                            <small class="d-block text-muted">Teacher's Order Signature</small>
-                            <div style="max-height: 60px;">
-                                ${window.createReloadableImgHtml(order.teacherRequestSignature, 'Teacher Signature', 'height: 60px; width: 100%;', false)}
-                            </div>
-                        </div>
-                    ` : ''}
+                    ${renderSignatureHTML(order.teacherRequestSignature || order.signatureUrl || order.receiverSignature, "Teacher's Order Signature")}
                     <div class="request-actions d-flex gap-2">
                         ${isPending ? `
                             <button class="action-btn prepare-btn btn-success flex-fill" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>
@@ -3981,21 +4120,21 @@ try {
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function(OneSignal) {
         try {
-            const origin = window.location.origin;
+            // Resolve subfolder path dynamically
             const path = window.location.pathname;
-            const dir = path.substring(0, path.lastIndexOf('/') + 1);
+            const basePath = path.substring(0, path.lastIndexOf('/') + 1) || '/';
 
-            console.log("OneSignal Target Scope Directory:", dir);
+            console.log("OneSignal Auto-Detected Base Scope:", basePath);
 
             await OneSignal.init({
                 appId: ONESIGNAL_APP_ID,
                 allowLocalhostAsSecureOrigin: true,
                 autoRegister: false,
                 serviceWorkerPath: 'OneSignalSDKWorker.js',
-                serviceWorkerParam: { scope: dir }
+                serviceWorkerParam: { scope: basePath }
             });
 
-            console.log("✅ OneSignal initialized successfully with scope:", dir);
+            console.log("✅ OneSignal Service Worker Initialized Successfully.");
 
             // Listen for permission & subscription changes
             OneSignal.Notifications.addEventListener("permissionChange", function(permission) {
@@ -4024,8 +4163,8 @@ try {
             if (typeof window.updateNotificationUIStatus === 'function') {
                 window.updateNotificationUIStatus();
             }
-        } catch (e) {
-            console.warn("OneSignal Silent Init Warning:", e.message);
+        } catch (err) {
+            console.warn("OneSignal Initialization Warning:", err.message || err);
         }
     });
 } catch (e) {
@@ -4059,8 +4198,8 @@ window.updateNotificationUIStatus = function() {
     });
 };
 
-window.toggleOneSignalNotifications = function() {
-    console.log("🔔 Enable Notification Clicked (v1.8.17)...");
+window.toggleOneSignalNotifications = async function() {
+    console.log("🔔 Enable Notification Button Clicked...");
 
     if (!('Notification' in window)) {
         alert("This browser does not support web notifications.");
@@ -4068,50 +4207,55 @@ window.toggleOneSignalNotifications = function() {
     }
 
     if (Notification.permission === 'denied') {
-        alert("⚠️ Notifications are blocked in browser settings. Please unblock them from the browser URL lock icon.");
+        alert("⚠️ Notifications are blocked in your browser settings. Unblock them from the browser lock icon near the URL bar.");
         return;
     }
 
-    // 1. Direct Native Permission Call (Zero Waiting / No Timeout)
-    Notification.requestPermission().then(function(permission) {
-        console.log("Native Permission Result:", permission);
+    try {
+        let granted = false;
 
-        if (permission === 'granted') {
-            // 2. Fire Immediate Welcome Notification
+        // Try OneSignal Permission request with a 3-second safety race
+        if (typeof OneSignalDeferred !== 'undefined') {
+            try {
+                const osPromise = new Promise((resolve) => {
+                    OneSignalDeferred.push(async (OneSignal) => {
+                        const res = await OneSignal.Notifications.requestPermission();
+                        resolve(res);
+                    });
+                });
+
+                const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), 3000));
+                const result = await Promise.race([osPromise, timeoutPromise]);
+
+                if (result === true || result === 'granted') {
+                    granted = true;
+                }
+            } catch (err) {
+                console.warn("OneSignal Request Exception:", err);
+            }
+        }
+
+        // Native Browser Fallback if OneSignal timed out or failed
+        if (!granted) {
+            const nativePerm = await Notification.requestPermission();
+            if (nativePerm === 'granted') granted = true;
+        }
+
+        if (granted) {
             if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
                 navigator.serviceWorker.ready.then(reg => {
                     reg.showNotification("🎉 Notifications Activated!", {
-                        body: "Welcome! You are now subscribed to real-time updates.",
-                        icon: "school.png",
-                        badge: "school.png"
-                    });
-                }).catch(() => {
-                    new Notification("🎉 Notifications Activated!", {
-                        body: "Welcome! You are now subscribed to real-time updates.",
+                        body: "Welcome! System notifications are active.",
                         icon: "school.png"
                     });
                 });
             } else {
                 new Notification("🎉 Notifications Activated!", {
-                    body: "Welcome! You are now subscribed to real-time updates.",
+                    body: "Welcome! System notifications are active.",
                     icon: "school.png"
                 });
             }
-
             alert("✅ Notifications Activated Successfully!");
-
-            // 3. Sync Subscription with OneSignal in Background
-            if (typeof OneSignalDeferred !== 'undefined') {
-                OneSignalDeferred.push(async function(OneSignal) {
-                    try {
-                        await OneSignal.User.PushSubscription.optIn();
-                        console.log("✅ OneSignal Background Opt-In Completed. Sub ID:", OneSignal.User.PushSubscription.id);
-                    } catch (e) {
-                        console.warn("OneSignal Background Opt-In Warning:", e.message);
-                    }
-                });
-            }
-
         } else {
             alert("⚠️ Notification permission was not granted.");
         }
@@ -4120,10 +4264,10 @@ window.toggleOneSignalNotifications = function() {
             window.updateNotificationUIStatus();
         }
 
-    }).catch(function(err) {
-        console.error("Native Permission Prompt Error:", err);
-        alert("Permission Request Error: " + err.message);
-    });
+    } catch (err) {
+        console.error("Toggle Execution Error:", err);
+        alert("Error: " + err.message);
+    }
 };
 
 window.syncOneSignalSubscriptionToFirebase = function() {

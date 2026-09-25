@@ -1737,3 +1737,35 @@ body.modal-open {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* Card Container Overflow Fix */
+.live-requisition-card,
+.requisition-card-item,
+.request-card {
+    height: auto !important;
+    min-height: fit-content !important;
+    padding-bottom: 20px !important;
+    overflow: visible !important;
+    margin-bottom: 20px !important;
+    box-sizing: border-box !important;
+}
+
+/* Handover Action Wrapper */
+.handover-btn-container,
+.card-action-footer,
+.request-actions {
+    display: flex !important;
+    width: 100% !important;
+    margin-top: 15px !important;
+    padding-top: 10px !important;
+    clear: both !important;
+    position: relative !important;
+}
+
+/* Signature Area Height Fix */
+.signature-preview-area,
+.signature-box-container {
+    min-height: 90px !important;
+    height: auto !important;
+    margin-bottom: 15px !important;
+}
