@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stationery-app-v1.6.5';
+const CACHE_NAME = 'stationery-app-v1.8.42';
 const ASSETS = [
   'index.html',
   'style.css',
@@ -36,16 +36,16 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     const requestUrl = new URL(event.request.url);
 
-    // 1. Bypass non-GET requests and all external domains (Google Drive, Firebase, etc.)
+    // Bypass non-GET requests and all external domains
     if (event.request.method !== 'GET' ||
         requestUrl.origin !== location.origin ||
         requestUrl.hostname.includes('google') ||
         requestUrl.hostname.includes('firebase') ||
         requestUrl.hostname.includes('via.placeholder.com')) {
-        return; // Allow native browser fetch without SW interception
+        return;
     }
 
-    // 2. Handle local assets with Network-First, Cache-Fallback strategy
+    // Handle local assets with Network-First, Cache-Fallback strategy
     event.respondWith(
         fetch(event.request)
             .then((response) => {
