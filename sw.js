@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stationery-app-v1.8.27';
+const CACHE_NAME = 'stationery-app-v1.6.5';
 const ASSETS = [
   'index.html',
   'style.css',
@@ -36,12 +36,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     const requestUrl = new URL(event.request.url);
 
-    // 1. Bypass non-GET requests and all external domains (Google Drive, Firebase, OneSignal, etc.)
+    // 1. Bypass non-GET requests and all external domains (Google Drive, Firebase, etc.)
     if (event.request.method !== 'GET' ||
         requestUrl.origin !== location.origin ||
         requestUrl.hostname.includes('google') ||
         requestUrl.hostname.includes('firebase') ||
-        requestUrl.hostname.includes('onesignal') ||
         requestUrl.hostname.includes('via.placeholder.com')) {
         return; // Allow native browser fetch without SW interception
     }
@@ -70,29 +69,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: data.body || 'You have a new update.',
     icon: 'school.png',
-    badge: 'school.png',
-    data: {
-      url: data.url || ''
-    }
+    badge: 'school.png'
   };
   event.waitUntil(self.registration.showNotification(title, options));
-});
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) ? event.notification.data.url : self.location.origin;
-
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (let i = 0; i < clientList.length; i++) {
-        const client = clientList[i];
-        if (client.url === targetUrl && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      if (clients.openWindow) {
-        return clients.openWindow(targetUrl);
-      }
-    })
-  );
 });

@@ -455,31 +455,12 @@ button:focus-visible { outline: 3px solid #3498db; outline-offset: 2px; }
     flex-grow: 1;
 }
 
-/* Responsive Auto-Filling Catalog Grid */
-#catalogGridContainer,
-.catalog-grid,
-.stationery-catalog-grid,
-#stationery-list,
+/* ==================== GRID (Catalog) ==================== */
 .grid-container {
-    display: grid !important;
-    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)) !important;
-    gap: 16px !important;
-    width: 100% !important;
-    box-sizing: border-box !important;
-    align-items: stretch !important;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px;
     margin-top: 16px;
-}
-
-/* Ensure catalog cards scale smoothly inside grid cells */
-.catalog-card,
-.stationery-card,
-.inventory-card {
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: space-between !important;
-    width: 100% !important;
-    height: 100% !important;
-    margin: 0 !important;
 }
 
 /* ==================== INVENTORY ITEM HEADER (BATCH AWARE) ==================== */
@@ -1529,8 +1510,6 @@ body.modal-open {
         padding: 2px 8px !important;
     }
 
-/* Responsive Batch Inventory Table (Mobile Only) */
-@media (max-width: 768px) {
     .batch-inventory-table thead {
         display: none !important;
     }
@@ -1561,6 +1540,18 @@ body.modal-open {
     }
 
     .batch-inventory-table td:last-child {
+
+    .user-profile-badge .text-muted {
+        font-size: 9px !important;
+    }
+
+    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
+        height: 32px !important;
+        min-height: 32px !important;
+        font-size: 0.75rem !important;
+        padding: 2px 8px !important;
+    }
+}
         border-bottom: none !important;
     }
 
@@ -1581,18 +1572,6 @@ body.modal-open {
     .batch-inventory-table td.empty-batch-cell::before {
         display: none !important;
     }
-}
-
-/* Ensure no duplicate labels inside table cells on Desktop */
-@media (min-width: 769px) {
-    #master-inventory-table td::before,
-    .batch-inventory-table td::before,
-    .table td::before,
-    .history-table td::before {
-        display: none !important;
-        content: "" !important;
-    }
-}
 
     .content { padding: 14px; }
     .form-container { padding: 18px 16px; }
@@ -1618,105 +1597,6 @@ body.modal-open {
     }
 }
 
-/* Universal Reload Container & Button (v1.6.5) */
-.reloadable-img-container {
-    position: relative !important;
-}
-
-.img-reload-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(248, 249, 250, 0.95);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 5;
-    padding: 4px;
-}
-
-.btn-reload-img {
-    background-color: #0d6efd;
-    color: #ffffff;
-    border: none;
-    padding: 5px 10px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    border-radius: 16px;
-    cursor: pointer;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    white-space: nowrap;
-}
-
-/* Compact mode for Table thumbnails (50x50px) */
-.img-reload-overlay.compact .btn-reload-img {
-    padding: 2px 5px !important;
-    font-size: 0.65rem !important;
-    border-radius: 4px !important;
-}
-
-.btn-reload-img:hover {
-    background-color: #0b5ed7;
-}
-
-.btn-reload-img:disabled {
-    background-color: #6c757d;
-    cursor: not-allowed;
-}
-
-/* Universal Reload Container & Button (v1.6.5) */
-.reloadable-img-container {
-    position: relative !important;
-}
-
-.img-reload-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(248, 249, 250, 0.95);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 5;
-    padding: 4px;
-    border-radius: 8px;
-}
-
-.btn-reload-img {
-    background-color: #0d6efd;
-    color: #ffffff;
-    border: none;
-    padding: 5px 10px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    border-radius: 16px;
-    cursor: pointer;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    white-space: nowrap;
-    transition: all 0.2s ease;
-}
-
-.btn-reload-img:hover {
-    background-color: #0b5ed7;
-    transform: scale(1.03);
-}
-
-.btn-reload-img:disabled {
-    background-color: #6c757d;
-    cursor: not-allowed;
-}
-
-/* Compact mode for Table thumbnails (50x50px) */
-.img-reload-overlay.compact .btn-reload-img {
-    padding: 2px 5px !important;
-    font-size: 0.65rem !important;
-    border-radius: 4px !important;
-}
-
 @media (max-width: 480px) {
     .login-container { padding: 28px 22px; }
     .grid-container { grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -1736,36 +1616,4 @@ body.modal-open {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
-}
-
-/* Card Container Overflow Fix */
-.live-requisition-card,
-.requisition-card-item,
-.request-card {
-    height: auto !important;
-    min-height: fit-content !important;
-    padding-bottom: 20px !important;
-    overflow: visible !important;
-    margin-bottom: 20px !important;
-    box-sizing: border-box !important;
-}
-
-/* Handover Action Wrapper */
-.handover-btn-container,
-.card-action-footer,
-.request-actions {
-    display: flex !important;
-    width: 100% !important;
-    margin-top: 15px !important;
-    padding-top: 10px !important;
-    clear: both !important;
-    position: relative !important;
-}
-
-/* Signature Area Height Fix */
-.signature-preview-area,
-.signature-box-container {
-    min-height: 90px !important;
-    height: auto !important;
-    margin-bottom: 15px !important;
 }

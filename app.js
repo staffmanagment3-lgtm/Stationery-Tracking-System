@@ -4,118 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.27";
-
-/**
- * Deducts stock from main product inventory when item is ordered/issued
- * @param {Array} orderItems - Array of items in order [{ itemId, requestedQty }]
- */
-async function deductProductStockFromDatabase(orderItems) {
-    if (!orderItems || !Array.isArray(orderItems) || orderItems.length === 0) return;
-
-    const dbRef = ref(db);
-    const updates = {};
-
-    try {
-        for (const item of orderItems) {
-            const itemId = item.itemId || item.id || item.itemName || item.serialNumber || item.serial;
-            const requestedQty = parseInt(item.quantity || item.reqQty || item.requestedQty || item.requestQuantity || 1, 10);
-
-            if (!itemId) continue;
-
-            // Fetch current stock from primary locations
-            let targetPath = `inventory/${itemId}`;
-            let snapshot = await get(child(dbRef, targetPath));
-
-            if (!snapshot.exists()) {
-                targetPath = `products/${itemId}`;
-                snapshot = await get(child(dbRef, targetPath));
-            }
-
-            if (!snapshot.exists()) {
-                targetPath = `items/${itemId}`;
-                snapshot = await get(child(dbRef, targetPath));
-            }
-
-            if (snapshot.exists()) {
-                const productData = snapshot.val();
-                const currentQty = parseInt(
-                    productData.availableStock ?? productData.quantity ?? productData.currentStock ?? productData.stock ?? 0,
-                    10
-                );
-
-                // Calculate new remaining stock (prevent going below 0)
-                const newStock = Math.max(0, currentQty - requestedQty);
-                const updatedDate = new Date().toLocaleString();
-
-                // Update all key aliases across node locations so all screens read the updated value
-                updates[`/inventory/${itemId}/quantity`] = newStock;
-                updates[`/inventory/${itemId}/availableStock`] = newStock;
-                updates[`/inventory/${itemId}/currentStock`] = newStock;
-                updates[`/inventory/${itemId}/stock`] = newStock;
-                updates[`/inventory/${itemId}/lastUpdated`] = updatedDate;
-
-                updates[`/products/${itemId}/quantity`] = newStock;
-                updates[`/products/${itemId}/availableStock`] = newStock;
-                updates[`/products/${itemId}/currentStock`] = newStock;
-                updates[`/products/${itemId}/stock`] = newStock;
-                updates[`/products/${itemId}/lastUpdated`] = updatedDate;
-
-                updates[`/items/${itemId}/quantity`] = newStock;
-                updates[`/items/${itemId}/availableStock`] = newStock;
-                updates[`/items/${itemId}/currentStock`] = newStock;
-                updates[`/items/${itemId}/stock`] = newStock;
-                updates[`/items/${itemId}/lastUpdated`] = updatedDate;
-
-                console.log(`📉 Stock Deducted for ${itemId}: ${currentQty} ➔ ${newStock}`);
-            }
-        }
-
-        // Execute multi-location atomic update
-        if (Object.keys(updates).length > 0) {
-            await update(dbRef, updates);
-            console.log("✅ Database stock successfully updated across all ordered items!");
-        }
-
-    } catch (error) {
-        console.error("❌ Stock Deduction Error:", error);
-    }
-}
-window.deductProductStockFromDatabase = deductProductStockFromDatabase;
-
-// Helper to safely render Signature Images
-function renderSignatureHTML(rawSigData, labelTitle = "Teacher's Order Signature") {
-    if (!rawSigData || rawSigData === 'N/A' || rawSigData === 'null' || rawSigData === 'undefined') {
-        return `<div class="sig-placeholder text-muted" style="padding: 10px; text-align: center; font-size: 12px; color: #888;">No Signature Stored</div>`;
-    }
-
-    let srcUrl = String(rawSigData).trim();
-    // Fix missing Data URI scheme if raw base64 string is provided
-    if (!srcUrl.startsWith('data:image') && !srcUrl.startsWith('http')) {
-        srcUrl = `data:image/png;base64,${srcUrl}`;
-    }
-
-    return `
-        <div class="signature-box-container" style="width: 100%; text-align: center; margin: 10px 0; padding: 8px; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 6px;">
-            <span style="font-size: 11px; color: #666; display: block; margin-bottom: 4px;">${escapeHtml(labelTitle)}</span>
-            <img src="${srcUrl}" alt="Signature" style="max-height: 80px; max-width: 100%; object-fit: contain; border-bottom: 1px solid #ccc;"
-                 onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'text-danger\\' style=\\'font-size:12px;\\'>Signature Load Failed</span>';" />
-        </div>
-    `;
-}
-window.renderSignatureHTML = renderSignatureHTML;
-
-// Safe Image URL Helper (Uses offline inline SVG data URI to avoid network errors)
-function getSafeImageUrl(item) {
-    const defaultPlaceholder = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23e0e0e0'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%23757575' font-size='12' font-family='sans-serif'>No Image</text></svg>";
-    if (!item) return typeof FALLBACK_IMG !== 'undefined' ? FALLBACK_IMG : defaultPlaceholder;
-    let url = item.imageUrl || item.image || item.photoUrl || item.img || item.itemImageUrl;
-    if (!url || typeof url !== 'string' || url.trim() === '' || url === 'null' || url === 'undefined') {
-        return typeof FALLBACK_IMG !== 'undefined' ? FALLBACK_IMG : defaultPlaceholder;
-    }
-    return url.trim();
-}
-window.getSafeImageUrl = getSafeImageUrl;
+const APP_VERSION = "1.6.5";
 
 // Safe Version Check (Preserves Auth Keys)
 (function safeVersionCheck() {
@@ -168,90 +57,31 @@ function isValidImageUrl(url) {
 }
 
 function getItemImageHtml(imageUrl) {
-    return window.createReloadableImgHtml(imageUrl, 'Item', '', true);
+    const src = isValidImageUrl(imageUrl) ? imageUrl : OFFLINE_PLACEHOLDER;
+    return `<img src="${src}"
+                 alt="Item Image"
+                 class="img-thumbnail"
+                 style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px;"
+                 loading="lazy"
+                 onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />`;
 }
 
 /**
- * Optimized Catalog Card Image HTML (v1.6.5)
- * Supports Universal Manual Reload Overlay
+ * Optimized Catalog Card Image HTML (v1.5.9)
  */
 function getCatalogCardImageHtml(item) {
     const imgUrl = item.imageUrl || item.image || item.photoUrl;
-    return window.createReloadableImgHtml(imgUrl, item.name || item.itemName, 'height: 130px; width: 100%;', false);
-}
-
-/**
- * Universal Reloadable Image System (v1.6.5)
- */
-window.handleUniversalImageError = function(imgElement, originalUrl, isCompact = false) {
-    if (!imgElement) return;
-
-    imgElement.style.display = 'none';
-    const container = imgElement.parentElement;
-    if (!container) return;
-
-    // Check if reload overlay already exists
-    let overlay = container.querySelector('.img-reload-overlay');
-    if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.className = 'img-reload-overlay' + (isCompact ? ' compact' : '');
-        overlay.innerHTML = `
-            <button type="button" class="btn-reload-img" onclick="window.retryUniversalImage(this, '${originalUrl}', ${isCompact})">
-                ${isCompact ? '🔄 Retry' : '🔄 Reload Photo'}
-            </button>
-        `;
-        container.appendChild(overlay);
-    } else {
-        overlay.style.display = 'flex';
-    }
-};
-
-window.retryUniversalImage = function(btnElement, originalUrl, isCompact) {
-    const overlay = btnElement.closest('.img-reload-overlay');
-    const container = btnElement.closest('.reloadable-img-container') || btnElement.parentElement;
-    const imgElement = container.querySelector('img');
-
-    if (!imgElement) return;
-
-    btnElement.disabled = true;
-    btnElement.innerHTML = isCompact ? '⏳...' : '⏳ Loading...';
-
-    // Append cache-buster timestamp parameter
-    const cacheBusterUrl = (originalUrl && originalUrl.startsWith('http'))
-        ? originalUrl + (originalUrl.includes('?') ? '&' : '?') + 't=' + Date.now()
-        : originalUrl;
-
-    const newImg = new Image();
-    newImg.onload = function() {
-        imgElement.src = cacheBusterUrl;
-        imgElement.style.display = 'block';
-        if (overlay) overlay.style.display = 'none';
-        btnElement.disabled = false;
-        btnElement.innerHTML = isCompact ? '🔄 Retry' : '🔄 Reload Photo';
-    };
-    newImg.onerror = function() {
-        btnElement.disabled = false;
-        btnElement.innerHTML = isCompact ? '❌' : '❌ Retry Again';
-    };
-    newImg.src = cacheBusterUrl;
-};
-
-window.createReloadableImgHtml = function(imageUrl, altText = 'Image', styleCustom = '', isCompact = false) {
-    const validSrc = isValidImageUrl(imageUrl) ? imageUrl : OFFLINE_PLACEHOLDER;
-    const defaultWrapperStyle = isCompact
-        ? "position: relative; width: 50px; height: 50px; display: inline-flex; align-items: center; justify-content: center; background: #f0f0f0; border-radius: 6px; overflow: hidden;"
-        : "position: relative; width: 100%; min-height: 120px; display: flex; align-items: center; justify-content: center; background: #f8f9fa; border-radius: 8px; overflow: hidden;";
+    const validSrc = isValidImageUrl(imgUrl) ? imgUrl : OFFLINE_PLACEHOLDER;
 
     return `
-        <div class="reloadable-img-container" style="${defaultWrapperStyle} ${styleCustom}">
+        <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; margin-bottom: 10px;">
             <img src="${validSrc}"
-                 alt="${escapeHtml(altText)}"
-                 style="max-width: 100%; max-height: 100%; object-fit: contain; display: block;"
-                 onerror="window.handleUniversalImageError(this, '${validSrc}', ${isCompact})"
-                 loading="lazy" />
+                 alt="${escapeHtml(item.name || item.itemName || 'Item Image')}"
+                 style="max-width: 100%; max-height: 100%; object-fit: contain;"
+                 onerror="this.onerror=null; this.src='${OFFLINE_PLACEHOLDER}';" />
         </div>
     `;
-};
+}
 
 // ==================== STATE ====================
 let currentUser = null;
@@ -477,7 +307,7 @@ window.handleFinalHandover = async function(event, orderId) {
                     existingSigEl.innerHTML = `
                         <div class="p-2 border rounded bg-light mb-3 text-start">
                             <p class="text-muted small mb-1 fw-bold">Stored Request Signature:</p>
-                            ${window.createReloadableImgHtml(savedSig, 'Request Signature', 'max-height:80px; background:white; padding:2px;', false)}
+                            <img src="${savedSig}" style="max-height:80px; border:1px solid #ddd; border-radius:4px; background:white; padding:2px;">
                         </div>`;
                 } else {
                     existingSigEl.innerHTML = '';
@@ -489,29 +319,7 @@ window.handleFinalHandover = async function(event, orderId) {
 
                 for (const [index, item] of (order.items || []).entries()) {
                     const catSnap = await get(ref(db, `inventory/${item.itemName}`));
-                    const itemData = catSnap.exists() ? catSnap.val() : {};
                     const batches = (catSnap.exists() && catSnap.val().batches) ? Object.entries(catSnap.val().batches) : [];
-
-                    let optionsHTML = '<option value="" disabled selected>-- Choose Batch / SN --</option>';
-                    let hasValidBatch = false;
-
-                    if (batches.length > 0) {
-                        batches.forEach(([bid, b]) => {
-                            const available = parseInt(b.currentStock || b.quantity || b.stock || 0) || 0;
-                            const isDisabled = available < item.requestQuantity;
-                            optionsHTML += `<option value="${bid}" ${isDisabled ? 'disabled' : ''}>
-                                Batch: ${escapeHtml(b.brandName || b.batchNo || bid)} (SN: ${escapeHtml(b.serialNumber || itemData.serialNumber || 'N/A')}) - [Available: ${available}]
-                            </option>`;
-                            if (!isDisabled) hasValidBatch = true;
-                        });
-                    }
-
-                    // 🚨 CRITICAL FALLBACK: If no explicit batch exists or has stock, generate Auto-Main-Stock Option
-                    if (!hasValidBatch) {
-                        const availQty = parseInt(itemData.availableStock ?? itemData.currentStock ?? itemData.quantity ?? itemData.stock ?? 0, 10);
-                        const snCode = itemData.serialNumber || itemData.barcode || itemData.sn || 'MAIN-STOCK';
-                        optionsHTML += `<option value="MAIN_STOCK_${index}" selected>Main Stock (SN: ${escapeHtml(snCode)}) - Avail: ${availQty} Pcs</option>`;
-                    }
 
                     html += `
                         <div class="item-batch-row mb-3 p-2 border rounded bg-light">
@@ -520,8 +328,16 @@ window.handleFinalHandover = async function(event, orderId) {
                                 <span class="badge bg-secondary">Req: ${item.requestQuantity}</span>
                             </div>
                             <select class="form-select form-select-sm handover-batch-dropdown" data-item-name="${escapeHtml(item.itemName)}" data-item-qty="${item.requestQuantity}" required>
-                                ${optionsHTML}
+                                <option value="" disabled selected>-- Choose Batch / SN --</option>
+                                ${batches.map(([bid, b]) => {
+                                    const available = parseInt(b.currentStock) || 0;
+                                    const isDisabled = available < item.requestQuantity;
+                                    return `<option value="${bid}" ${isDisabled ? 'disabled' : ''}>
+                                        ${escapeHtml(b.brandName || 'Generic')} (SN: ${b.serialNumber}) - [Available: ${available}]
+                                    </option>`;
+                                }).join('')}
                             </select>
+                            ${batches.length === 0 ? '<small class="text-danger mt-1 d-block">Error: No stock batches found for this item!</small>' : ''}
                         </div>
                     `;
                 }
@@ -615,50 +431,26 @@ window.submitHandoverWithSignature = async function(event) {
             const batchId = drop.value;
             const qtyToDeduct = parseInt(drop.dataset.itemQty);
 
-            if (batchId.startsWith('MAIN_STOCK_')) {
-                const catRef = ref(db, `inventory/${catName}`);
-                const catSnap = await get(catRef);
-                if (catSnap.exists()) {
-                    const cData = catSnap.val();
-                    const curQty = parseInt(cData.availableStock ?? cData.currentStock ?? cData.quantity ?? 0, 10);
-                    const newStock = Math.max(0, curQty - qtyToDeduct);
-                    await update(catRef, {
-                        quantity: newStock,
-                        availableStock: newStock,
-                        currentStock: newStock,
-                        stock: newStock
-                    });
-                    updatedItems.push({
-                        itemName: catName,
-                        batchSerialNumber: cData.serialNumber || 'MAIN-STOCK',
-                        brandName: cData.brandName || cData.itemName || 'Main Stock',
-                        requestQuantity: qtyToDeduct,
-                        stockBalance: newStock,
-                        totalCategoryStock: newStock
-                    });
-                }
-            } else {
-                const batchRef = ref(db, `inventory/${catName}/batches/${batchId}`);
-                const batchSnap = await get(batchRef);
+            const batchRef = ref(db, `inventory/${catName}/batches/${batchId}`);
+            const batchSnap = await get(batchRef);
 
-                if (batchSnap.exists()) {
-                    const bData = batchSnap.val();
-                    const newStock = Math.max(0, (parseInt(bData.currentStock) || 0) - qtyToDeduct);
+            if (batchSnap.exists()) {
+                const bData = batchSnap.val();
+                const newStock = Math.max(0, (parseInt(bData.currentStock) || 0) - qtyToDeduct);
 
-                    await update(batchRef, { currentStock: newStock });
+                await update(batchRef, { currentStock: newStock });
 
-                    const allBatchesSnap = await get(ref(db, `inventory/${catName}/batches`));
-                    const totalCatStock = Object.values(allBatchesSnap.val() || {}).reduce((s, b) => s + (parseInt(b.currentStock) || 0), 0);
+                const allBatchesSnap = await get(ref(db, `inventory/${catName}/batches`));
+                const totalCatStock = Object.values(allBatchesSnap.val() || {}).reduce((s, b) => s + (parseInt(b.currentStock) || 0), 0);
 
-                    updatedItems.push({
-                        itemName: catName,
-                        batchSerialNumber: bData.serialNumber,
-                        brandName: bData.brandName,
-                        requestQuantity: qtyToDeduct,
-                        stockBalance: newStock,
-                        totalCategoryStock: totalCatStock
-                    });
-                }
+                updatedItems.push({
+                    itemName: catName,
+                    batchSerialNumber: bData.serialNumber,
+                    brandName: bData.brandName,
+                    requestQuantity: qtyToDeduct,
+                    stockBalance: newStock,
+                    totalCategoryStock: totalCatStock
+                });
             }
         }
 
@@ -853,14 +645,14 @@ window.viewOrderReceipt = async function(orderId) {
         return `
         <tr>
             <td class="text-center">
-                ${window.createReloadableImgHtml(itemImg, item.itemName, '', true)}
+                <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 60px; height: 50px; object-fit: contain; border-radius: 4px;" loading="lazy">
             </td>
             <td>
                 <div class="fw-bold">${escapeHtml(item.itemName)}</div>
                 <small class="text-muted" style="font-size:9px; word-break: break-all; display:block; margin-top:4px;">Image URL: ${itemImg}</small>
             </td>
             <td class="text-center"><code>${item.batchSerialNumber || item.serial || item.itemSn || '-'}</code></td>
-            <td class="text-center fw-bold">${item.requestQuantity} ${item.unit || 'Pcs'}</td>
+            <td class="text-center fw-bold">${item.requestQuantity}</td>
         </tr>
     `}).join('');
 
@@ -869,8 +661,8 @@ window.viewOrderReceipt = async function(orderId) {
         window.loadCachedImage(img, img.dataset.url);
     });
 
-        $('receipt-teacher-sig').parentElement.innerHTML = window.createReloadableImgHtml(order.teacherRequestSignature || order.handoverSignature || "", 'Requester Signature', 'min-height: 80px; width: 100%;', false);
-        $('receipt-admin-sig').parentElement.innerHTML = window.createReloadableImgHtml(order.handoverSignatureUrl || order.handoverSignature || "", 'Authorized Signature', 'min-height: 80px; width: 100%;', false);
+        $('receipt-teacher-sig').src = order.teacherRequestSignature || order.handoverSignature || "";
+        $('receipt-admin-sig').src = order.handoverSignatureUrl || order.handoverSignature || "";
 
         bootstrap.Modal.getOrCreateInstance($('receiptModal')).show();
     } catch (e) {
@@ -1380,12 +1172,6 @@ window.handleUserLogout = function(event) {
     if (confirm("Are you sure you want to logout?")) {
         console.log("Clearing user session...");
 
-        if (window.OneSignalDeferred) {
-            OneSignalDeferred.push(async function(OneSignal) {
-                await OneSignal.logout().catch(() => {});
-            });
-        }
-
         localStorage.removeItem('stationery_user_adec');
         localStorage.removeItem('currentUserPass');
         localStorage.removeItem('currentUserRole');
@@ -1691,16 +1477,15 @@ window.renderCartModalItems = function() {
                 <img src="${item.imageUrl || item.image || FALLBACK_IMG}" style="width: 50px; height: 50px; object-fit: contain;" class="rounded border">
                 <div>
                     <h6 class="mb-0 fw-bold">${item.itemName || 'Stationery Item'}</h6>
-                    <small class="text-muted">SN: ${item.serialNumber || 'N/A'} | Unit: ${item.unit || 'Pcs'}</small>
+                    <small class="text-muted">SN: ${item.serialNumber || 'N/A'}</small>
                 </div>
             </div>
-            <div class="d-flex flex-column align-items-end gap-2">
+            <div class="d-flex align-items-center gap-3">
                 <div class="input-group input-group-sm" style="width: 110px;">
                     <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, -1)">-</button>
                     <input type="text" class="form-control text-center bg-white" value="${item.requestQuantity || 1}" readonly>
                     <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, 1)">+</button>
                 </div>
-                <small class="text-primary fw-bold">Qty: ${item.requestQuantity} ${item.unit || 'Pcs'}</small>
                 <button class="btn btn-outline-danger btn-sm" onclick="window.removeFromCart(${index})">🗑️</button>
             </div>
         </li>`;
@@ -1908,16 +1693,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            try {
-                navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
-                    .then(reg => {
-                        console.log('SW Registered successfully:', reg.scope);
-                        reg.update();
-                    })
-                    .catch(err => console.warn('ServiceWorker registration bypassed:', err));
-            } catch (swErr) {
-                console.warn('ServiceWorker registration exception bypassed:', swErr);
-            }
+            navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
+                .then(reg => {
+                    console.log('SW Registered successfully:', reg.scope);
+                    reg.update();
+                })
+                .catch(err => console.warn('ServiceWorker registration failed:', err));
         });
     }
 
@@ -2252,25 +2033,14 @@ function addSystemNotification(title, message, timestamp = new Date()) {
 }
 
 function updateNotificationBadge() {
-    const badgeCount = notificationsList.length;
-    const badgeElements = [
-        $('notif-badge'),
-        document.getElementById('notificationBadge'),
-        document.getElementById('notificationBadgeAdmin'),
-        document.getElementById('notificationBadgeTeacher')
-    ];
-
-    badgeElements.forEach(badgeEl => {
-        if (badgeEl) {
-            badgeEl.textContent = badgeCount;
-            if (badgeCount > 0) {
-                badgeEl.classList.remove('d-none');
-                badgeEl.style.display = 'inline-block';
-            } else {
-                badgeEl.style.display = 'none';
-            }
+    const badgeEl = $('notif-badge');
+    if (badgeEl) {
+        badgeEl.textContent = notificationsList.length;
+        if (notificationsList.length > 0) {
+            badgeEl.classList.remove('d-none');
+            badgeEl.style.display = 'flex';
         }
-    });
+    }
 }
 
 function renderNotificationList() {
@@ -2619,16 +2389,6 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
     } else {
         showView('login-view');
     }
-
-    if (currentUser && (currentUser.adecPassNumber || currentUser.uid)) {
-        const userId = (currentUser.adecPassNumber || currentUser.uid).toString();
-        if (window.OneSignalDeferred) {
-            OneSignalDeferred.push(async function(OneSignal) {
-                await OneSignal.login(userId).catch(() => {});
-                window.updateNotificationUIStatus();
-            });
-        }
-    }
 };
 
 async function handleUserRole(adecNumber) {
@@ -2641,6 +2401,8 @@ async function handleUserRole(adecNumber) {
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
 
             fetchSystemBranding(); fetchCategories();
+
+            if ("Notification" in window) Notification.requestPermission();
 
             window.renderDashboardForRole(userData.role, adecNumber);
         } else {
@@ -2701,16 +2463,11 @@ function fetchInventory() {
                 desc = "Stationery supplies.";
             }
 
-            const categoryName = catData.category || catData.itemCategory || catData.type || catId;
-
             return {
                 id: catId,
-                category: categoryName,
                 data: {
                     itemName: actualName,
-                    category: categoryName,
                     quantity: totalStock,
-                    unit: catData.unit || 'Pcs',
                     imageUrl: firstImg,
                     serialNumber: topSerial,
                     description: desc
@@ -2724,85 +2481,12 @@ function fetchInventory() {
     });
 }
 
-// 1. Populate Dropdown Options Dynamically from Loaded Firebase Items
-window.populateCategoryDropdown = function(items) {
-    const categorySelect = document.getElementById('categoryFilterSelect');
-    const catalogList = items || window.allCatalogItems || catalogState.allItems || [];
-    if (!categorySelect || !Array.isArray(catalogList)) return;
-
-    const currentSelected = categorySelect.value || 'ALL';
-
-    // Extract unique categories from items list
-    const categories = new Set();
-    catalogList.forEach(item => {
-        const data = item.data || item;
-        const cat = item.category || data.category || data.itemCategory || data.type;
-        if (cat && typeof cat === 'string' && cat.trim() !== '') {
-            categories.add(cat.trim());
-        }
-    });
-
-    // Build Dropdown HTML Options
-    let optionsHtml = `<option value="ALL">📁 All Categories</option>`;
-    Array.from(categories).sort().forEach(cat => {
-        optionsHtml += `<option value="${cat}">${cat}</option>`;
-    });
-
-    categorySelect.innerHTML = optionsHtml;
-
-    // Restore selection if category still exists
-    if (categories.has(currentSelected)) {
-        categorySelect.value = currentSelected;
-    } else {
-        categorySelect.value = 'ALL';
-    }
-};
-
-// 2. Combined Search + Category Filter Function
-window.applyCatalogFilters = function() {
-    const searchInput = document.getElementById('searchCatalogInput') || document.getElementById('stationery-search');
-    const categorySelect = document.getElementById('categoryFilterSelect');
-
-    const searchQuery = searchInput ? searchInput.value.trim().toLowerCase() : (catalogState.searchTerm || '');
-    const selectedCategory = categorySelect ? categorySelect.value : 'ALL';
-
-    catalogState.searchTerm = searchQuery;
-    const allItems = window.allCatalogItems || catalogState.allItems || [];
-
-    // Filter by BOTH search query AND selected category simultaneously
-    const filteredItems = allItems.filter(item => {
-        const data = item.data || item;
-        // Match Search Query
-        const name = (data.itemName || data.name || '').toString().toLowerCase();
-        const serial = (data.serialNumber || data.sn || data.code || '').toString().toLowerCase();
-        const brand = (data.brandName || data.brand || '').toString().toLowerCase();
-
-        const matchesSearch = searchQuery === '' ||
-                              name.includes(searchQuery) ||
-                              serial.includes(searchQuery) ||
-                              brand.includes(searchQuery);
-
-        // Match Selected Category
-        const itemCategory = (item.category || data.category || data.itemCategory || data.type || '').toString();
-        const matchesCategory = (selectedCategory === 'ALL') ||
-                                (itemCategory.trim().toLowerCase() === selectedCategory.trim().toLowerCase());
-
-        return matchesSearch && matchesCategory;
-    });
-
-    window.filteredCatalogItems = filteredItems;
-    catalogState.filtered = filteredItems;
-    catalogState.currentPage = 1;
-
-    // Re-render catalog page with filtered results starting at Page 1
-    if (typeof renderCatalogPage === 'function') {
-        renderCatalogPage(1);
-    }
-};
-
 function resetCatalog() {
-    populateCategoryDropdown(catalogState.allItems);
-    applyCatalogFilters();
+    const term = catalogState.searchTerm;
+    catalogState.filtered = term
+        ? catalogState.allItems.filter(({ data }) => (data.itemName || '').toLowerCase().includes(term) || (data.serialNumber || '').toLowerCase().includes(term))
+        : catalogState.allItems.slice();
+    renderCatalogPage();
 }
 
 function renderCatalogPage() {
@@ -2827,7 +2511,7 @@ function renderCatalogPage() {
             <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px;">
                 <!-- 1. ITEM PHOTO -->
                 <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden;">
-                    <img src="${getSafeImageUrl(data)}"
+                    <img src="${data.imageUrl || data.image || FALLBACK_IMG}"
                          alt="${escapeHtml(titleToDisplay)}"
                          style="max-width: 100%; max-height: 100%; object-fit: contain;"
                          onerror="this.onerror=null; this.src='${FALLBACK_IMG}';"
@@ -2845,14 +2529,9 @@ function renderCatalogPage() {
                 </p>
 
                 <!-- 4. DESCRIPTION -->
-                <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
+                <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
                     ${escapeHtml(productDesc)}
                 </p>
-                <div class="mb-3">
-                    <span class="badge ${data.quantity > 0 ? 'bg-success' : 'bg-danger'} w-100 py-2">
-                        Stock: ${data.quantity} ${data.unit || 'Pcs'}
-                    </span>
-                </div>
 
                 <!-- 5. VIEW DETAILS BUTTON -->
                 <button class="add-to-cart-btn w-100" style="margin-top: auto;" onclick="window.viewItemDetails('${id}')">View Details</button>
@@ -2886,7 +2565,7 @@ window.viewItemDetails = function(itemId) {
     $('detail-item-name').innerText = productName;
     $('detail-item-sn').innerText = productSN;
     $('detail-item-description').innerText = "Description: " + productDesc;
-    $('detail-item-stock').innerText = (data.quantity || '0') + " " + (data.unit || 'Pcs');
+    $('detail-item-stock').innerText = data.quantity || '0';
 
     const imgUrl = data.imageUrl || data.image || data.photoUrl;
     $('detail-item-image').src = getDirectDriveUrl(imgUrl) || FALLBACK_IMG;
@@ -2944,9 +2623,7 @@ window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
     const isOut = (parseInt(itemData.quantity) || 0) <= 0;
 
     content.innerHTML = `
-        <div style="margin-bottom: 15px;">
-            ${window.createReloadableImgHtml(itemData.imageUrl, itemData.itemName, 'height: 130px; width: 100%;', false)}
-        </div>
+        <img class="item-detail-img" src="${FALLBACK_IMG}">
         <div class="item-detail-info">
             <span class="badge bg-info">${escapeHtml(itemData.category || 'General')}</span>
             <h3 id="detail-item-name">${escapeHtml(itemData.itemName)}</h3>
@@ -2961,6 +2638,8 @@ window.showJanamKundaliModal = function(itemId, data, isAdmin = true) {
                 </button>
             </div>
         </div>`;
+
+    attachSmartImage(content.querySelector('img'), itemData.imageUrl);
 
     if (!isAdmin) {
         const addBtn = $('detail-add-btn');
@@ -3078,7 +2757,7 @@ function renderMasterInventory() {
                         <h5 class="mb-0 fw-bold text-primary inventory-item-title"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(itemNameDisplay)}</h5>
                         <div class="inventory-item-actions d-flex align-items-center gap-3">
                             <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} total-stock-badge p-2 px-3 fs-6">
-                                Total Stock: ${totalStock} ${catData.unit || 'Pcs'}
+                                Total Stock: ${totalStock}
                             </span>
                             <button class="btn btn-sm btn-outline-primary fw-bold add-stock-btn" onclick="window.openAddStockModal('${escapeHtml(catId)}')">
                                 + Add Stock
@@ -3106,24 +2785,15 @@ function renderMasterInventory() {
                     // Render synthetic fallback batch row for legacy items
                     html += `
                         <tr>
-                            <td class="text-center align-middle">
-                                ${window.createReloadableImgHtml(catData.imageUrl, catData.itemName, '', true)}
-                            </td>
-                            <td class="align-middle"><span class="fw-bold text-dark">Initial / Legacy Stock</span></td>
-                            <td class="align-middle"><span class="text-danger fw-bold">${escapeHtml(catData.serialNumber || 'N/A')}</span></td>
-                            <td class="align-middle"><span>${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</span></td>
-                            <td class="align-middle text-center"><span class="badge bg-light text-dark border px-2 py-1 fw-bold">${totalStock} ${catData.unit || 'Pcs'}</span></td>
-                            <td class="align-middle text-center"><span>${catData.openingQuantity || totalStock} ${catData.unit || 'Pcs'}</span></td>
-                            <td class="align-middle text-center">${getStatusBadge(totalStock)}</td>
-                            <td class="align-middle text-center">
-                                <div class="d-flex gap-1 justify-content-center">
-                                    <button type="button" class="btn btn-sm btn-warning fw-bold" onclick="openEditItemModal('${escapeHtml(catId)}')" title="Edit Photo, Quantity & Details">
-                                        ✏️ Edit
-                                    </button>
-                                    <button type="button" class="btn btn-sm btn-danger fw-bold" onclick="deleteInventoryItem('${escapeHtml(catId)}')" title="Delete Item">
-                                        🗑️ Delete
-                                    </button>
-                                </div>
+                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                            <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
+                            <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
+                            <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
+                            <td data-label="Current Stock" class="text-center"><span class="badge bg-light text-dark border">${totalStock}</span></td>
+                            <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock}</td>
+                            <td data-label="Status">${getStatusBadge(totalStock)}</td>
+                            <td data-label="Actions" class="text-end">
+                                <span class="text-muted small">Legacy Record</span>
                             </td>
                         </tr>`;
                 } else {
@@ -3132,33 +2802,17 @@ function renderMasterInventory() {
             } else {
                 batchEntries.forEach(([batchId, batch]) => {
                     const cStock = parseInt(batch.currentStock) || 0;
-                    const unit = batch.unit || 'Pcs';
                     html += `
                         <tr>
-                            <td class="text-center align-middle">
-                                ${window.createReloadableImgHtml(batch.imageUrl, batch.brandName, '', true)}
-                            </td>
-                            <td class="align-middle">
-                                <span class="fw-bold text-dark">${escapeHtml(batch.brandName || 'Standard')}</span>
-                                ${batch.manufacturer ? `<br><small class="text-muted">${escapeHtml(batch.manufacturer)}</small>` : ''}
-                            </td>
-                            <td class="align-middle">
-                                <span class="text-danger fw-bold">${escapeHtml(batch.serialNumber || 'N/A')}</span>
-                                ${batch.batchNumber ? `<br><small class="text-muted">Batch: ${escapeHtml(batch.batchNumber)}</small>` : ''}
-                            </td>
-                            <td class="align-middle"><span>${escapeHtml(batch.receivedDate || 'N/A')}</span></td>
-                            <td class="align-middle text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} px-2 py-1 fw-bold">${cStock} ${unit}</span></td>
-                            <td class="align-middle text-center"><span>${batch.initialQty || '-'} ${unit}</span></td>
-                            <td class="align-middle text-center">${getStatusBadge(cStock)}</td>
-                            <td class="align-middle text-center">
-                                <div class="d-flex gap-1 justify-content-center">
-                                    <button type="button" class="btn btn-sm btn-warning fw-bold" onclick="openEditItemModal('${escapeHtml(batchId)}')" title="Edit Photo, Quantity & Details">
-                                        ✏️ Edit
-                                    </button>
-                                    <button type="button" class="btn btn-sm btn-danger fw-bold" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')" title="Delete Batch">
-                                        🗑️ Delete
-                                    </button>
-                                </div>
+                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${batch.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                            <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
+                            <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
+                            <td data-label="Received Date">${batch.receivedDate || '-'}</td>
+                            <td data-label="Current Stock" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'}">${cStock}</span></td>
+                            <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'}</td>
+                            <td data-label="Status">${getStatusBadge(cStock)}</td>
+                            <td data-label="Actions" class="text-end">
+                                <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')">Delete</button>
                             </td>
                         </tr>`;
                 });
@@ -3171,11 +2825,6 @@ function renderMasterInventory() {
 
         container.innerHTML = html;
 
-        // Also populate master-inventory-list table if present in DOM
-        if (typeof renderMasterInventoryTable === 'function') {
-            renderMasterInventoryTable(inventoryData);
-        }
-
         // Lazy load inventory batch images
         document.querySelectorAll('.inventory-batch-thumb').forEach(img => {
             if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
@@ -3186,62 +2835,6 @@ function renderMasterInventory() {
         container.innerHTML = `<div class="alert alert-danger">Error rendering inventory: ${err.message}</div>`;
     }
 }
-
-// Dedicated function to render Master Inventory Table rows into #master-inventory-list
-window.renderMasterInventoryTable = function(items) {
-    const listBody = $('master-inventory-list');
-    if (!listBody) return;
-
-    const inventoryList = items || inventoryData || {};
-    const entries = Object.entries(inventoryList);
-
-    // Keep window.masterInventoryList in sync for instant offline/local lookup
-    window.masterInventoryList = entries.map(([key, item]) => ({
-        id: item.id || item.key || item.itemId || key,
-        key: key,
-        itemId: key,
-        ...item
-    }));
-
-    if (entries.length === 0) {
-        listBody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">No inventory items found.</td></tr>`;
-        return;
-    }
-
-    let html = '';
-    entries.forEach(([key, item]) => {
-        // Ensure key fallback inside row iteration
-        const itemId = item.id || item.key || item.itemId || key || '';
-        const cStock = (item.currentStock !== undefined) ? item.currentStock : (item.quantity !== undefined ? item.quantity : 0);
-        const imgUrl = item.imageUrl || item.image || '';
-        const imgHtml = window.createReloadableImgHtml ? window.createReloadableImgHtml(imgUrl, item.itemName || item.name, '', true) : `<img src="${imgUrl || 'https://via.placeholder.com/50'}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;">`;
-
-        html += `
-            <tr>
-                <td class="text-center align-middle">${imgHtml}</td>
-                <td class="align-middle"><span class="text-danger fw-bold">${escapeHtml(item.serialNumber || item.sn || 'N/A')}</span></td>
-                <td class="align-middle"><span class="fw-bold text-dark">${escapeHtml(item.itemName || item.name || itemId)}</span></td>
-                <td class="align-middle">${escapeHtml(item.category || item.brandName || '-')}</td>
-                <td class="align-middle">${escapeHtml(item.description || '-')}</td>
-                <td class="align-middle text-center">${item.openingQuantity || cStock}</td>
-                <td class="align-middle text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-success'} px-2 py-1 fw-bold">${cStock} ${item.unit || 'Pcs'}</span></td>
-                <td class="align-middle text-center">${typeof getStatusBadge === 'function' ? getStatusBadge(cStock) : (cStock > 0 ? 'In Stock' : 'Out of Stock')}</td>
-                <td class="align-middle text-center">
-                    <div class="d-flex gap-1 justify-content-center">
-                        <button type="button" class="btn btn-sm btn-warning fw-bold" onclick="openEditItemModal('${itemId}')">
-                            ✏️ Edit
-                        </button>
-                        <button type="button" class="btn btn-sm btn-danger fw-bold" onclick="deleteInventoryItem('${itemId}')" title="Delete Item">
-                            🗑️ Delete
-                        </button>
-                    </div>
-                </td>
-            </tr>
-        `;
-    });
-
-    listBody.innerHTML = html;
-};
 
 window.openAddStockModal = function(catName) {
     const modalEl = $('addStockModal');
@@ -3412,7 +3005,7 @@ function fetchAuditLedger() {
                     itemName: item.itemName || "N/A",
                     itemSn: item.batchSerialNumber || item.itemSn || 'N/A',
                     brandName: item.brandName || '-',
-                    qtyIssued: (item.requestQuantity || 0) + " " + (item.unit || 'Pcs'),
+                    qtyIssued: item.requestQuantity || 0,
                     teacherSignatureUrl: order.teacherRequestSignature || (order.signatures ? order.signatures.teacher : null),
                     issuerName: order.issuedBy || order.handedOverBy || (order.status.includes('Done') ? "Admin" : "Pending"),
                     issuerSignatureUrl: order.handoverSignatureUrl || order.handoverSignature || (order.signatures ? order.signatures.admin : null),
@@ -3478,35 +3071,24 @@ function renderAuditLedger() {
             <td>${sNo}</td>
             <td>${row.date}</td>
             <td><small>${row.time}</small></td>
-            <td><strong>${escapeHtml(row.teacherId)}</strong></td>
+            <td><strong>${escapeHtml(row.teacherName)}</strong></td>
             <td><code>${escapeHtml(row.teacherId)}</code></td>
-            <td>
-                <div style="width: 50px;">
-                    ${window.createReloadableImgHtml(row.itemImageUrl, row.itemName, '', true)}
-                </div>
-            </td>
+            <td><img src="${FALLBACK_IMG}" class="inventory-thumb audit-thumb" data-url="${row.itemImageUrl}" loading="lazy"></td>
             <td>${escapeHtml(row.itemName)}</td>
             <td><code>${row.itemSn}</code></td>
             <td class="text-center"><strong>${row.qtyIssued}</strong></td>
-            <td>
-                ${row.teacherSignatureUrl ? `
-                <div style="width: 60px;">
-                    ${window.createReloadableImgHtml(row.teacherSignatureUrl, "Teacher Sign", 'height: 30px; width: 60px;', true)}
-                </div>` : '-'}
-            </td>
+            <td>${row.teacherSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
             <td>${escapeHtml(row.issuerName)}</td>
-            <td>
-                ${row.issuerSignatureUrl ? `
-                <div style="width: 60px;">
-                    ${window.createReloadableImgHtml(row.issuerSignatureUrl, "Issuer Sign", 'height: 30px; width: 60px;', true)}
-                </div>` : '-'}
-            </td>
+            <td>${row.issuerSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.issuerSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
             <td class="text-center"><span class="badge bg-secondary">${row.stockBalance}</span></td>
             <td><span class="badge ${statusBadge}">${row.status}</span></td>
         `;
         list.appendChild(tr);
     });
 
+    document.querySelectorAll('.audit-thumb').forEach(img => {
+        if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
+    });
     renderPaginationControls('admin-audit-pagination', auditLedgerState, renderAuditLedger);
 }
 
@@ -3616,7 +3198,6 @@ function addToCart(id, data, customQty = 1) {
             itemName: data.itemName,
             serialNumber: data.serialNumber,
             quantity: data.quantity,
-            unit: data.unit || 'Pcs',
             imageUrl: data.imageUrl,
             requestQuantity: customQty
         });
@@ -3668,7 +3249,6 @@ window.submitFinalOrderWithSignature = async function() {
             itemName: item.itemName || 'Stationery Item',
             serial: item.serialNumber || item.serial || item.sn || 'N/A',
             requestQuantity: Number(item.requestQuantity || 1),
-            unit: item.unit || 'Pcs',
             imageUrl: item.imageUrl || item.image || ''
         }));
 
@@ -3688,33 +3268,6 @@ window.submitFinalOrderWithSignature = async function() {
         const cleanOrderData = sanitizeForFirebase(orderData);
         await set(ref(db, 'orders/' + orderId), cleanOrderData);
         await logActivity("Order Placed", `ID: ${orderId}, ${items.length} items with signature`);
-
-        // Automatically deduct stock in Realtime Database upon requisition submission
-        await deductProductStockFromDatabase(items);
-
-        // Notify Admin Users (AFTER Firebase RTDB save completes successfully)
-        try {
-            const adminUserIds = [];
-            if (window.allStaffList && Array.isArray(window.allStaffList)) {
-                window.allStaffList.forEach(user => {
-                    const role = (user.role || '').toUpperCase();
-                    if (role === 'ADMIN' || role === 'DEVELOPER' || role === 'SUPER_ADMIN') {
-                        adminUserIds.push((user.adecPassNumber || user.id || user.uid).toString());
-                    }
-                });
-            }
-            if (adminUserIds.length === 0) adminUserIds.push('Asif', 'DEV001');
-
-            const teacherId = currentUser.adecPassNumber || currentUser.uid || '1025';
-            sendSecureOneSignalNotification({
-                targetExternalIds: adminUserIds,
-                title: 'New Stationery Request',
-                message: `Teacher ${teacherId} has submitted a new stationery request. Please review it.`,
-                url: window.location.origin + window.location.pathname + '#tab-orders'
-            });
-        } catch (notifErr) {
-            console.warn("Failed to dispatch Admin notification:", notifErr);
-        }
 
         window.stationeryCart = [];
         window.saveCartToStorage();
@@ -3736,12 +3289,6 @@ window.submitFinalOrderWithSignature = async function() {
         if (currentUser.role === 'TEACHER') {
             fetchTeacherOrderHistory(currentUser.adecPassNumber || currentUser.uid);
         }
-
-        // Re-render UI views immediately
-        if (typeof renderTeacherDashboard === 'function') renderTeacherDashboard();
-        if (typeof renderCatalogPage === 'function') renderCatalogPage();
-        if (typeof fetchMasterInventory === 'function') fetchMasterInventory();
-        if (typeof loadMasterInventory === 'function') loadMasterInventory();
     } catch (e) {
         console.error("Order Submission Error:", e);
         showToast("Error submitting order request", 'error');
@@ -3765,12 +3312,13 @@ function fetchAdminOrders() {
                 tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><button class="view-details-btn">View Voucher</button></td>`;
                 const wrap = tr.querySelector('.it-wrap');
                 (order.items || []).slice(0, 3).forEach(it => {
+                    const img = document.createElement('img');
+                    img.className = 'inventory-thumb admin-order-thumb';
+                    // Fallback for missing imageUrl in order record
                     const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
-                    const imgHtml = `
-                        <div style="width: 40px;">
-                            ${window.createReloadableImgHtml(finalImg, it.itemName, '', true)}
-                        </div>`;
-                    wrap.insertAdjacentHTML('beforeend', imgHtml);
+                    img.dataset.url = finalImg;
+                    img.loading = "lazy";
+                    wrap.appendChild(img);
                 });
                 tr.querySelector('button').onclick = () => window.viewOrderReceipt(id);
                 historyList.appendChild(tr);
@@ -3787,14 +3335,16 @@ function fetchAdminOrders() {
                         ADEK: ${order.teacherUid} | Items: ${order.items?.length || 0}
                     </div>
                     <div class="request-items" style="display:flex;gap:10px;padding:10px 0;"></div>
-                    ${renderSignatureHTML(order.teacherRequestSignature || order.signatureUrl || order.receiverSignature, "Teacher's Order Signature")}
-                    <div class="request-actions d-flex gap-2">
-                        ${isPending ? `
-                            <button class="action-btn prepare-btn btn-success flex-fill" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>
-                            <button class="action-btn btn-danger flex-fill" onclick="window.confirmAdminOrderRejection(event, '${id}')">Reject Order</button>
-                        ` : ''}
+                    ${order.teacherRequestSignature ? `
+                        <div class="mb-2 text-center border rounded p-1 bg-light">
+                            <small class="d-block text-muted">Teacher's Order Signature</small>
+                            <img src="${order.teacherRequestSignature}" style="max-height:60px; max-width:100%;">
+                        </div>
+                    ` : ''}
+                    <div class="request-actions">
+                        ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>` : ''}
                         ${order.status.includes('Approved') ? `
-                            <button class="action-btn handover-btn flex-fill" onclick="window.handleFinalHandover(event, '${id}')">
+                            <button class="action-btn handover-btn" style="flex:1;" onclick="window.handleFinalHandover(event, '${id}')">
                                 Final Handover & Sign
                             </button>
                         ` : ''}
@@ -3804,14 +3354,8 @@ function fetchAdminOrders() {
                 wrap.style.flexDirection = 'column';
                 (order.items || []).forEach(it => {
                     const d = document.createElement('div'); d.className = 'd-flex align-items-center gap-2 mb-2 p-1 border rounded bg-white';
-
-                    // Fallback for missing imageUrl in order record
-                    const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
-
                     d.innerHTML = `
-                        <div style="width: 50px; flex-shrink: 0;">
-                            ${window.createReloadableImgHtml(finalImg, it.itemName, '', true)}
-                        </div>
+                        <img class="inventory-thumb admin-order-thumb" width="45" height="45" style="object-fit: contain;" data-url="${it.imageUrl}" loading="lazy">
                         <div style="flex: 1; overflow: hidden;">
                             <h6 class="mb-0 small fw-bold text-truncate">${escapeHtml(it.itemName)}</h6>
                             <small class="text-muted d-block" style="font-size: 9px;">SN: ${it.serial}</small>
@@ -3823,6 +3367,11 @@ function fetchAdminOrders() {
 
                 list.appendChild(card);
             }
+        });
+
+        // Lazy load admin order images
+        document.querySelectorAll('.admin-order-thumb').forEach(img => {
+            if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
         });
     });
 }
@@ -3877,73 +3426,9 @@ window.confirmAdminOrderApproval = async function(event) {
 
         $('pickup-location-input').value = '';
         showToast("Order approved successfully! User view maintained.", "success");
-
-        // Notify specific Teacher AFTER Firebase RTDB update succeeds
-        try {
-            const orderSnap = await get(ref(db, `orders/${selectedOrderIdForApproval}`));
-            if (orderSnap.exists()) {
-                const orderData = orderSnap.val();
-                const teacherUid = orderData.teacherUid || orderData.teacherId;
-                if (teacherUid) {
-                    sendSecureOneSignalNotification({
-                        targetExternalIds: [teacherUid.toString()],
-                        title: "Stationery Request Approved",
-                        message: "Your stationery request has been approved. Please check the app for details.",
-                        url: window.location.origin + window.location.pathname + '#order-history-section'
-                    });
-                }
-            }
-        } catch (notifErr) {
-            console.warn("Failed to dispatch approval notification:", notifErr);
-        }
     } catch (err) {
         console.error("Error approving order:", err);
         showToast("Failed to approve order: " + err.message, "error");
-    }
-};
-
-window.confirmAdminOrderRejection = async function(event, orderId) {
-    if (event) {
-        event.preventDefault();
-        event.stopPropagation();
-    }
-
-    if (!orderId) return;
-
-    const reason = prompt("Enter reason for rejection (optional):", "Items currently out of stock");
-    if (reason === null) return; // User cancelled prompt
-
-    try {
-        console.log("Rejecting Order:", orderId);
-        await update(ref(db, `orders/${orderId}`), {
-            status: "Rejected",
-            rejectionReason: reason || "No reason specified",
-            rejectedAt: new Date().toISOString()
-        });
-
-        showToast("Order rejected successfully.", "warning");
-
-        // Notify specific Teacher AFTER Firebase RTDB update succeeds
-        try {
-            const orderSnap = await get(ref(db, `orders/${orderId}`));
-            if (orderSnap.exists()) {
-                const orderData = orderSnap.val();
-                const teacherUid = orderData.teacherUid || orderData.teacherId;
-                if (teacherUid) {
-                    sendSecureOneSignalNotification({
-                        targetExternalIds: [teacherUid.toString()],
-                        title: "Stationery Request Update",
-                        message: "Your stationery request has been rejected. Please check the app for details.",
-                        url: window.location.origin + window.location.pathname + '#order-history-section'
-                    });
-                }
-            }
-        } catch (notifErr) {
-            console.warn("Failed to dispatch rejection notification:", notifErr);
-        }
-    } catch (err) {
-        console.error("Error rejecting order:", err);
-        showToast("Failed to reject order: " + err.message, "error");
     }
 };
 
@@ -3980,7 +3465,7 @@ function renderTeacherOrderHistory() {
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td>
-                <strong>${order.items ? order.items.map(i => `${i.itemName} (${i.requestQuantity} ${i.unit || 'Pcs'})`).join(', ') : 'Stationery'}</strong>
+                <strong>${order.items ? order.items.map(i => i.itemName).join(', ') : 'Stationery'}</strong>
                 <br><small class="text-muted">ID: ${id} | ${dateStr}</small>
             </td>
             <td><span class="badge ${statusBadge}">${order.status}</span></td>
@@ -4006,15 +3491,19 @@ function renderTeacherOrderHistory() {
             <button class="primary-btn blue omc-view-btn">View Receipt</button>`;
         const cardItemsWrap = card.querySelector('.omc-items');
         (order.items || []).slice(0, 3).forEach(it => {
-            const finalImg = isValidImageUrl(it.imageUrl) ? it.imageUrl : (inventoryData[it.itemName]?.imageUrl || FALLBACK_IMG);
-            const imgHtml = `
-                <div style="width: 45px; display: inline-block; margin-right: 4px;">
-                    ${window.createReloadableImgHtml(finalImg, it.itemName, '', true)}
-                </div>`;
-            cardItemsWrap.insertAdjacentHTML('beforeend', imgHtml);
+            const img = document.createElement('img');
+            img.className = 'inventory-thumb teacher-order-thumb';
+            img.dataset.url = it.imageUrl;
+            img.loading = "lazy";
+            cardItemsWrap.appendChild(img);
         });
         card.querySelector('.omc-view-btn').onclick = () => window.viewOrderReceipt(id);
         cards.appendChild(card);
+    });
+
+    // Lazy load teacher order images
+    document.querySelectorAll('.teacher-order-thumb').forEach(img => {
+        if (img.dataset.url) window.loadCachedImage(img, img.dataset.url);
     });
 
     renderPaginationControls('teacher-orders-pagination', teacherOrdersState, renderTeacherOrderHistory);
@@ -4023,7 +3512,7 @@ function renderTeacherOrderHistory() {
 async function viewOrderDetails(id) {
     const snap = await get(ref(db, `orders/${id}`)); const order = snap.val();
     const content = $('order-detail-content');
-    content.innerHTML = `<div style="text-align:center;margin-bottom:15px;"><h3>Requisition Receipt</h3><p>ID: ${id}</p></div><p><strong>Staff:</strong> ${escapeHtml(order.teacherName)} (${order.teacherUid})</p><table class="history-table" style="margin:15px 0;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${order.items.map(i => `<tr><td>${escapeHtml(i.itemName)}</td><td>${i.requestQuantity} ${i.unit || 'Pcs'}</td></tr>`).join('')}</tbody></table>${order.signatures ? `<div class="order-detail-signatures"><div class="signature-display-box"><small>Admin</small><br><img src="${order.signatures.admin}"></div><div class="signature-display-box"><small>Staff</small><br><img src="${order.signatures.teacher}"></div></div>` : ''}`;
+    content.innerHTML = `<div style="text-align:center;margin-bottom:15px;"><h3>Requisition Receipt</h3><p>ID: ${id}</p></div><p><strong>Staff:</strong> ${escapeHtml(order.teacherName)} (${order.teacherUid})</p><table class="history-table" style="margin:15px 0;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${order.items.map(i => `<tr><td>${escapeHtml(i.itemName)}</td><td>${i.requestQuantity}</td></tr>`).join('')}</tbody></table>${order.signatures ? `<div class="order-detail-signatures"><div class="signature-display-box"><small>Admin</small><br><img src="${order.signatures.admin}"></div><div class="signature-display-box"><small>Staff</small><br><img src="${order.signatures.teacher}"></div></div>` : ''}`;
     $('order-detail-modal').classList.add('active');
 }
 
@@ -4068,230 +3557,6 @@ async function updateDriveStatus() {
 }
 
 function fetchSystemBranding() { addListener(ref(db, 'settings/logo'), (snap) => { if (snap.val()) document.querySelectorAll('#school-logo, .centered-school-logo, .sidebar-logo-img, .header-brand-logo').forEach(img => img.src = snap.val()); }); }
-
-// Hash / Deep-link handler for notification clicks
-function handleHashNavigation() {
-    const hash = window.location.hash;
-    if (!hash) return;
-
-    if (hash.includes('tab-orders') || hash.includes('orders')) {
-        const btnOrders = document.querySelector('button[data-target="tab-orders"]');
-        if (btnOrders) btnOrders.click();
-    } else if (hash.includes('order-history-section') || hash.includes('history')) {
-        if (typeof window.showDashboardSection === 'function') {
-            window.showDashboardSection('order-history-section');
-        }
-    }
-}
-
-window.addEventListener('hashchange', handleHashNavigation);
-window.addEventListener('load', handleHashNavigation);
-
-// Notification Panel Handler (In-App Fallback & Local Notification View)
-window.openNotificationPanel = function(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-
-    const notifModalEl = document.getElementById('notificationModal') || document.getElementById('notification-modal') || document.getElementById('notificationDropdown');
-
-    if (notifModalEl) {
-        if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
-            const notifModal = bootstrap.Modal.getOrCreateInstance(notifModalEl);
-            notifModal.show();
-        } else {
-            notifModalEl.classList.add('active');
-            notifModalEl.style.display = (notifModalEl.style.display === 'none' || !notifModalEl.style.display) ? 'block' : 'none';
-        }
-
-        if (typeof renderNotificationList === 'function') {
-            renderNotificationList();
-        }
-    } else {
-        alert("Notification Panel: No new notifications at this time.");
-    }
-};
-
-// ==================== ONESIGNAL WEB PUSH INTEGRATION ====================
-const ONESIGNAL_APP_ID = "87270c54-9e9d-46de-8070-a0c4b66c7478";
-
-try {
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(async function(OneSignal) {
-        try {
-            // Resolve subfolder path dynamically
-            const path = window.location.pathname;
-            const basePath = path.substring(0, path.lastIndexOf('/') + 1) || '/';
-
-            console.log("OneSignal Auto-Detected Base Scope:", basePath);
-
-            await OneSignal.init({
-                appId: ONESIGNAL_APP_ID,
-                allowLocalhostAsSecureOrigin: true,
-                autoRegister: false,
-                serviceWorkerPath: 'OneSignalSDKWorker.js',
-                serviceWorkerParam: { scope: basePath }
-            });
-
-            console.log("✅ OneSignal Service Worker Initialized Successfully.");
-
-            // Listen for permission & subscription changes
-            OneSignal.Notifications.addEventListener("permissionChange", function(permission) {
-                console.log("OneSignal Permission Changed:", permission);
-                if (typeof window.updateNotificationUIStatus === 'function') {
-                    window.updateNotificationUIStatus();
-                }
-            });
-
-            OneSignal.User.PushSubscription.addEventListener("change", function(change) {
-                console.log("OneSignal Subscription Changed:", change);
-                if (typeof window.updateNotificationUIStatus === 'function') {
-                    window.updateNotificationUIStatus();
-                }
-                if (typeof window.syncOneSignalSubscriptionToFirebase === 'function') {
-                    window.syncOneSignalSubscriptionToFirebase();
-                }
-            });
-
-            // Sync identity if user is already logged in
-            if (currentUser && (currentUser.adecPassNumber || currentUser.uid)) {
-                const userId = (currentUser.adecPassNumber || currentUser.uid).toString();
-                OneSignal.login(userId).catch(err => console.warn("OneSignal Login Error:", err));
-            }
-
-            if (typeof window.updateNotificationUIStatus === 'function') {
-                window.updateNotificationUIStatus();
-            }
-        } catch (err) {
-            console.warn("OneSignal Initialization Warning:", err.message || err);
-        }
-    });
-} catch (e) {
-    console.warn("OneSignal isolated error caught silently:", e);
-}
-
-window.updateNotificationUIStatus = function() {
-    const isGranted = (typeof Notification !== 'undefined' && Notification.permission === 'granted');
-
-    const badgeAdmin = document.getElementById('notification-status-badge-admin');
-    const badgeTeacher = document.getElementById('notification-status-badge-teacher');
-    const btnAdmin = document.getElementById('enable-notifications-btn-admin');
-    const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
-
-    const badgeText = isGranted ? 'Notifications Enabled' : 'Notifications Disabled';
-    const badgeClass = isGranted ? 'text-success fw-bold' : 'text-warning';
-    const btnText = isGranted ? 'Disable' : 'Enable';
-
-    [badgeAdmin, badgeTeacher].forEach(el => {
-        if (el) {
-            el.innerText = badgeText;
-            el.className = badgeClass;
-        }
-    });
-
-    [btnAdmin, btnTeacher].forEach(el => {
-        if (el) {
-            el.innerText = btnText;
-            el.className = isGranted ? 'btn btn-sm btn-outline-success fw-bold' : 'btn btn-sm btn-outline-light fw-bold';
-        }
-    });
-};
-
-window.toggleOneSignalNotifications = async function() {
-    console.log("🔔 Enable Notification Button Clicked...");
-
-    if (!('Notification' in window)) {
-        alert("This browser does not support web notifications.");
-        return;
-    }
-
-    if (Notification.permission === 'denied') {
-        alert("⚠️ Notifications are blocked in your browser settings. Unblock them from the browser lock icon near the URL bar.");
-        return;
-    }
-
-    try {
-        let granted = false;
-
-        // Try OneSignal Permission request with a 3-second safety race
-        if (typeof OneSignalDeferred !== 'undefined') {
-            try {
-                const osPromise = new Promise((resolve) => {
-                    OneSignalDeferred.push(async (OneSignal) => {
-                        const res = await OneSignal.Notifications.requestPermission();
-                        resolve(res);
-                    });
-                });
-
-                const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), 3000));
-                const result = await Promise.race([osPromise, timeoutPromise]);
-
-                if (result === true || result === 'granted') {
-                    granted = true;
-                }
-            } catch (err) {
-                console.warn("OneSignal Request Exception:", err);
-            }
-        }
-
-        // Native Browser Fallback if OneSignal timed out or failed
-        if (!granted) {
-            const nativePerm = await Notification.requestPermission();
-            if (nativePerm === 'granted') granted = true;
-        }
-
-        if (granted) {
-            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.ready.then(reg => {
-                    reg.showNotification("🎉 Notifications Activated!", {
-                        body: "Welcome! System notifications are active.",
-                        icon: "school.png"
-                    });
-                });
-            } else {
-                new Notification("🎉 Notifications Activated!", {
-                    body: "Welcome! System notifications are active.",
-                    icon: "school.png"
-                });
-            }
-            alert("✅ Notifications Activated Successfully!");
-        } else {
-            alert("⚠️ Notification permission was not granted.");
-        }
-
-        if (typeof window.updateNotificationUIStatus === 'function') {
-            window.updateNotificationUIStatus();
-        }
-
-    } catch (err) {
-        console.error("Toggle Execution Error:", err);
-        alert("Error: " + err.message);
-    }
-};
-
-window.syncOneSignalSubscriptionToFirebase = function() {
-    if (!currentUser || !(currentUser.adecPassNumber || currentUser.uid)) return;
-
-    const userId = (currentUser.adecPassNumber || currentUser.uid).toString();
-
-    OneSignalDeferred.push(async function(OneSignal) {
-        try {
-            const isOptedIn = OneSignal.User.PushSubscription.optedIn;
-            const subscriptionId = OneSignal.User.PushSubscription.id || '';
-            const notificationData = {
-                notificationEnabled: isOptedIn,
-                oneSignalSubscriptionId: subscriptionId,
-                lastNotificationUpdate: new Date().toISOString()
-            };
-
-            await update(ref(db, `users/${userId}`), notificationData);
-            console.log("Synced OneSignal subscription state to Firebase for user:", userId);
-        } catch (e) {
-            console.warn("Failed to sync OneSignal subscription to Firebase:", e);
-        }
-    });
-};
 
 window.handleAddCategory = async function(event) {
     if (event) event.preventDefault();
@@ -4411,188 +3676,25 @@ async function exportHistory() {
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Order_History"); XLSX.writeFile(wb, `History_${Date.now()}.xlsx`);
 }
 
-// Helper to create Firebase Realtime DB snapshot objects for window.firebase compatibility layer
-function createFirebaseSnapWrapper(data, keyName) {
-    const valData = data !== undefined ? data : null;
-    return {
-        key: keyName || null,
-        val: () => valData,
-        exists: () => valData !== null && valData !== undefined,
-        hasChild: (childKey) => {
-            if (!valData || typeof valData !== 'object') return false;
-            return childKey in valData;
-        },
-        child: (childKey) => {
-            const childVal = (valData && typeof valData === 'object') ? valData[childKey] : null;
-            return createFirebaseSnapWrapper(childVal, childKey);
-        },
-        forEach: (callback) => {
-            if (!valData || typeof valData !== 'object') return false;
-            for (const [k, v] of Object.entries(valData)) {
-                const childSnap = createFirebaseSnapWrapper(v, k);
-                if (callback(childSnap) === true) break;
-            }
-        }
-    };
-}
-
-// Firebase global database compatibility wrapper for legacy ref calls
-if (!window.firebase) {
-    window.firebase = {
-        database: function() {
-            return {
-                ref: function(path) {
-                    return {
-                        once: function(eventType) {
-                            return get(ref(db, path)).then(snapshot => {
-                                let valData = snapshot.val();
-                                if ((!valData || (typeof valData === 'object' && Object.keys(valData).length === 0)) && (path === 'items' || path.startsWith('items/'))) {
-                                    const altPath = path.startsWith('items/') ? 'inventory/' + path.replace('items/', '') : 'inventory';
-                                    return get(ref(db, altPath)).then(snap2 => createFirebaseSnapWrapper(snap2.val(), snap2.key));
-                                }
-                                return createFirebaseSnapWrapper(valData, snapshot.key);
-                            });
-                        },
-                        update: function(data) {
-                            return update(ref(db, path), data).then(() => {
-                                if (path.startsWith('items/')) {
-                                    const altPath = 'inventory/' + path.replace('items/', '');
-                                    return update(ref(db, altPath), data).catch(() => {});
-                                }
-                            });
-                        },
-                        set: function(data) {
-                            return set(ref(db, path), data);
-                        },
-                        remove: function() {
-                            return remove(ref(db, path));
-                        }
-                    };
-                }
-            };
-        }
-    };
-}
-
-// Robust Edit Item Modal Handler
 window.openEditItemModal = function(itemId) {
-    if (!itemId || itemId === 'undefined' || itemId === 'null') {
-        alert("Error: Invalid or missing Item ID!");
+    console.log("Editing item ID:", itemId);
+    const item = window.allInventoryItems ? window.allInventoryItems.find(i => i.id === itemId) : null;
+
+    if (!item) {
+        alert("Item data not found!");
         return;
     }
 
-    // Fallback 1: Search in locally loaded inventory array first (Instant & Offline-friendly)
-    let localItem = null;
-    if (window.masterInventoryList && Array.isArray(window.masterInventoryList)) {
-        localItem = window.masterInventoryList.find(i => (i.id === itemId || i.key === itemId || i.itemId === itemId));
-    }
-    if (!localItem && typeof inventoryData === 'object' && inventoryData) {
-        if (inventoryData[itemId]) {
-            localItem = { id: itemId, key: itemId, ...inventoryData[itemId] };
-        } else {
-            const foundCat = Object.entries(inventoryData).find(([k, v]) => k === itemId || (v.batches && v.batches[itemId]));
-            if (foundCat) {
-                if (foundCat[0] === itemId) localItem = { id: itemId, key: itemId, ...foundCat[1] };
-                else if (foundCat[1].batches && foundCat[1].batches[itemId]) localItem = { id: itemId, key: itemId, ...foundCat[1].batches[itemId] };
-            }
-        }
-    }
+    if ($('edit-item-id')) $('edit-item-id').value = item.id;
+    if ($('edit-item-name')) $('edit-item-name').value = item.itemName || '';
+    if ($('edit-item-sn')) $('edit-item-sn').value = item.serialNumber || '';
+    if ($('edit-item-category')) $('edit-item-category').value = item.category || '';
+    if ($('edit-item-opening-qty')) $('edit-item-opening-qty').value = item.openingQuantity || 0;
+    if ($('edit-item-available-qty')) $('edit-item-available-qty').value = item.quantity || 0;
+    if ($('edit-item-description')) $('edit-item-description').value = item.description || '';
 
-    if (localItem) {
-        populateAndShowEditModal(itemId, localItem);
-        return;
-    }
-
-    // Fallback 2: Direct Firebase Lookup
-    firebase.database().ref(`items/${itemId}`).once('value').then(snapshot => {
-        let itemData = snapshot.val();
-
-        if (itemData) {
-            populateAndShowEditModal(itemId, itemData);
-        } else {
-            // Fallback 3: Global items node search in case data is nested
-            firebase.database().ref('items').once('value').then(parentSnap => {
-                let foundData = null;
-                parentSnap.forEach(childSnap => {
-                    if (childSnap.key === itemId) {
-                        foundData = childSnap.val();
-                    } else if (childSnap.hasChild && childSnap.hasChild(itemId)) {
-                        foundData = childSnap.child(itemId).val();
-                    }
-                });
-
-                if (foundData) {
-                    populateAndShowEditModal(itemId, foundData);
-                } else {
-                    alert("Item data not found in Database! (ID: " + itemId + ")");
-                }
-            });
-        }
-    }).catch(err => alert("Error reading item data: " + err.message));
-};
-
-// Helper Function to Fill Modal Fields & Show Modal
-function populateAndShowEditModal(itemId, item) {
-    document.getElementById('editItemId').value = itemId;
-    document.getElementById('editItemName').value = item.itemName || item.name || item.title || '';
-    document.getElementById('editBrandName').value = item.brandName || item.brand || '';
-    document.getElementById('editManufacturer').value = item.manufacturer || '';
-    document.getElementById('editSerialNumber').value = item.serialNumber || item.sn || item.serialNo || '';
-    document.getElementById('editBatchNumber').value = item.batchNumber || item.batchNo || '';
-    document.getElementById('editCurrentStock').value = (item.currentStock !== undefined) ? item.currentStock : (item.quantity !== undefined ? item.quantity : 0);
-    document.getElementById('editUnit').value = item.unit || 'Pcs';
-    document.getElementById('editReceiptDate').value = item.receiptDate || item.receivedDate || item.dateAdded || '';
-
-    const photoUrl = item.imageUrl || item.image || item.photo || '';
-    document.getElementById('editImageUrl').value = photoUrl;
-
-    if (typeof updateEditPhotoPreview === 'function') {
-        updateEditPhotoPreview(photoUrl);
-    }
-
-    const editModalEl = document.getElementById('editItemModal');
-    if (editModalEl) {
-        const editModal = new bootstrap.Modal(editModalEl);
-        editModal.show();
-    } else {
-        alert("Edit modal HTML container not found in DOM!");
-    }
-}
-
-// Preview Photo inside Modal when URL changes
-window.updateEditPhotoPreview = function(url) {
-    const imgEl = document.getElementById('editPhotoPreview');
-    if (imgEl) {
-        imgEl.src = (url && url.trim() !== '') ? url : 'https://via.placeholder.com/100?text=No+Photo';
-    }
-};
-
-// Save Edited Values to Firebase
-window.saveInventoryItemEdits = function() {
-    const itemId = document.getElementById('editItemId').value;
-    if (!itemId) return;
-
-    const updatedData = {
-        itemName: document.getElementById('editItemName').value.trim(),
-        brandName: document.getElementById('editBrandName').value.trim(),
-        manufacturer: document.getElementById('editManufacturer').value.trim(),
-        serialNumber: document.getElementById('editSerialNumber').value.trim(),
-        batchNumber: document.getElementById('editBatchNumber').value.trim(),
-        currentStock: parseInt(document.getElementById('editCurrentStock').value, 10) || 0,
-        unit: document.getElementById('editUnit').value,
-        receiptDate: document.getElementById('editReceiptDate').value,
-        imageUrl: document.getElementById('editImageUrl').value.trim()
-    };
-
-    firebase.database().ref(`items/${itemId}`).update(updatedData)
-        .then(() => {
-            alert("✅ Item updated successfully!");
-            const modalEl = document.getElementById('editItemModal');
-            const modalInstance = bootstrap.Modal.getInstance(modalEl);
-            if (modalInstance) modalInstance.hide();
-            if (typeof fetchMasterInventory === 'function') fetchMasterInventory();
-        })
-        .catch(err => alert("❌ Failed to update item: " + err.message));
+    const editModal = new bootstrap.Modal($('editItemModal'));
+    editModal.show();
 };
 
 window.deleteInventoryItem = async function(itemId, itemName) {
@@ -4603,10 +3705,8 @@ window.deleteInventoryItem = async function(itemId, itemName) {
     try {
         console.log("Deleting item from Firebase:", itemId);
         await remove(ref(db, 'inventory/' + itemId));
-        await remove(ref(db, 'items/' + itemId));
         await logActivity("Inventory Deleted", `Item: ${itemName} (${itemId})`);
         showToast(`"${itemName || 'Item'}" deleted successfully!`);
-        if (typeof fetchMasterInventory === 'function') fetchMasterInventory();
     } catch (error) {
         console.error("Error deleting item:", error);
         showToast("Failed to delete item: " + error.message, "error");
@@ -4628,7 +3728,6 @@ async function saveInventoryItem(e) {
         const itemDescription = $('inv-description').value.trim();
         const serialNumber = $('inv-serial-number').value.trim();
         const currentQty = parseInt($('inv-quantity').value) || 0;
-        const itemUnit = $('itemUnit')?.value || 'Pcs';
         const openingQty = parseInt($('inv-opening-quantity').value) || 0;
         const file = $('inv-image').files[0];
         const itemCategory = cat === 'Other' ? $('inv-custom-category').value.trim() : cat;
@@ -4656,7 +3755,6 @@ async function saveInventoryItem(e) {
             serialNumber: serialNumber,
             initialQty: currentQty,
             currentStock: currentQty,
-            unit: itemUnit,
             receivedDate: new Date().toISOString().split('T')[0],
             imageUrl: finalImageUrl,
             status: currentQty > 0 ? 'Active' : 'Out of Stock',
@@ -4669,7 +3767,6 @@ async function saveInventoryItem(e) {
             category: itemCategory,
             description: itemDescription,
             quantity: currentQty,
-            unit: itemUnit,
             openingQuantity: openingQty,
             imageUrl: finalImageUrl,
             createdAt: new Date().toISOString(),
