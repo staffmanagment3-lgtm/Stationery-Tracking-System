@@ -2,9 +2,16 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
 import { getDatabase, ref, get, child, set, push, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
+import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.42";
+const APP_VERSION = "1.8.50";
+
+window.isSystemReady = false;
+setTimeout(() => {
+    window.isSystemReady = true;
+    console.log("⏱️ Automatic 3-Second Timeout Fallback: System marked Ready.");
+}, 3000);
 
 // ==================== CONSTANTS ====================
 const PAGE_SIZE = 10;
@@ -29,7 +36,189 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const messaging = getMessaging(app);
 try { getAnalytics(app); } catch (e) { console.warn("Analytics blocked"); }
+
+// ==================== FIREBASE CLOUD MESSAGING (FCM) ====================
+
+window.updateFcmUIStatus = function() {
+    if (!('Notification' in window)) return;
+
+    const btnAdmin = document.getElementById('enable-notifications-btn-admin');
+    const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
+    const status = Notification.permission;
+
+    let text = "🔔 Enable Notifications";
+    let className = "drawer-item";
+
+    if (status === 'granted') {
+        text = "✅ Push Notifications Active";
+        className = "drawer-item text-success fw-bold";
+    } else if (status === 'denied') {
+        text = "⚠️ Notifications Blocked";
+        className = "drawer-item text-warning";
+    }
+
+    [btnAdmin, btnTeacher].forEach(btn => {
+        if (btn) {
+            btn.textContent = text;
+            btn.className = className;
+        }
+    });
+};
+
+window.enableFcmNotifications = async function() {
+    console.log("🔔 Enable Notifications menu item clicked...");
+
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+        alert("This browser does not support Web Push Notifications.");
+        return;
+    }
+
+    if (Notification.permission === 'denied') {
+        alert("⚠️ Notifications are blocked in your browser settings.\n\nTo enable notifications:\n1. Click the lock icon near the website URL bar.\n2. Set Notifications to 'Allow'.\n3. Reload the page.");
+        return;
+    }
+
+    try {
+        const btnAdmin = document.getElementById('enable-notifications-btn-admin');
+        const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
+        [btnAdmin, btnTeacher].forEach(b => { if (b) b.textContent = "⏳ Registering FCM..."; });
+
+        const permission = await Notification.requestPermission();
+
+        if (permission === 'granted') {
+            const swReg = await navigator.serviceWorker.register('firebase-messaging-sw.js');
+            console.log("✅ FCM Service Worker registered:", swReg);
+
+            const token = await getToken(messaging, { serviceWorkerRegistration: swReg });
+
+            if (token) {
+                console.log("🔑 FCM Registration Token:", token);
+
+                const teacherId = (currentUser && (currentUser.adecPassNumber || currentUser.uid)) || localStorage.getItem('stationery_user_adec') || 'GUEST_USER';
+
+                const tokenPayload = {
+                    fcmToken: token,
+                    fcmTokenLastUpdated: new Date().toISOString()
+                };
+
+                await update(ref(db, `users/${teacherId}`), tokenPayload);
+                await update(ref(db, `fcm_tokens/${teacherId}`), {
+                    token: token,
+                    teacherId: teacherId,
+                    lastUpdated: new Date().toISOString()
+                });
+
+                showToast("🎉 Push Notifications Enabled Successfully!", "success");
+            } else {
+                showToast("⚠️ Could not retrieve FCM token.", "error");
+            }
+        } else {
+            showToast("Notification permission was not granted.", "error");
+        }
+
+        window.updateFcmUIStatus();
+
+    } catch (err) {
+        console.error("FCM Registration Error:", err);
+        showToast("FCM Error: " + err.message, "error");
+        window.updateFcmUIStatus();
+    }
+};
+
+try {
+    onMessage(messaging, (payload) => {
+        console.log("🔔 Foreground Push Message Received:", payload);
+        const title = payload.notification?.title || "Stationery Alert";
+        const body = payload.notification?.body || "New update received";
+        showToast(`🔔 ${title}: ${body}`, "info");
+    });
+} catch (e) {
+    console.warn("FCM Foreground listener exception caught silently:", e);
+}
+
+// ==================== STATIONERY RAIN ANIMATION ====================
+
+window.initStationeryRain = function() {
+    const container = document.getElementById('stationery-rain-container');
+    if (!container) return;
+
+    const isMobile = window.innerWidth <= 768;
+    const targetCount = isMobile ? 18 : 32;
+
+    const existingDrops = container.querySelectorAll('.stationery-drop');
+    if (existingDrops.length === targetCount) {
+        return; // Already initialized correctly with exact drop count
+    }
+
+    container.innerHTML = '';
+
+    const stationerySVGs = [
+        // 1. Pencil
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 26l3 3 17-17-3-3L6 26z" fill="#FFC107"/><path d="M4 28l2-2 3 3-2 2H4v-3z" fill="#795548"/><path d="M23 6l3 3 2-2-3-3-2 2z" fill="#E91E63"/><path d="M22 7l3 3 1-1-3-3-1 1z" fill="#9E9E9E"/></svg>`,
+        // 2. Ballpoint Pen
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 24l2 2 16-16-2-2L8 24z" fill="#2196F3"/><path d="M5 27l3-3-2-2-3 3v2h2z" fill="#0D47A1"/><path d="M24 6l2 2 3-3-2-2-3 3z" fill="#B0BEC5"/><path d="M20 10l6-6" stroke="#90A4AE" stroke-width="2"/></svg>`,
+        // 3. Eraser
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 18l12 10 10-10L16 8 6 18z" fill="#FF80AB"/><path d="M12 23l6 5 10-10-6-5-10 10z" fill="#3F51B5"/></svg>`,
+        // 4. Sharpener
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="6" y="8" width="20" height="16" rx="3" fill="#00BCD4"/><circle cx="16" cy="16" r="4" fill="#37474F"/><path d="M16 12v8" stroke="#CFD8DC" stroke-width="2"/></svg>`,
+        // 5. Ruler
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="4" y="10" width="24" height="12" rx="2" fill="#FFD54F"/><path d="M8 10v4M12 10v6M16 10v4M20 10v4" stroke="#5D4037" stroke-width="1.5"/></svg>`,
+        // 6. Highlighter
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M10 12h12v12H10z" fill="#76FF03"/><path d="M12 6h8v6h-8z" fill="#33691E"/><path d="M13 24l3 5 3-5h-6z" fill="#CCFF90"/></svg>`,
+        // 7. Marker
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="11" y="10" width="10" height="14" rx="2" fill="#FF3D00"/><path d="M13 4h6v6h-6z" fill="#DD2C00"/><path d="M14 24l2 4 2-4h-4z" fill="#FF9E80"/></svg>`,
+        // 8. Notebook
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="8" y="5" width="18" height="22" rx="2" fill="#3F51B5"/><path d="M6 8h4M6 12h4M6 16h4M6 20h4M6 24h4" stroke="#FFF" stroke-width="2"/><path d="M12 9h10M12 14h10M12 19h10" stroke="#9FA8DA" stroke-width="1.5"/></svg>`,
+        // 9. Paper Sheet
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 4h11l7 7v17H8V4z" fill="#ECEFF1"/><path d="M19 4v7h7" fill="#CFD8DC"/><path d="M11 14h10M11 18h10M11 22h7" stroke="#90A4AE" stroke-width="1.5"/></svg>`,
+        // 10. Sticky Note
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 6h20v14l-6 6H6V6z" fill="#FFEE58"/><path d="M20 20v6l6-6h-6z" fill="#FBC02D"/></svg>`,
+        // 11. Paper Clip
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M12 8v12a4 4 0 0 0 8 0V7a2.5 2.5 0 0 0-5 0v11a1 1 0 0 0 2 0V9" fill="none" stroke="#B0BEC5" stroke-width="2.5" stroke-linecap="round"/></svg>`,
+        // 12. Binder Clip
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 18h16l-3 8H11l-3-8z" fill="#263238"/><path d="M12 8c0-3 2-4 4-4s4 1 4 4v10h-8V8z" fill="none" stroke="#B0BEC5" stroke-width="2"/></svg>`,
+        // 13. Scissors
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="10" cy="24" r="3" fill="none" stroke="#E91E63" stroke-width="2"/><circle cx="22" cy="24" r="3" fill="none" stroke="#E91E63" stroke-width="2"/><path d="M11 21l8-13M21 21L13 8" stroke="#B0BEC5" stroke-width="2.5"/></svg>`,
+        // 14. Glue Stick
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="11" y="12" width="10" height="14" rx="1" fill="#FF9800"/><rect x="11" y="6" width="10" height="6" fill="#FFF"/><path d="M11 22h10v4h-10z" fill="#E65100"/></svg>`,
+        // 15. Stapler
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 22h20v3H6z" fill="#455A64"/><path d="M6 18c0-4 4-6 10-6h10v6H6z" fill="#1E88E5"/><path d="M6 18v4h2v-4H6z" fill="#CFD8DC"/></svg>`,
+        // 16. Pencil Case
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="5" y="10" width="22" height="12" rx="4" fill="#9C27B0"/><path d="M5 14h22" stroke="#BA68C8" stroke-width="2"/><circle cx="24" cy="14" r="1.5" fill="#FFD54F"/></svg>`,
+        // 17. Crayon
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 12l10-6 6 6-10 16-6-16z" fill="#E91E63"/><path d="M11 10l3-1.8 3 3L14 13l-3-3z" fill="#C2185B"/></svg>`,
+        // 18. Correction Tape
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 12a8 8 0 0 1 12-7l8 5a5 5 0 0 1 0 8l-8 5a8 8 0 0 1-12-11z" fill="#009688"/><circle cx="12" cy="16" r="3" fill="#FFF"/></svg>`,
+        // 19. Folder
+        `<svg viewBox="0 0 32 32"><path d="M4 8h8l3 3h13v13H4V8z" fill="#FFCA28"/><path d="M4 12h24v12H4V12z" fill="#FFB300"/></svg>`,
+        // 20. Set Square Ruler
+        `<svg viewBox="0 0 32 32"><path d="M6 26V6l20 20H6z" fill="#FF7043"/><path d="M10 22V12l10 10H10z" fill="#FFF"/></svg>`
+    ];
+
+    for (let i = 0; i < targetCount; i++) {
+        const drop = document.createElement('div');
+        drop.className = 'stationery-drop';
+
+        const svgIndex = i % stationerySVGs.length;
+        drop.innerHTML = stationerySVGs[svgIndex];
+
+        const leftPos = Math.random() * 92 + 2; // 2% to 94%
+        const size = Math.floor(Math.random() * 16) + 24; // 24px to 40px
+        const duration = (Math.random() * 8 + 7).toFixed(2); // 7s to 15s
+        const delay = (Math.random() * -12).toFixed(2); // -12s to 0s
+        const sway = (Math.random() * 50 - 25).toFixed(0); // -25px to 25px
+
+        drop.style.setProperty('--x', `${leftPos}%`);
+        drop.style.setProperty('--size', `${size}px`);
+        drop.style.setProperty('--duration', `${duration}s`);
+        drop.style.setProperty('--delay', `${delay}s`);
+        drop.style.setProperty('--sway', `${sway}px`);
+
+        container.appendChild(drop);
+    }
+};
 
 // ==================== IMAGE UTILITIES ====================
 function isValidImageUrl(url) {
@@ -37,6 +226,12 @@ function isValidImageUrl(url) {
     const cleanUrl = String(url).trim().toLowerCase();
     return cleanUrl !== '' && cleanUrl !== 'undefined' && cleanUrl !== 'null' && cleanUrl !== '[object object]';
 }
+
+window.createReloadableImgHtml = function(imgSrc, altText = "Image", customStyle = "", isThumb = true) {
+    const validSrc = isValidImageUrl(imgSrc) ? imgSrc : FALLBACK_IMG;
+    const styleAttr = customStyle || (isThumb ? "width: 40px; height: 40px; object-fit: contain; border-radius: 4px;" : "max-height: 60px; object-fit: contain;");
+    return `<img src="${validSrc}" alt="${escapeHtml(altText || 'Image')}" class="audit-thumb" data-url="${validSrc}" style="${styleAttr}" loading="lazy" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">`;
+};
 
 function getItemImageHtml(imageUrl) {
     const src = isValidImageUrl(imageUrl) ? imageUrl : OFFLINE_PLACEHOLDER;
@@ -1242,9 +1437,20 @@ window.submitHandoverWithSignature = async function(event) {
             throw new Error(`Stock deduction failed: ${deductionResult.reason}`);
         }
 
-        // Finalize order metadata
+        // Finalize order metadata with cross-compatible signature fields
+        const reqSig = currentOrder?.teacherRequestSignature || currentOrder?.requesterSignature || currentOrder?.teacherSign || currentOrder?.signature || handoverSignature;
+        const authSig = driveSignatureUrl || handoverSignature;
+
         await update(ref(db, `orders/${orderId}`), {
-            handoverSignatureUrl: driveSignatureUrl,
+            handoverSignatureUrl: authSig,
+            authorizedSignature: authSig,
+            issuerSign: authSig,
+            adminSign: authSig,
+            storekeeperSign: authSig,
+            teacherRequestSignature: reqSig,
+            requesterSignature: reqSig,
+            teacherSign: reqSig,
+            signature: reqSig,
             handedOverBy: adminName,
             issuedBy: adminName,
             status: 'Done'
@@ -1419,7 +1625,7 @@ window.showDashboardSection = function(sectionId) {
 // ==================== LOGIN ====================
 window.handleUserLogin = async function(event) {
     if (event) event.preventDefault();
-    console.log("--> Login attempt triggered!");
+    console.log("--> Direct On-Demand Login Triggered!");
 
     const passInput = $('login-pass-number');
     const passwordInput = $('login-password');
@@ -1463,54 +1669,69 @@ window.handleUserLogin = async function(event) {
     }
 
     try {
-        console.log("Attempting user lookup for:", passNumber);
-        const snapshot = await get(ref(db, 'users'));
+        console.log("Attempting direct user lookup for:", passNumber);
 
-        if (snapshot.exists()) {
-            const users = snapshot.val();
-            const matchedKey = Object.keys(users).find(key => key.toUpperCase() === passNumber);
+        let userData = null;
+        let matchedKey = passNumber;
 
-            if (matchedKey) {
-                const userData = users[matchedKey];
-                const savedPassword = String(userData.password || "").trim();
-                const inputPassword = String(password).trim();
+        // 1. Direct On-Demand lookup by user key
+        const directSnap = await get(child(ref(db), `users/${passNumber}`));
+        if (directSnap.exists()) {
+            userData = directSnap.val();
+        } else {
+            // 2. Search users node case-insensitively
+            const snapshot = await get(ref(db, 'users'));
+            if (snapshot.exists()) {
+                const users = snapshot.val();
+                matchedKey = Object.keys(users).find(key => key.toUpperCase() === passNumber.toUpperCase());
+                if (matchedKey) userData = users[matchedKey];
+            }
+        }
 
-                if (savedPassword === inputPassword) {
-                    console.log("Login Successful for:", matchedKey);
-                    localStorage.setItem('stationery_user_adec', matchedKey);
-                    handleUserRole(matchedKey);
-                    if (loginError) loginError.textContent = "";
+        if (userData) {
+            const savedPassword = String(userData.password || userData.pass || "").trim();
+            const inputPassword = String(password).trim();
 
-                    const isEnrolled = window.isBiometricEnrolled();
-                    const isSupported = await window.checkBiometricSupport();
-                    if (!isEnrolled && isSupported) {
-                        const enrollModal = new bootstrap.Modal($('biometricEnrollModal'));
-                        enrollModal.show();
+            if (savedPassword === inputPassword) {
+                console.log("✅ On-Demand Login Successful for:", matchedKey);
+                localStorage.setItem('stationery_user_adec', matchedKey);
+
+                const role = userData.role || 'TEACHER';
+                currentUser = {
+                    role: role,
+                    name: userData.name || matchedKey,
+                    uid: matchedKey,
+                    adecPassNumber: matchedKey
+                };
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+                const loginEl = document.getElementById('login-view');
+                if (loginEl) {
+                    loginEl.classList.add('d-none');
+                    loginEl.style.display = 'none';
+                }
+
+                if (loginError) loginError.textContent = "";
+                window.renderDashboardForRole(role, matchedKey);
+
+                const isEnrolled = window.isBiometricEnrolled();
+                const isSupported = await window.checkBiometricSupport();
+                if (!isEnrolled && isSupported) {
+                    const enrollModal = new bootstrap.Modal($('biometricEnrollModal'));
+                    enrollModal.show();
+                    if ($('enable-biometric-btn')) {
                         $('enable-biometric-btn').onclick = () => window.enrollBiometrics(matchedKey);
                     }
-                } else {
-                    alert("Incorrect Password.");
                 }
             } else {
-                alert("ADEK Pass Number not found.");
+                alert("⚠️ Incorrect Password. Please try again.");
             }
         } else {
-            alert("No registered users found.");
+            alert("⚠️ ADEK Pass Number not found. Please check your credentials or contact administrator.");
         }
     } catch (error) {
         console.error("Login Error:", error);
-        try {
-            const directSnap = await get(child(ref(db), `users/${passNumber}`));
-            if (directSnap.exists()) {
-                const userData = directSnap.val();
-                if (userData.password === password) {
-                    localStorage.setItem('stationery_user_adec', passNumber);
-                    handleUserRole(passNumber);
-                    return;
-                }
-            }
-        } catch(e) {}
-        alert("Login failed due to error: " + error.message);
+        alert("Login failed: " + error.message);
     } finally {
         if (loginBtn) {
             loginBtn.disabled = false;
@@ -1926,12 +2147,26 @@ window.submitCartOrder = function() {
 // ==================== MAIN LIFECYCLE ====================
 document.addEventListener('DOMContentLoaded', () => {
     console.log("App Initialized");
+    window.initStationeryRain();
+    window.updateFcmUIStatus();
     window.loadCartFromStorage();
     seedDefaultCategoriesIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
 
-    window.addEventListener('resize', window.forceGlobalScrollUnlock);
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', (e) => {
+            if (typeof window.handleUserLogin === 'function') {
+                window.handleUserLogin(e);
+            }
+        });
+    }
+
+    window.addEventListener('resize', () => {
+        window.forceGlobalScrollUnlock();
+        window.initStationeryRain();
+    });
 
     const directAdminBtn = document.getElementById('direct-admin-btn') || document.querySelector('.btn-purple') || document.querySelector('.quick-access-btn') || document.querySelector('[data-admin-trigger]');
     if (directAdminBtn) {
@@ -3615,35 +3850,56 @@ async function viewOrderDetails(id) {
     $('order-detail-modal').classList.add('active');
 }
 
-// ==================== RECEIPT ====================
+// ==================== RECEIPT / REQUISITION VOUCHER ====================
 window.viewOrderReceipt = async function(orderId) {
     try {
-        showToast("Generating Receipt...", "info");
+        showToast("Generating Official Requisition Voucher...", "info");
         const snap = await get(ref(db, `orders/${orderId}`));
         if (!snap.exists()) throw new Error("Order not found");
         const order = snap.val();
 
-        $('receipt-order-id').innerText = orderId;
-        $('receipt-date').innerText = new Date(order.timestamp).toLocaleString();
+        const ts = new Date(order.completedAt || order.timestamp || Date.now());
 
-        $('receipt-teacher-name').innerText = order.teacherName || "N/A";
-        $('receipt-teacher-id').innerText = order.teacherUid || "N/A";
+        if ($('receipt-order-id')) $('receipt-order-id').innerText = orderId;
+        if ($('receipt-date')) $('receipt-date').innerText = ts.toLocaleDateString() + ' ' + ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if ($('receipt-dispatch-date')) $('receipt-dispatch-date').innerText = ts.toLocaleDateString();
 
-        $('receipt-issuer-name').innerText = order.issuedBy || order.handedOverBy || "Authorized Admin";
-        $('receipt-pickup-location').innerText = order.pickupLocation || "Main Store";
+        if ($('receipt-teacher-name')) $('receipt-teacher-name').innerText = order.teacherName || "N/A";
+        if ($('receipt-teacher-id')) $('receipt-teacher-id').innerText = order.teacherUid || order.teacherId || "N/A";
+        if ($('receipt-department')) $('receipt-department').innerText = order.department || order.section || "Educational Staff";
 
-        $('receipt-items-list').innerHTML = (order.items || []).map(item => {
+        if ($('receipt-issuer-name')) $('receipt-issuer-name').innerText = order.issuedBy || order.handedOverBy || "Authorized Storekeeper";
+        if ($('receipt-pickup-location')) $('receipt-pickup-location').innerText = order.pickupLocation || "Main Stationery Store";
+
+        const statusBadge = $('receipt-status-badge');
+        if (statusBadge) {
+            const isDone = (order.status || '').toLowerCase().includes('completed') || (order.status || '').toLowerCase().includes('done');
+            statusBadge.innerText = isDone ? "DELIVERED & APPROVED" : String(order.status || 'PENDING').toUpperCase();
+            statusBadge.className = isDone ? "badge bg-success fs-6 px-3 py-2 mb-2 d-inline-block" : "badge bg-warning text-dark fs-6 px-3 py-2 mb-2 d-inline-block";
+        }
+
+        const itemsList = Array.isArray(order.items) ? order.items : Object.values(order.items || {});
+
+        $('receipt-items-list').innerHTML = itemsList.map(item => {
             const itemImg = isValidImageUrl(item.imageUrl) ? item.imageUrl : (inventoryData[item.itemName]?.imageUrl || FALLBACK_IMG);
+            const sn = item.batchSerialNumber || item.serialNumber || item.serial || item.sn || item.itemSn || 'N/A';
+            const reqQty = item.requestQuantity || item.quantity || item.reqQty || 1;
+            const issuedQty = item.issuedQty || reqQty;
+            const stockBal = (item.stockBalance !== undefined && item.stockBalance !== 'N/A') ? `${item.stockBalance} Pcs` : (inventoryData[item.itemName]?.quantity !== undefined ? `${inventoryData[item.itemName].quantity} Pcs` : 'In Stock');
+
             return `
             <tr>
                 <td class="text-center">
-                    <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 60px; height: 50px; object-fit: contain; border-radius: 4px;" loading="lazy">
+                    <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 50px; height: 40px; object-fit: contain; border-radius: 4px;" loading="lazy">
                 </td>
-                <td>
-                    <div class="fw-bold">${escapeHtml(item.itemName)}</div>
+                <td class="text-start">
+                    <div class="fw-bold">${escapeHtml(item.itemName || item.name || 'Stationery Item')}</div>
+                    ${item.brandName ? `<small class="text-muted">Brand: ${escapeHtml(item.brandName)}</small>` : ''}
                 </td>
-                <td class="text-center"><code>${item.batchSerialNumber || item.serial || item.serialNumber || '-'}</code></td>
-                <td class="text-center fw-bold">${item.requestQuantity}</td>
+                <td class="text-center"><code>${escapeHtml(sn)}</code></td>
+                <td class="text-center fw-bold">${reqQty}</td>
+                <td class="text-center fw-bold text-success">${issuedQty}</td>
+                <td class="text-center"><span class="badge bg-light text-dark border">${escapeHtml(stockBal)}</span></td>
             </tr>
         `}).join('');
 
@@ -3651,14 +3907,57 @@ window.viewOrderReceipt = async function(orderId) {
             window.loadCachedImage(img, img.dataset.url);
         });
 
-        $('receipt-teacher-sig').src = order.teacherRequestSignature || order.handoverSignature || "";
-        $('receipt-admin-sig').src = order.handoverSignatureUrl || order.handoverSignature || "";
+        // 1. Requester Signature Fallbacks
+        const requesterSign = order.requesterSignature || order.teacherRequestSignature || order.teacherSign || order.teacherSignature || order.signature || order.receiverSignature || '';
+
+        // 2. Storekeeper Signature Fallbacks
+        const issuerSign = order.authorizedSignature || order.handoverSignatureUrl || order.handoverSignature || order.issuerSign || order.adminSign || order.storekeeperSign || order.issuerSignature || '';
+
+        const teacherSigEl = $('receipt-teacher-sig');
+        if (teacherSigEl && teacherSigEl.parentElement) {
+            teacherSigEl.parentElement.innerHTML = renderSignatureHTML(requesterSign, "Requester Signature");
+        }
+
+        const adminSigEl = $('receipt-admin-sig');
+        if (adminSigEl && adminSigEl.parentElement) {
+            adminSigEl.parentElement.innerHTML = renderSignatureHTML(issuerSign, "Authorized Signature");
+        }
 
         bootstrap.Modal.getOrCreateInstance($('receiptModal')).show();
     } catch (e) {
         showToast(e.message, "error");
     }
 };
+
+/**
+ * Base64 & Data URL Signature Validation & Formatting
+ */
+function formatSignatureSrc(signData) {
+    if (!signData || signData === 'N/A' || signData === 'null' || signData === 'undefined') return null;
+    const clean = String(signData).trim();
+    if (clean.length < 20) return null;
+    if (clean.startsWith('data:image/') || clean.startsWith('http://') || clean.startsWith('https://')) {
+        return clean;
+    }
+    return `data:image/png;base64,${clean}`;
+}
+window.formatSignatureSrc = formatSignatureSrc;
+
+/**
+ * Graceful Signature HTML Renderer (Prevents Broken Image Icons)
+ */
+function renderSignatureHTML(rawSigData, labelTitle = "Digital Signature") {
+    const formattedSrc = formatSignatureSrc(rawSigData);
+    if (formattedSrc) {
+        return `<img src="${formattedSrc}" alt="${escapeHtml(labelTitle)}" style="max-height: 60px; max-width: 100%; object-fit: contain;" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'p-2 border rounded text-muted small text-center bg-light\\'><i class=\\'bi bi-shield-check text-success me-1\\'></i> Digitally Signed & Verified</div>';">`;
+    }
+    return `
+        <div class="p-2 border rounded text-muted small text-center bg-light" style="font-size: 11px;">
+            <i class="bi bi-shield-check text-success me-1"></i> Digitally Signed & Verified
+        </div>
+    `;
+}
+window.renderSignatureHTML = renderSignatureHTML;
 
 window.printReceipt = function() {
     window.print();
@@ -4214,3 +4513,8 @@ if (document.readyState === 'loading') {
         } catch (e) { }
     }, 1000);
 }
+
+// Global Window Handlers Exposed for Inline HTML
+window.handleUserLogin = typeof handleUserLogin !== 'undefined' ? handleUserLogin : (window.handleUserLogin || window.handleLoginSubmit);
+window.handleLoginSubmit = typeof handleLoginSubmit !== 'undefined' ? handleLoginSubmit : (window.handleUserLogin || window.handleLoginSubmit);
+window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeveloperPanel : window.openAdminModal;

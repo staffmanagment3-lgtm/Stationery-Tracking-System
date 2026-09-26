@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#1565C0">
-    <link rel="manifest" href="manifest.json?v=1.8.42">
+    <link rel="manifest" href="./manifest.json?v=1.8.49">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.8.42">
+    <link rel="stylesheet" href="style.css?v=1.8.49">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
@@ -80,39 +80,42 @@
                     <input class="form-check-input" type="checkbox" id="biometric-toggle-admin" onclick="window.toggleBiometricAuth(event)">
                 </div>
             </div>
-            <button id="logout-btn-admin" onclick="handleUserLogout(event)" class="drawer-item logout-item">🚪 Logout</button>
+            <button id="enable-notifications-btn-admin" class="drawer-item" onclick="window.enableFcmNotifications()">🔔 Enable Notifications</button>
+            <button id="logout-btn-admin" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null" class="drawer-item logout-item">🚪 Logout</button>
         </nav>
 
         <!-- Teacher Menu -->
         <nav id="teacher-menu" class="drawer-nav" style="display: none;">
-            <button class="drawer-item active" onclick="showDashboardSection('stationery-catalog-section')">📦 Stationery Catalog</button>
+            <button class="drawer-item active" onclick="window.showDashboardSection ? window.showDashboardSection('stationery-catalog-section') : null">📦 Stationery Catalog</button>
             <button id="drawer-cart-btn" class="drawer-item">🛒 My Cart</button>
-            <button class="drawer-item" onclick="showDashboardSection('order-history-section')">📜 My Order History</button>
+            <button class="drawer-item" onclick="window.showDashboardSection ? window.showDashboardSection('order-history-section') : null">📜 My Order History</button>
             <div class="drawer-item d-flex justify-content-between align-items-center bg-transparent border-0" style="padding: 12px 20px;">
                 <span class="text-white"><i class="bi bi-fingerprint me-2"></i> Biometric Login</span>
                 <div class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="biometric-toggle-drawer" onclick="window.toggleBiometricAuth(event)">
                 </div>
             </div>
-            <button id="logout-btn-teacher" onclick="handleUserLogout(event)" class="drawer-item logout-item">🚪 Logout</button>
+            <button id="enable-notifications-btn-teacher" class="drawer-item" onclick="window.enableFcmNotifications()">🔔 Enable Notifications</button>
+            <button id="logout-btn-teacher" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null" class="drawer-item logout-item">🚪 Logout</button>
         </nav>
     </aside>
 
     <!-- Login View -->
     <section id="login-view" class="view active">
+        <div id="stationery-rain-container" class="stationery-rain-container" aria-hidden="true"></div>
         <div class="login-container">
             <img src="school.png" alt="School Logo" class="login-logo" onerror="this.style.display='none'">
             <h2>School Stationery Tracker</h2>
             <form id="login-form">
                 <div class="input-group">
                     <label for="login-pass-number">ADEK Pass Number</label>
-                    <input type="text" id="login-pass-number" placeholder="Enter ADEK Pass Number" required autocomplete="username">
+                    <input type="text" id="login-pass-number" placeholder="ADEKأدخل رقم بطاقة/Enter Adek Pass No" required autocomplete="username">
                 </div>
                 <div class="input-group">
                     <label for="login-password">Password</label>
-                    <input type="password" id="login-password" placeholder="Enter Password" required autocomplete="current-password">
+                    <input type="password" id="login-password" placeholder="أدخل كلمة المرور/Enter Password" required autocomplete="current-password">
                 </div>
-                <button type="button" id="login-btn" onclick="handleUserLogin(event)" class="primary-btn">
+                <button type="button" id="login-btn" onclick="window.handleUserLogin(event)" class="primary-btn">
                     Login to Dashboard
                 </button>
                 <button type="button" id="biometric-login-btn" class="primary-btn purple mt-3 d-none">
@@ -141,7 +144,7 @@
                 <img src="school.png" alt="School Logo" class="centered-school-logo">
             </div>
             <div class="header-right-content">
-                <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="handleUserLogout(event)">Logout</button>
+                <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null">Logout</button>
             </div>
         </header>
         <div class="content">
@@ -242,7 +245,7 @@
                     <span class="bell-icon">🔔</span>
                     <span id="notif-badge" class="badge-count" style="display: none;">0</span>
                 </div>
-                <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="handleUserLogout(event)">Logout</button>
+                <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null">Logout</button>
             </div>
         </header>
         <div class="content">
@@ -870,69 +873,96 @@
         <div class="modal-dialog modal-lg modal-dialog-centered">
             <div class="modal-content border-0 shadow-lg">
                 <div class="modal-header bg-dark text-white d-print-none">
-                    <h5 class="modal-title fw-bold">📄 Stationery Requisition Receipt</h5>
+                    <h5 class="modal-title fw-bold">📄 Official Requisition & Dispatch Voucher</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-0">
-                    <div id="receipt-content" class="p-5 bg-white" style="font-family: 'Times New Roman', serif; color: #000;">
-                        <div class="d-flex justify-content-between align-items-center border-bottom pb-4 mb-4">
-                            <img src="school.png" alt="School Logo" style="height: 80px; object-fit: contain;">
-                            <div class="text-end">
-                                <h2 class="fw-bold mb-1" style="color: #2c3e50;">REQUISITION VOUCHER</h2>
-                                <p class="mb-0 text-muted">ID: <span id="receipt-order-id" class="fw-bold text-dark"></span></p>
-                                <p class="mb-0 text-muted">Date: <span id="receipt-date"></span></p>
+                    <div id="receipt-content" class="p-4 p-md-5 bg-white" style="font-family: 'Times New Roman', Times, serif; color: #000;">
+
+                        <!-- Header Section with Large Logo & School Title -->
+                        <div class="d-flex flex-column flex-md-row justify-content-between align-items-center border-bottom pb-4 mb-4 text-center text-md-start gap-3">
+                            <div class="d-flex align-items-center gap-3">
+                                <img src="school.png" alt="Jern Yafoor Logo" style="width: 200px; max-height: 80px; object-fit: contain;">
+                                <div>
+                                    <h3 class="fw-bold mb-0 text-uppercase" style="color: #1a237e; letter-spacing: 0.5px;">Jern Yafoor Charter School</h3>
+                                    <p class="mb-0 text-muted small"><i class="bi bi-geo-alt-fill me-1"></i>Abu Dhabi, United Arab Emirates</p>
+                                    <p class="mb-0 text-muted small">Department of Educational Stationery & Supplies</p>
+                                </div>
+                            </div>
+                            <div class="text-md-end text-center">
+                                <span id="receipt-status-badge" class="badge bg-success fs-6 px-3 py-2 mb-2 d-inline-block">DELIVERED & APPROVED</span>
+                                <h5 class="fw-bold mb-1" style="color: #2c3e50; font-size: 1.1rem;">OFFICIAL REQUISITION & DISPATCH VOUCHER</h5>
+                                <p class="mb-0 text-muted small">Voucher ID: <span id="receipt-order-id" class="fw-bold text-dark"></span></p>
+                                <p class="mb-0 text-muted small">Issue Date: <span id="receipt-date"></span></p>
                             </div>
                         </div>
 
-                        <div class="row mb-4">
-                            <div class="col-6">
-                                <h6 class="fw-bold border-bottom pb-1 mb-2">REQUESTER DETAILS</h6>
-                                <p class="mb-1"><strong>Name:</strong> <span id="receipt-teacher-name"></span></p>
-                                <p class="mb-1"><strong>ID No:</strong> <span id="receipt-teacher-id"></span></p>
+                        <!-- Requester & Store Details Section -->
+                        <div class="row g-3 mb-4 p-3 rounded border bg-light">
+                            <div class="col-md-6 border-end-md">
+                                <h6 class="fw-bold text-primary border-bottom pb-1 mb-2 text-uppercase" style="font-size: 0.85rem;"><i class="bi bi-person-badge me-1"></i> Requester Information</h6>
+                                <p class="mb-1"><strong>Staff Name:</strong> <span id="receipt-teacher-name"></span></p>
+                                <p class="mb-1"><strong>Teacher / Staff ID:</strong> <span id="receipt-teacher-id"></span></p>
+                                <p class="mb-0"><strong>Department / Section:</strong> <span id="receipt-department">Educational Staff</span></p>
                             </div>
-                            <div class="col-6">
-                                <h6 class="fw-bold border-bottom pb-1 mb-2">ISSUANCE DETAILS</h6>
-                                <p class="mb-1"><strong>Issued By:</strong> <span id="receipt-issuer-name"></span></p>
-                                <p class="mb-1"><strong>Location:</strong> <span id="receipt-pickup-location"></span></p>
+                            <div class="col-md-6">
+                                <h6 class="fw-bold text-primary border-bottom pb-1 mb-2 text-uppercase" style="font-size: 0.85rem;"><i class="bi bi-building me-1"></i> Issuance & Store Details</h6>
+                                <p class="mb-1"><strong>Issued By:</strong> <span id="receipt-issuer-name"></span> (Store In-charge)</p>
+                                <p class="mb-1"><strong>Dispatch Location:</strong> <span id="receipt-pickup-location">Main Stationery Store</span></p>
+                                <p class="mb-0"><strong>Dispatch Date:</strong> <span id="receipt-dispatch-date"></span></p>
                             </div>
                         </div>
 
-                        <div class="table-responsive mb-5">
-                            <table class="table table-bordered align-middle">
-                                <thead class="table-light text-center">
-                                <tr style="background-color: #f8f9fa !important;">
-                                    <th style="width: 80px;">PHOTO</th>
-                                    <th>ITEM DESCRIPTION</th>
-                                    <th>SERIAL / BATCH</th>
-                                    <th style="width: 80px;">QTY</th>
-                                </tr>
+                        <!-- Enhanced Item Table -->
+                        <div class="table-responsive mb-4">
+                            <table class="table table-bordered align-middle text-center" style="font-size: 0.9rem;">
+                                <thead class="table-light">
+                                    <tr style="background-color: #f1f5f9 !important;">
+                                        <th style="width: 70px;">PHOTO</th>
+                                        <th class="text-start">ITEM DESCRIPTION</th>
+                                        <th style="width: 130px;">SERIAL / BATCH NO</th>
+                                        <th style="width: 80px;">REQ QTY</th>
+                                        <th style="width: 80px;">ISSUED QTY</th>
+                                        <th style="width: 100px;">STOCK BAL</th>
+                                    </tr>
                                 </thead>
                                 <tbody id="receipt-items-list">
                                 </tbody>
                             </table>
                         </div>
 
-                        <div class="row mt-5 pt-4 text-center">
-                            <div class="col-6">
-                                <div class="border-bottom mx-4 mb-2">
-                                    <img id="receipt-teacher-sig" src="" style="height: 60px; object-fit: contain;">
+                        <!-- Signatures & Official Stamp Section -->
+                        <div class="row mt-4 pt-3 text-center align-items-end g-3">
+                            <div class="col-4">
+                                <div class="border-bottom mx-2 mb-2 p-1" style="min-height: 65px; display: flex; align-items: center; justify-content: center;">
+                                    <img id="receipt-teacher-sig" src="" style="max-height: 60px; max-width: 100%; object-fit: contain;">
                                 </div>
                                 <p class="small fw-bold mb-0">REQUESTER SIGNATURE</p>
-                                <small class="text-muted">(Teacher / Staff)</small>
+                                <small class="text-muted" style="font-size: 10px;">(Teacher / Staff Member)</small>
                             </div>
-                            <div class="col-6">
-                                <div class="border-bottom mx-4 mb-2">
-                                    <img id="receipt-admin-sig" src="" style="height: 60px; object-fit: contain;">
+                            <div class="col-4">
+                                <div class="border-bottom mx-2 mb-2 p-1" style="min-height: 65px; display: flex; align-items: center; justify-content: center;">
+                                    <img id="receipt-admin-sig" src="" style="max-height: 60px; max-width: 100%; object-fit: contain;">
                                 </div>
-                                <p class="small fw-bold mb-0">AUTHORIZED SIGNATURE</p>
-                                <small class="text-muted">(Store Department)</small>
+                                <p class="small fw-bold mb-0">AUTHORIZED STOREKEEPER</p>
+                                <small class="text-muted" style="font-size: 10px;">(Store Department In-charge)</small>
+                            </div>
+                            <div class="col-4">
+                                <div class="border rounded p-2 mx-2 mb-2 d-flex flex-column align-items-center justify-content-center" style="min-height: 65px; border-style: dashed !important; background: #fafafa;">
+                                    <span class="fw-bold text-muted" style="font-size: 10px; letter-spacing: 1px;">[ OFFICIAL SCHOOL STAMP ]</span>
+                                    <small class="text-secondary" style="font-size: 9px;">Jern Yafoor Charter School</small>
+                                </div>
+                                <p class="small fw-bold mb-0">SCHOOL SEAL</p>
+                                <small class="text-muted" style="font-size: 10px;">(Official Verification Stamp)</small>
                             </div>
                         </div>
 
-                        <div class="mt-5 text-center border-top pt-3 text-muted" style="font-size: 11px;">
-                            <p>This is a computer-generated voucher. No manual signature required if digitally sealed.</p>
-                            <p class="mb-0">© Stationery Tracker System - All Rights Reserved</p>
+                        <!-- Footer Note & Disclaimer -->
+                        <div class="mt-4 text-center border-top pt-3 text-muted" style="font-size: 10px; line-height: 1.4;">
+                            <p class="mb-1 fw-bold text-dark">📌 Notice: Issued items are strictly for official educational use within Jern Yafoor Charter School premises.</p>
+                            <p class="mb-0">This is an officially verified digital voucher generated via Jern Yafoor Stationery Tracking System.</p>
                         </div>
+
                     </div>
                 </div>
                 <div class="modal-footer d-print-none bg-light border-top">
@@ -1068,6 +1098,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.8.42"></script>
+<script type="module" src="app.js?v=1.8.49"></script>
 </body>
 </html>
