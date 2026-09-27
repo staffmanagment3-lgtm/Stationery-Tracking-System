@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.85";
+const APP_VERSION = "1.8.60";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -3130,42 +3130,113 @@ function loadDeveloperDashboard() {
 }
 
 // ==================== CATALOG ====================
+function getTeacherGroupedCatalog(rawInventoryData) {
+    const teacherMap = new Map();
+
+    Object.entries(rawInventoryData || {}).forEach(([catId, catData]) => {
+        if (!catData) return;
+
+        const category = (catData.category || catData.itemCategory || assignCategoryToItem(catData)).trim();
+        let itemName = (catData.itemName || catData.name || catId).trim();
+
+        const batches = catData.batches || {};
+        const batchEntries = Object.entries(batches);
+
+        // Safety Fix: If itemName was saved identically to category name, resolve real product name
+        if (itemName.toLowerCase() === category.toLowerCase()) {
+            if (batchEntries.length > 0 && batchEntries[0][1].itemName) {
+                itemName = batchEntries[0][1].itemName.trim();
+            } else if (catData.description && catData.description.trim() !== category) {
+                itemName = catData.description.trim().split('.')[0];
+            }
+        }
+
+        const mainDesc = catData.description || catData.desc || "Stationery supplies.";
+        const parentImage = catData.imageUrl || FALLBACK_IMG;
+
+        if (batchEntries.length > 0) {
+            batchEntries.forEach(([batchId, batch]) => {
+                const bItemName = (batch.itemName || itemName).trim();
+                const brand = (batch.brandName || batch.brand || catData.brand || 'Standard').trim();
+                const serialNumber = (batch.serialNumber || batch.batchNo || catData.serialNumber || 'N/A').trim();
+                const cStock = parseInt(batch.currentStock ?? batch.quantity ?? 0, 10) || 0;
+                const img = batch.imageUrl || parentImage;
+
+                const normCat = category.toLowerCase().trim();
+                const normItem = bItemName.toLowerCase().trim();
+                const normBrand = brand.toLowerCase().trim();
+                const normSn = serialNumber.toLowerCase().trim();
+
+                const groupKey = `${normCat}|${normItem}|${normBrand}|${normSn}`;
+
+                if (teacherMap.has(groupKey)) {
+                    const existing = teacherMap.get(groupKey);
+                    existing.quantity += cStock; // SUM CURRENT STOCK FOR SAME PRODUCT IDENTITY!
+                    if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && img && img !== FALLBACK_IMG) {
+                        existing.imageUrl = img;
+                    }
+                } else {
+                    teacherMap.set(groupKey, {
+                        groupKey,
+                        catId,
+                        category,
+                        itemName: bItemName,
+                        brand,
+                        serialNumber,
+                        quantity: cStock,
+                        imageUrl: img || FALLBACK_IMG,
+                        description: mainDesc
+                    });
+                }
+            });
+        } else {
+            const brand = (catData.brand || 'Standard').trim();
+            const serialNumber = (catData.serialNumber || catData.sn || 'N/A').trim();
+            const cStock = parseInt(catData.quantity ?? catData.availableStock ?? catData.currentStock ?? 0, 10) || 0;
+            const img = catData.imageUrl || FALLBACK_IMG;
+
+            const normCat = category.toLowerCase().trim();
+            const normItem = itemName.toLowerCase().trim();
+            const normBrand = brand.toLowerCase().trim();
+            const normSn = serialNumber.toLowerCase().trim();
+
+            const groupKey = `${normCat}|${normItem}|${normBrand}|${normSn}`;
+
+            if (teacherMap.has(groupKey)) {
+                const existing = teacherMap.get(groupKey);
+                existing.quantity += cStock;
+                if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && img && img !== FALLBACK_IMG) {
+                    existing.imageUrl = img;
+                }
+            } else {
+                teacherMap.set(groupKey, {
+                    groupKey,
+                    catId,
+                    category,
+                    itemName,
+                    brand,
+                    serialNumber,
+                    quantity: cStock,
+                    imageUrl: img,
+                    description: mainDesc
+                });
+            }
+        }
+    });
+
+    return Array.from(teacherMap.values()).map(item => ({
+        id: item.groupKey,
+        data: item
+    }));
+}
+window.getTeacherGroupedCatalog = getTeacherGroupedCatalog;
+
 function fetchInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
 
-        const categoriesForCatalog = Object.entries(data).map(([catId, catData]) => {
-            if (!catData) return null;
-
-            const batches = Object.values(catData.batches || {});
-            let totalStock = batches.reduce((sum, b) => sum + (parseInt(b.currentStock ?? b.quantity) || 0), 0);
-            if (batches.length === 0) {
-                totalStock = parseInt(catData.quantity ?? catData.availableStock ?? catData.currentStock ?? 0, 10);
-            }
-
-            const firstImg = batches.find(b => b.imageUrl && b.imageUrl !== FALLBACK_IMG)?.imageUrl || catData.imageUrl || FALLBACK_IMG;
-            const topSerial = batches[0]?.serialNumber || catData.serialNumber || 'N/A';
-            const actualName = catData.itemName || catData.name || catId;
-
-            let desc = catData.description || "";
-            if (!desc && batches.length > 0 && batches[0]?.brandName) {
-                desc = `Brand: ${batches[0].brandName}.`;
-            } else if (!desc) {
-                desc = "Stationery supplies.";
-            }
-
-            return {
-                id: catId,
-                data: {
-                    itemName: actualName,
-                    quantity: totalStock,
-                    imageUrl: firstImg,
-                    serialNumber: topSerial,
-                    description: desc
-                }
-            };
-        }).filter(Boolean);
+        const categoriesForCatalog = getTeacherGroupedCatalog(data);
 
         catalogState.allItems = categoriesForCatalog;
         window.allCatalogItems = categoriesForCatalog;
@@ -3174,9 +3245,14 @@ function fetchInventory() {
 }
 
 function resetCatalog() {
-    const term = catalogState.searchTerm;
+    const term = (catalogState.searchTerm || '').toLowerCase().trim();
     catalogState.filtered = term
-        ? catalogState.allItems.filter(({ data }) => (data.itemName || '').toLowerCase().includes(term) || (data.serialNumber || '').toLowerCase().includes(term))
+        ? catalogState.allItems.filter(({ data }) =>
+            (data.itemName || '').toLowerCase().includes(term) ||
+            (data.category || '').toLowerCase().includes(term) ||
+            (data.brand || '').toLowerCase().includes(term) ||
+            (data.serialNumber || '').toLowerCase().includes(term)
+        )
         : catalogState.allItems.slice();
     renderCatalogPage();
 }
@@ -3208,37 +3284,38 @@ function renderCatalogPage() {
     pageItems.forEach(({ id, data }) => {
         const card = document.createElement('div'); card.className = 'inventory-card';
 
-        const titleToDisplay = data.itemName && data.itemName !== 'Unnamed Item' ? data.itemName : (data.name || 'Stationery Item');
-        const snToDisplay = data.serialNumber && data.serialNumber !== 'N/A' ? data.serialNumber : (data.sn || 'N/A');
-        const productDesc = data.description || data.desc || '';
-        const totalAvailable = getItemTotalAvailableStock(data);
+        const titleToDisplay = data.itemName || 'Stationery Item';
+        const brandToDisplay = data.brand && data.brand !== 'Standard' ? data.brand : '';
+        const snToDisplay = data.serialNumber && data.serialNumber !== 'N/A' ? data.serialNumber : '';
+        const totalAvailable = data.quantity || 0;
         const stockBadgeColor = totalAvailable > 0 ? '#166534' : '#991b1b';
         const stockBadgeBg = totalAvailable > 0 ? '#dcfce7' : '#fee2e2';
 
         card.innerHTML = `
-            <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px;">
-                <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden;">
-                    <img src="${data.imageUrl || data.image || FALLBACK_IMG}"
+            <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0;">
+                <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; margin-bottom: 8px;">
+                    <img src="${data.imageUrl || FALLBACK_IMG}"
                          alt="${escapeHtml(titleToDisplay)}"
                          style="max-width: 100%; max-height: 100%; object-fit: contain;"
                          onerror="this.onerror=null; this.src='${FALLBACK_IMG}';"
                          loading="lazy" />
                 </div>
-                <h4 class="card-item-name" style="font-weight: 700; color: #111; margin-top: 10px; margin-bottom: 2px; font-size: 1.1rem;">
+                <h4 class="card-item-name mb-1" style="font-weight: 700; color: #111; font-size: 1.05rem;">
                     ${escapeHtml(titleToDisplay)}
                 </h4>
-                <div class="d-flex justify-content-between align-items-center mb-1">
-                    <span class="card-item-sn" style="font-size: 0.8rem; color: #6c757d;">
-                        SN: ${escapeHtml(snToDisplay)}
+                ${brandToDisplay ? `<div class="text-muted small fw-bold mb-1"><i class="bi bi-building me-1"></i>Brand: ${escapeHtml(brandToDisplay)}</div>` : ''}
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="card-item-sn text-muted" style="font-size: 0.8rem;">
+                        ${snToDisplay ? `SN: ${escapeHtml(snToDisplay)}` : `Category: ${escapeHtml(data.category || '')}`}
                     </span>
                     <span class="badge" style="background-color: ${stockBadgeBg}; color: ${stockBadgeColor}; font-weight: 700; font-size: 0.8rem;">
-                        In Stock: ${totalAvailable} Pcs
+                        Available: ${totalAvailable} Pcs
                     </span>
                 </div>
                 <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
-                    ${escapeHtml(productDesc)}
+                    ${escapeHtml(data.description || '')}
                 </p>
-                <button class="add-to-cart-btn w-100" style="margin-top: auto;" onclick="window.viewItemDetails('${id}')">View Details</button>
+                <button class="add-to-cart-btn w-100 mt-auto" onclick="window.viewItemDetails('${escapeHtml(id)}')">View Details</button>
             </div>`;
         list.appendChild(card);
     });
@@ -3314,85 +3391,139 @@ function renderPaginationControls(containerId, state, renderFn) {
     if (nextBtn) nextBtn.onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 
-// ==================== ✅ FIXED: handleAddStockBatch (syncs parent totals & auto-reuses image for same serial) ====================
-window.handleAddStockBatch = async function(e) {
+// ==================== NEW COMPACT RESTOCK MODAL (v1.8.60) ====================
+window.openRestockModal = function(itemId) {
+    let item = (window.masterInventoryList || []).find(i => i.id === itemId || i.catId === itemId);
+    if (!item && inventoryData && inventoryData[itemId]) {
+        const raw = inventoryData[itemId];
+        item = {
+            id: itemId,
+            catId: itemId,
+            name: raw.itemName || raw.name || itemId,
+            itemName: raw.itemName || raw.name || itemId,
+            category: raw.category || raw.itemCategory || assignCategoryToItem(raw),
+            serialNumber: raw.serialNumber || raw.sn || 'N/A',
+            imageUrl: raw.imageUrl || FALLBACK_IMG,
+            brand: raw.brand || 'Standard'
+        };
+    }
+    if (!item) {
+        showToast("Item record not found.", "error");
+        return;
+    }
+
+    const itemRealId = item.id || item.catId || itemId;
+    const catName = item.category || 'General';
+    const serial = item.serialNumber || item.batchNo || 'N/A';
+    const prodName = item.itemName || item.name || itemId;
+    const brand = item.brand || 'Standard';
+    const imgUrl = item.imageUrl || item.photo || FALLBACK_IMG;
+
+    if ($('restockItemId')) $('restockItemId').value = itemRealId;
+    if ($('restockItemName')) $('restockItemName').textContent = prodName;
+    if ($('restockCategory')) $('restockCategory').textContent = catName;
+    if ($('restockSerialNo')) $('restockSerialNo').textContent = serial;
+    if ($('restockItemImage')) $('restockItemImage').src = imgUrl;
+    if ($('restockBrand')) $('restockBrand').value = brand !== 'Standard' ? brand : '';
+    if ($('restockQty')) $('restockQty').value = '';
+    if ($('restockDate')) $('restockDate').value = new Date().toISOString().split('T')[0];
+    if ($('restockPhotoInput')) $('restockPhotoInput').value = '';
+
+    const modalEl = document.getElementById('restockBatchModal');
+    if (modalEl) {
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+    }
+};
+
+window.handleSaveRestockBatch = async function(e) {
     if (e) e.preventDefault();
-    const btn = e.target.querySelector('button[type="submit"]');
+    const btn = $('btnSaveRestockBatch');
     if (btn) btn.disabled = true;
 
     try {
-        const category = $('stock-category-name').value;
-        const brand = $('stock-brand-name').value.trim();
-        const sn = $('stock-serial-number').value.trim();
-        const qty = parseInt($('stock-quantity').value) || 0;
-        const date = $('stock-date').value;
-        const supplier = $('stock-supplier').value.trim();
-        const file = $('stock-image').files[0];
-
-        if (!category || !sn || qty <= 0) throw new Error("Category, SN and Qty required");
-
-        let imageUrl = FALLBACK_IMG;
-
-        // Auto Image Reuse check: if no new file uploaded, find existing batch with matching serial number
-        if (!file && inventoryData) {
-            Object.values(inventoryData).forEach(catData => {
-                const batches = catData.batches || {};
-                Object.values(batches).forEach(b => {
-                    if ((b.serialNumber || '').trim() === sn && b.imageUrl && b.imageUrl !== FALLBACK_IMG) {
-                        imageUrl = b.imageUrl;
-                    }
-                });
-                if ((catData.serialNumber || '').trim() === sn && catData.imageUrl && catData.imageUrl !== FALLBACK_IMG) {
-                    imageUrl = catData.imageUrl;
-                }
-            });
+        const itemId = $('restockItemId')?.value;
+        if (!itemId || !inventoryData || !inventoryData[itemId]) {
+            throw new Error("Invalid item selected for restocking.");
         }
 
+        const parentItem = inventoryData[itemId];
+        const category = parentItem.category || parentItem.itemCategory || assignCategoryToItem(parentItem);
+        const itemName = parentItem.itemName || parentItem.name || itemId;
+        const serialNumber = parentItem.serialNumber || parentItem.sn || 'N/A';
+
+        const qty = parseInt($('restockQty')?.value) || 0;
+        const date = $('restockDate')?.value || new Date().toISOString().split('T')[0];
+        const brand = $('restockBrand')?.value.trim() || parentItem.brand || 'Standard';
+        const file = $('restockPhotoInput')?.files[0];
+
+        if (qty <= 0) throw new Error("Please enter a valid Quantity Received (> 0).");
+
+        let imageUrl = parentItem.imageUrl || FALLBACK_IMG;
+
         if (file) {
-            showToast("Processing image...");
+            showToast("Processing batch photo...");
             const compressed = await window.compressAndScaleImage(file);
             const studio = await window.generateStudioProductPhoto(compressed);
-            const driveUrl = await uploadPhotoToGoogleDrive(studio, `Stock_${sn}_${Date.now()}.jpg`);
+            const driveUrl = await uploadPhotoToGoogleDrive(studio, `Restock_${serialNumber}_${Date.now()}.jpg`);
             imageUrl = driveUrl || studio;
         }
 
-        // Generate a unique receipt batch ID to preserve receipt history
-        const batchId = 'BATCH_' + Date.now().toString().slice(-6) + '_' + sn.replace(/[.#$[\]]/g, "_");
+        const batchId = 'BATCH_' + Date.now().toString().slice(-6) + '_' + serialNumber.replace(/[.#$[\]]/g, "_");
+
         const batchData = {
             brandName: brand,
-            serialNumber: sn,
+            brand: brand,
+            serialNumber: serialNumber,
             initialQty: qty,
+            currentQty: qty,
             currentStock: qty,
             quantity: qty,
             receivedDate: date,
-            supplier: supplier,
             imageUrl: imageUrl,
             createdAt: new Date().toISOString()
         };
 
-        await set(ref(db, `inventory/${category}/batches/${batchId}`), batchData);
+        // 1. Write new batch sub-row under /inventory/${itemId}/batches/${batchId}
+        await set(ref(db, `inventory/${itemId}/batches/${batchId}`), batchData);
 
-        // Recalculate and sync parent inventory totals
-        const parentRef = ref(db, `inventory/${category}`);
-        const parentSnap = await get(parentRef);
-        if (parentSnap.exists()) {
-            const parentData = parentSnap.val();
-            const allBatches = parentData.batches || {};
-            const totalQty = Object.values(allBatches).reduce(
-                (sum, b) => sum + (parseInt(b.currentStock ?? b.quantity ?? 0, 10) || 0),
-                0
-            );
-            await update(parentRef, {
-                quantity: totalQty,
-                availableStock: totalQty,
-                currentStock: totalQty,
-                stock: totalQty
-            });
+        // 2. Recalculate combined stock = sum of all active batches
+        const parentRef = ref(db, `inventory/${itemId}`);
+        const snap = await get(parentRef);
+        let existingBatches = {};
+        if (snap.exists()) {
+            existingBatches = snap.val().batches || {};
+        }
+        existingBatches[batchId] = batchData;
+
+        const totalStock = Object.values(existingBatches).reduce(
+            (sum, b) => sum + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) || 0),
+            0
+        );
+
+        // 3. Update parent item root fields
+        await update(parentRef, {
+            category: category,
+            itemName: itemName,
+            name: itemName,
+            serialNumber: serialNumber,
+            brand: brand,
+            quantity: totalStock,
+            currentStock: totalStock,
+            availableStock: totalStock,
+            stock: totalStock,
+            imageUrl: imageUrl
+        });
+
+        showToast(`Restock batch added for ${itemName}! Total Stock: ${totalStock} Pcs`);
+
+        const modalEl = document.getElementById('restockBatchModal');
+        if (modalEl) {
+            bootstrap.Modal.getInstance(modalEl)?.hide();
         }
 
-        showToast(`Stock batch ${sn} added to ${category}!`);
-        bootstrap.Modal.getInstance($('addStockModal'))?.hide();
-        $('add-stock-form').reset();
+        fetchMasterInventory();
+        fetchInventory();
 
     } catch (err) {
         alert("Error: " + err.message);
@@ -3402,7 +3533,7 @@ window.handleAddStockBatch = async function(e) {
 };
 
 window.startStockScanner = function() {
-    currentOcrTarget = 'stock-serial-number';
+    currentOcrTarget = 'restock-quantity';
     startOcrCamera();
 };
 
@@ -3431,7 +3562,18 @@ function renderMasterInventory() {
         Object.entries(inventoryData || {}).forEach(([catId, catData]) => {
             if (!catData) return;
             const categoryName = (catData.category || catData.itemCategory || assignCategoryToItem(catData)).trim();
-            const productName = (catData.itemName || catData.name || catId).trim();
+            let productName = (catData.itemName || catData.name || catId).trim();
+
+            // Safety Fix: If productName was saved identically to categoryName, resolve real item name
+            if (productName.toLowerCase() === categoryName.toLowerCase()) {
+                const batches = catData.batches || {};
+                const bVals = Object.values(batches);
+                if (bVals.length > 0 && bVals[0].itemName && bVals[0].itemName.toLowerCase() !== categoryName.toLowerCase()) {
+                    productName = bVals[0].itemName.trim();
+                } else if (catData.description && catData.description.trim().toLowerCase() !== categoryName.toLowerCase()) {
+                    productName = catData.description.trim().split('.')[0];
+                }
+            }
 
             // Strict Category Filter
             if (catFilter && catFilter !== "all categories" && catFilter !== "") {
@@ -3443,7 +3585,7 @@ function renderMasterInventory() {
             const batches = catData.batches || {};
             const batchEntries = Object.entries(batches);
 
-            let totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentStock ?? b.quantity) || 0), 0);
+            let totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity) || 0), 0);
             if (batchEntries.length === 0 && (catData.quantity || catData.currentStock)) {
                 totalStock = parseInt(catData.quantity || catData.currentStock || 0);
             }
@@ -3532,8 +3674,8 @@ function renderMasterInventory() {
                                 <span class="badge ${totalStock < 20 ? 'bg-warning text-dark' : 'bg-success text-white'} p-2 px-3 fs-6">
                                     Total Current Stock: ${totalStock} Pcs
                                 </span>
-                                <button class="btn btn-sm btn-outline-primary fw-bold" onclick="window.openAddStockModal('${escapeHtml(categoryName)}')">
-                                    + Add Stock
+                                <button class="btn btn-sm btn-success fw-bold ms-2" onclick="window.openRestockModal('${escapeHtml(catId)}')">
+                                    <i class="bi bi-plus-circle me-1"></i> + Add Stock
                                 </button>
                             </div>
                         </div>
