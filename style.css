@@ -1908,3 +1908,14 @@ body.modal-open {
     border-top-left-radius: 12px;
     border-top-right-radius: 12px;
 }
+
+/* Dispatch Multi-Batch Breakdown Styling v1.8.64 */
+.dispatch-breakdown {
+    background-color: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px;
+}
+.item-dispatch-card {
+    border-radius: 10px;
+    background: #ffffff;
+}

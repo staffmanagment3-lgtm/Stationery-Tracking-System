@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.63";
+const APP_VERSION = "1.8.64";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -1024,6 +1024,65 @@ async function executeSingleStockDeduction(order) {
 }
 window.executeSingleStockDeduction = executeSingleStockDeduction;
 
+// ==================== AUTO FIFO MULTI-BATCH CALCULATION ====================
+function calculateBatchDispatchSplit(item, requestedQty) {
+    let remainingToFulfill = parseInt(requestedQty, 10) || 0;
+    const itemNode = item || {};
+    const batchesObj = itemNode.batches || {};
+
+    const activeBatches = Object.entries(batchesObj)
+        .map(([id, b]) => ({
+            id,
+            ...b,
+            currentQty: parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10),
+            brand: b.brandName || b.brand || b.manufacturer || itemNode.brand || 'Standard',
+            serialNumber: b.serialNumber || b.batchNo || itemNode.serialNumber || 'N/A',
+            receivedDate: b.receivedDate || b.createdAt || (itemNode.createdAt ? itemNode.createdAt.split('T')[0] : '1970-01-01')
+        }))
+        .filter(b => b.currentQty > 0)
+        .sort((a, b) => new Date(a.receivedDate) - new Date(b.receivedDate)); // Oldest first (FIFO)
+
+    const splitPlan = [];
+
+    if (activeBatches.length > 0) {
+        for (const batch of activeBatches) {
+            if (remainingToFulfill <= 0) break;
+
+            const deductAmount = Math.min(batch.currentQty, remainingToFulfill);
+            splitPlan.push({
+                batchId: batch.id,
+                brand: batch.brand || 'Standard',
+                serialNumber: batch.serialNumber || 'N/A',
+                deductQty: deductAmount,
+                remainingQtyAfter: batch.currentQty - deductAmount
+            });
+
+            remainingToFulfill -= deductAmount;
+        }
+    } else {
+        // Fallback for legacy items without nested batch objects
+        const mainQty = parseInt(itemNode.quantity ?? itemNode.availableStock ?? itemNode.currentStock ?? 0, 10);
+        if (mainQty > 0 && remainingToFulfill > 0) {
+            const deductAmount = Math.min(mainQty, remainingToFulfill);
+            splitPlan.push({
+                batchId: 'MAIN_STOCK',
+                brand: itemNode.brand || 'Standard',
+                serialNumber: itemNode.serialNumber || 'N/A',
+                deductQty: deductAmount,
+                remainingQtyAfter: mainQty - deductAmount
+            });
+            remainingToFulfill -= deductAmount;
+        }
+    }
+
+    return {
+        isFullyCovered: remainingToFulfill === 0,
+        unfulfilledQty: Math.max(0, remainingToFulfill),
+        splitPlan: splitPlan
+    };
+}
+window.calculateBatchDispatchSplit = calculateBatchDispatchSplit;
+
 // ==================== HANDOVER BATCH OPTIONS ====================
 function buildHandoverBatchOptions(item, fullInventory) {
     if (!fullInventory) return '<option value="">-- No Stock Available --</option>';
@@ -1606,31 +1665,61 @@ window.handleFinalHandover = async function(event, orderId) {
             }
 
             if (selectionEl) {
-                let html = '<h6 class="fw-bold mb-3 small text-muted">SELECT DISPATCH BATCH FOR EACH ITEM:</h6>';
+                let html = '<h6 class="fw-bold mb-3 text-dark d-flex align-items-center gap-2"><i class="bi bi-diagram-3-fill text-primary"></i> AUTOMATIC FIFO MULTI-BATCH DISPATCH ALLOCATION:</h6>';
 
                 const items = Array.isArray(order.items) ? order.items : Object.values(order.items || {});
+                window.currentHandoverSplitPlans = [];
 
                 items.forEach((item, index) => {
-                    const optionsHTML = buildHandoverBatchOptions(item, fullInventory);
-                    const reqQty = item.requestQuantity || item.quantity || item.reqQty || 1;
-
+                    const reqQty = parseInt(item.requestQuantity || item.quantity || item.reqQty || 1, 10);
                     const itemSN = String(item.serialNumber || item.sn || item.barcode || item.itemId || item.id || '').trim();
                     const itemNameLower = String(item.itemName || item.name || '').trim().toLowerCase();
-                    const matchedItem = (itemSN && fullInventory[itemSN]) ? fullInventory[itemSN] : Object.values(fullInventory).find(v => v && String(v.itemName || v.name || '').trim().toLowerCase() === itemNameLower);
-                    const isTrulyOutOfStock = matchedItem ? (parseInt(matchedItem.quantity ?? matchedItem.availableStock ?? matchedItem.currentStock ?? 0, 10) <= 0) : false;
+
+                    const matchedItem = (itemSN && fullInventory[itemSN])
+                        ? fullInventory[itemSN]
+                        : Object.values(fullInventory).find(v => v && String(v.itemName || v.name || '').trim().toLowerCase() === itemNameLower);
+
+                    const { isFullyCovered, unfulfilledQty, splitPlan } = calculateBatchDispatchSplit(matchedItem || {}, reqQty);
+
+                    window.currentHandoverSplitPlans.push({
+                        item,
+                        matchedSN: matchedItem?.serialNumber || itemSN || 'N/A',
+                        reqQty,
+                        isFullyCovered,
+                        unfulfilledQty,
+                        splitPlan
+                    });
 
                     html += `
-                        <div class="item-batch-row mb-3 p-2 border rounded bg-light">
-                            <div class="d-flex justify-content-between mb-2">
-                                <span class="fw-bold small">${index + 1}. ${escapeHtml(item.itemName || item.name)}</span>
-                                <span class="badge bg-secondary">Req: ${reqQty}</span>
+                        <div class="item-dispatch-card mb-3 p-3 border rounded bg-white shadow-sm text-start">
+                            <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                                <span class="fw-bold text-dark fs-6">${index + 1}. ${escapeHtml(item.itemName || item.name)}</span>
+                                <span class="badge bg-primary fs-6">Req: ${reqQty} Pcs</span>
                             </div>
-                            <select class="form-select form-select-sm handover-batch-dropdown batch-select" data-item-name="${escapeHtml(item.itemName || item.name)}" data-item-qty="${reqQty}" data-item-index="${index}" required>
-                                ${optionsHTML}
-                            </select>
-                            ${isTrulyOutOfStock ? '<small class="text-danger mt-1 d-block">Error: Item is Out of Stock! (0 Pcs Available)</small>' : ''}
-                        </div>
-                    `;
+                            <div class="dispatch-breakdown bg-light p-2.5 rounded border mb-2">
+                                <div class="fw-bold text-muted small mb-2 d-flex align-items-center gap-1">
+                                    <i class="bi bi-box-seam me-1"></i> Dispatch Allocation Breakdown (FIFO - Oldest First):
+                                </div>`;
+
+                    if (splitPlan.length > 0) {
+                        splitPlan.forEach(sp => {
+                            html += `
+                                <div class="d-flex justify-content-between text-sm py-1 border-bottom border-light">
+                                    <span class="text-dark small"><i class="bi bi-tag-fill me-1 text-secondary"></i>Batch: <strong>${escapeHtml(sp.brand)}</strong> (SN: <code>${escapeHtml(sp.serialNumber)}</code>)</span>
+                                    <span class="fw-bold text-danger text-sm">-${sp.deductQty} Pcs <small class="text-muted fw-normal">(Remaining: ${sp.remainingQtyAfter})</small></span>
+                                </div>`;
+                        });
+                    } else {
+                        html += `<div class="text-danger small py-1"><i class="bi bi-exclamation-triangle-fill me-1"></i> No active batches found for this item!</div>`;
+                    }
+
+                    html += `</div>`;
+
+                    if (!isFullyCovered) {
+                        html += `<div class="alert alert-warning py-1 px-2 mb-0 small text-danger fw-bold"><i class="bi bi-exclamation-circle-fill me-1"></i> Warning: Stock short by ${unfulfilledQty} Pcs! Insufficient inventory to fully cover request.</div>`;
+                    }
+
+                    html += `</div>`;
                 });
                 selectionEl.innerHTML = html;
             }
@@ -1676,15 +1765,6 @@ window.submitHandoverWithSignature = async function(event) {
     }
 
     try {
-        const dropdowns = document.querySelectorAll('.handover-batch-dropdown');
-        let allSelected = true;
-        dropdowns.forEach(d => { if (!d.value) allSelected = false; });
-
-        if (!allSelected) {
-            alert("Please select a valid stock batch for every item in this order.");
-            return;
-        }
-
         const orderId = window.activeHandoverRequestId;
         const canvas = document.getElementById('handover-signature-pad');
         const currentOrder = window.currentHandoverOrder;
@@ -1740,24 +1820,12 @@ window.submitHandoverWithSignature = async function(event) {
             }
         }
 
-        // Build enriched items from dropdown selections
-        const updatedItems = [];
-        for (const drop of dropdowns) {
-            const catName = drop.dataset.itemName;
-            const batchId = drop.value;
-            const qtyToDeduct = parseInt(drop.dataset.itemQty, 10) || 1;
-
-            const selectedOption = drop.options[drop.selectedIndex];
-            const selectedSn = selectedOption?.dataset?.sn || catName;
-
-            updatedItems.push({
-                itemName: catName,
-                serialNumber: selectedSn,
-                batchSerialNumber: batchId.startsWith('MAIN') ? selectedSn : batchId,
-                requestQuantity: qtyToDeduct,
-                selectedBatch: batchId
-            });
-        }
+        const rawItems = Array.isArray(freshOrder.items) ? freshOrder.items : Object.values(freshOrder.items || {});
+        const updatedItems = rawItems.map(item => ({
+            itemName: item.itemName || item.name,
+            serialNumber: item.serialNumber || item.batchSerialNumber || item.sn || item.itemId || item.id,
+            requestQuantity: parseInt(item.requestQuantity || item.quantity || item.reqQty || 1, 10)
+        }));
 
         // ATOMIC DEDUCTION — the ONLY place stock changes
         const orderPayload = {
@@ -1796,7 +1864,7 @@ window.submitHandoverWithSignature = async function(event) {
             if (modal) modal.hide();
         }
 
-        showToast("Handover Complete! Stock deducted once.", "success");
+        showToast("Handover Complete! FIFO Multi-Batch stock deducted.", "success");
         await logActivity("Handover Complete", `Order ${orderId} finalized by ${adminName}`);
 
     } catch (err) {
