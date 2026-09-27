@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.64";
+const APP_VERSION = "1.8.65";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -932,74 +932,9 @@ async function executeSingleStockDeduction(order) {
         const invRef = ref(db, `inventory/${serialNo}`);
 
         try {
-            const txnResult = await new Promise((resolve) => {
-                let resolved = false;
-                const txn = onValueOnce(invRef, (snapshot) => {}, () => {});
-            });
-
-            // Use the Firebase v9 modular transaction via runTransaction-equivalent
-            const { runTransaction } = await import("https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js");
-
-            const txnResult2 = await runTransaction(invRef, (currentData) => {
-                if (currentData === null) {
-                    console.warn(`Inventory node not found for SN: ${serialNo}`);
-                    return currentData; // abort
-                }
-
-                const currentQty = parseInt(
-                    currentData.quantity ??
-                    currentData.availableStock ??
-                    currentData.currentStock ??
-                    currentData.stock ??
-                    0,
-                    10
-                );
-
-                const newQty = Math.max(0, currentQty - qtyIssued);
-
-                currentData.quantity = newQty;
-                currentData.availableStock = newQty;
-                currentData.currentStock = newQty;
-                currentData.stock = newQty;
-
-                // Deduct from sub-batches FIFO if present (sort by receivedDate/createdAt ascending)
-                if (currentData.batches && typeof currentData.batches === 'object') {
-                    let remainingToDeduct = qtyIssued;
-                    const sortedBatches = Object.entries(currentData.batches).sort((a, b) => {
-                        const dateA = new Date(a[1].receivedDate || a[1].createdAt || '1970-01-01');
-                        const dateB = new Date(b[1].receivedDate || b[1].createdAt || '1970-01-01');
-                        return dateA - dateB;
-                    });
-
-                    for (const [bKey, batch] of sortedBatches) {
-                        if (remainingToDeduct <= 0) break;
-                        if (!batch || typeof batch !== 'object') continue;
-
-                        const batchQty = parseInt(
-                            batch.currentStock ?? batch.quantity ?? batch.initialQty ?? 0,
-                            10
-                        );
-                        if (batchQty <= 0) continue;
-
-                        const deductFromBatch = Math.min(batchQty, remainingToDeduct);
-                        const newBatchQty = batchQty - deductFromBatch;
-                        batch.currentStock = newBatchQty;
-                        batch.quantity = newBatchQty;
-                        batch.status = newBatchQty > 0 ? "In Stock" : "Depleted";
-                        remainingToDeduct -= deductFromBatch;
-                    }
-                }
-
-                return currentData;
-            });
-
-            if (txnResult2.committed) {
-                deductionResults.push({ serialNo, qtyIssued, status: 'deducted' });
-                console.log(`✅ Deducted ${qtyIssued} from SN: ${serialNo}`);
-            } else {
-                deductionResults.push({ serialNo, qtyIssued, status: 'not_found' });
-                console.warn(`⚠️ Transaction aborted for SN: ${serialNo}`);
-            }
+            await executeRealtimeStockDeduction(serialNo, qtyIssued);
+            deductionResults.push({ serialNo, qtyIssued, status: 'deducted' });
+            console.log(`✅ Realtime Deducted ${qtyIssued} from SN: ${serialNo}`);
         } catch (txnErr) {
             console.error(`Transaction failed for SN: ${serialNo}`, txnErr);
             deductionResults.push({ serialNo, qtyIssued, status: 'error', error: txnErr.message });
@@ -1023,6 +958,102 @@ async function executeSingleStockDeduction(order) {
     return { success: true, reason: 'completed', results: deductionResults };
 }
 window.executeSingleStockDeduction = executeSingleStockDeduction;
+
+// ==================== REALTIME FIREBASE STOCK DEDUCTION ====================
+async function executeRealtimeStockDeduction(itemId, orderedQty) {
+    if (!itemId) return;
+    const cleanId = String(itemId).trim();
+    if (!cleanId) return;
+
+    let targetKey = cleanId;
+    let itemData = inventoryData ? inventoryData[cleanId] : null;
+
+    if (!itemData && inventoryData) {
+        const cleanLower = cleanId.toLowerCase();
+        const foundKey = Object.keys(inventoryData).find(k => {
+            const node = inventoryData[k];
+            if (!node) return false;
+            const nodeSN = (node.serialNumber || node.batchNo || '').toString().trim().toLowerCase();
+            const nodeName = (node.itemName || node.name || '').toString().trim().toLowerCase();
+            return k.toLowerCase() === cleanLower || nodeSN === cleanLower || nodeName === cleanLower;
+        });
+        if (foundKey) {
+            targetKey = foundKey;
+            itemData = inventoryData[foundKey];
+        }
+    }
+
+    const itemRef = ref(db, `inventory/${targetKey}`);
+    if (!itemData) {
+        try {
+            const snapshot = await get(itemRef);
+            itemData = snapshot.val();
+        } catch (e) {
+            console.error("Failed to fetch item for deduction:", e);
+        }
+    }
+
+    if (!itemData) {
+        console.warn("executeRealtimeStockDeduction: Item node not found for ID:", targetKey);
+        return;
+    }
+
+    let qtyToDeduct = parseInt(orderedQty, 10) || 0;
+    if (qtyToDeduct <= 0) return;
+
+    const updates = {};
+
+    if (itemData.batches && typeof itemData.batches === 'object' && Object.keys(itemData.batches).length > 0) {
+        const sortedBatches = Object.entries(itemData.batches)
+            .map(([bId, b]) => ({ bId, ...b, qty: parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) }))
+            .filter(b => b.qty > 0)
+            .sort((a, b) => new Date(a.receivedDate || a.createdAt || '1970-01-01') - new Date(b.receivedDate || b.createdAt || '1970-01-01'));
+
+        for (const batch of sortedBatches) {
+            if (qtyToDeduct <= 0) break;
+            const deduct = Math.min(batch.qty, qtyToDeduct);
+            const newBatchQty = Math.max(0, batch.qty - deduct);
+
+            updates[`batches/${batch.bId}/currentQty`] = newBatchQty;
+            updates[`batches/${batch.bId}/currentStock`] = newBatchQty;
+            updates[`batches/${batch.bId}/quantity`] = newBatchQty;
+            updates[`batches/${batch.bId}/status`] = newBatchQty > 0 ? "In Stock" : "Depleted";
+            qtyToDeduct -= deduct;
+        }
+
+        let remainingSum = 0;
+        Object.entries(itemData.batches).forEach(([bKey, b]) => {
+            const bQty = updates[`batches/${bKey}/currentQty`] !== undefined
+                ? updates[`batches/${bKey}/currentQty`]
+                : parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10);
+            remainingSum += Math.max(0, bQty);
+        });
+
+        updates[`currentQty`] = remainingSum;
+        updates[`currentStock`] = remainingSum;
+        updates[`quantity`] = remainingSum;
+        updates[`availableStock`] = remainingSum;
+        updates[`stock`] = remainingSum;
+        updates[`status`] = remainingSum > 0 ? (remainingSum <= 5 ? "Low Stock" : "In Stock") : "Out of Stock";
+    } else {
+        const currentVal = parseInt(itemData.currentQty ?? itemData.currentStock ?? itemData.quantity ?? itemData.availableStock ?? 0, 10);
+        const newVal = Math.max(0, currentVal - qtyToDeduct);
+        updates[`currentQty`] = newVal;
+        updates[`currentStock`] = newVal;
+        updates[`quantity`] = newVal;
+        updates[`availableStock`] = newVal;
+        updates[`stock`] = newVal;
+        updates[`status`] = newVal > 0 ? (newVal <= 5 ? "Low Stock" : "In Stock") : "Out of Stock";
+    }
+
+    await update(itemRef, updates);
+
+    window.masterInventoryList = getFlatInventoryList();
+    if (typeof renderMasterInventory === 'function') renderMasterInventory();
+    if (typeof renderMasterInventoryReport === 'function') renderMasterInventoryReport();
+    if (typeof renderTeacherCatalog === 'function') renderTeacherCatalog();
+}
+window.executeRealtimeStockDeduction = executeRealtimeStockDeduction;
 
 // ==================== AUTO FIFO MULTI-BATCH CALCULATION ====================
 function calculateBatchDispatchSplit(item, requestedQty) {
@@ -1302,8 +1333,9 @@ function isCanvasBlank(canvas) {
 
 function getStatusBadge(qty) {
     const numericQty = Number(qty) || 0;
-    if (numericQty <= 0) return `<span class="badge bg-secondary text-white">Depleted (0)</span>`;
-    if (numericQty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${numericQty})</span>`;
+    if (numericQty <= 0) return `<span class="badge bg-secondary text-white">❌ Out of Stock (0)</span>`;
+    if (numericQty <= 5) return `<span class="badge bg-danger text-white animate-pulse">⚠️ Emergency Reorder (${numericQty})</span>`;
+    if (numericQty < 20) return `<span class="badge bg-warning text-dark">Low Stock (${numericQty})</span>`;
     return `<span class="badge bg-success text-white">In Stock</span>`;
 }
 
@@ -3309,12 +3341,16 @@ function fetchInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
+        window.masterInventoryList = getFlatInventoryList();
 
         const categoriesForCatalog = getTeacherGroupedCatalog(data);
 
         catalogState.allItems = categoriesForCatalog;
         window.allCatalogItems = categoriesForCatalog;
         resetCatalog();
+
+        if (typeof renderMasterInventory === 'function') renderMasterInventory();
+        if (typeof renderTeacherCatalog === 'function') renderTeacherCatalog();
     });
 }
 
@@ -3416,6 +3452,15 @@ function renderTeacherCatalog() {
     }
 
     products.forEach(product => {
+        let stockBadgeHTML = '';
+        if (product.totalAvailableStock <= 0) {
+            stockBadgeHTML = `<span class="badge bg-secondary text-white fs-6">❌ Out of Stock (0 Pcs)</span>`;
+        } else if (product.totalAvailableStock <= 5) {
+            stockBadgeHTML = `<span class="badge bg-danger text-white fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${product.totalAvailableStock} ${product.totalAvailableStock === 1 ? 'Pc' : 'Pcs'} Left)</span>`;
+        } else {
+            stockBadgeHTML = `<span class="badge bg-success fs-6">Available: ${product.totalAvailableStock} Pcs</span>`;
+        }
+
         // Generate ONE single card per unique Serial Number
         const cardHTML = `
             <div class="col-md-4 mb-3">
@@ -3426,7 +3471,7 @@ function renderTeacherCatalog() {
                         <h5 class="card-title font-bold text-dark mb-1" style="font-size: 1.1rem; font-weight: 700;">${escapeHtml(product.itemName)}</h5>
                         <p class="text-muted small mb-2">SN: <span class="text-danger fw-bold">${escapeHtml(product.serialNumber)}</span></p>
                         <div class="mt-auto d-flex justify-content-between align-items-center pt-2">
-                            <span class="badge ${product.totalAvailableStock > 0 ? 'bg-success' : 'bg-danger'} fs-6">Available: ${product.totalAvailableStock} Pcs</span>
+                            ${stockBadgeHTML}
                             <button class="btn btn-primary btn-sm px-3 fw-bold" onclick="window.addToCart('${escapeHtml(product.id)}')">Add to Cart</button>
                         </div>
                     </div>
@@ -3662,7 +3707,9 @@ function fetchMasterInventory() {
         const data = snapshot.val() || {};
         inventoryData = data;
         window.masterInventoryList = getFlatInventoryList();
-        renderMasterInventory();
+
+        if (typeof renderMasterInventory === 'function') renderMasterInventory();
+        if (typeof renderTeacherCatalog === 'function') renderTeacherCatalog();
     });
 }
 
@@ -3801,6 +3848,11 @@ function renderMasterInventory() {
             const productsList = Array.from(categoryProductsMap.values());
             const categoryTotalStock = productsList.reduce((sum, p) => sum + p.totalStock, 0);
 
+            let catBadgeClass = 'bg-primary';
+            if (categoryTotalStock <= 0) catBadgeClass = 'bg-secondary';
+            else if (categoryTotalStock <= 5) catBadgeClass = 'bg-danger animate-pulse';
+            else if (categoryTotalStock < 20) catBadgeClass = 'bg-warning text-dark';
+
             html += `
                 <div class="accordion-item mb-3 border rounded shadow-sm overflow-hidden" style="border-radius: 12px !important;">
                     <h2 class="accordion-header" id="heading_${categoryAccordionId}">
@@ -3812,7 +3864,7 @@ function renderMasterInventory() {
                                 <span>${escapeHtml(categoryName)}</span>
                                 <span class="badge bg-light text-secondary border small ms-2">${productsList.length} Unique Product${productsList.length === 1 ? '' : 's'}</span>
                             </div>
-                            <span class="badge ${categoryTotalStock < 20 ? 'bg-danger' : 'bg-primary'} p-2 px-3 me-3">
+                            <span class="badge ${catBadgeClass} p-2 px-3 me-3">
                                 Category Stock: ${categoryTotalStock} Pcs
                             </span>
                         </button>
@@ -3825,6 +3877,17 @@ function renderMasterInventory() {
             productsList.forEach((prod) => {
                 const { catId, catData, productName, serialNumber, totalStock, allBatches } = prod;
 
+                let adminStockBadgeHTML = '';
+                if (totalStock <= 0) {
+                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white p-2 px-3 fs-6">❌ Out of Stock (0 Pcs)</span>`;
+                } else if (totalStock <= 5) {
+                    adminStockBadgeHTML = `<span class="badge bg-danger text-white p-2 px-3 fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${totalStock === 1 ? 'Pc' : 'Pcs'} Left)</span>`;
+                } else if (totalStock < 20) {
+                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark p-2 px-3 fs-6">Total Current Stock: ${totalStock} Pcs</span>`;
+                } else {
+                    adminStockBadgeHTML = `<span class="badge bg-success text-white p-2 px-3 fs-6">Total Current Stock: ${totalStock} Pcs</span>`;
+                }
+
                 html += `
                     <div class="card mb-3 border-0 shadow-sm overflow-hidden" style="border-radius: 10px;">
                         <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -3833,9 +3896,7 @@ function renderMasterInventory() {
                                 <small class="text-muted">SN: <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | Category: <strong>${escapeHtml(categoryName)}</strong></small>
                             </div>
                             <div class="d-flex align-items-center gap-2">
-                                <span class="badge ${totalStock < 20 ? 'bg-warning text-dark' : 'bg-success text-white'} p-2 px-3 fs-6">
-                                    Total Current Stock: ${totalStock} Pcs
-                                </span>
+                                ${adminStockBadgeHTML}
                                 <button class="btn btn-sm btn-success fw-bold ms-2" onclick="window.openRestockModal('${escapeHtml(catId)}')">
                                     <i class="bi bi-plus-circle me-1"></i> + Add Stock
                                 </button>

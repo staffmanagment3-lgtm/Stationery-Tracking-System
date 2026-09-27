@@ -1919,3 +1919,18 @@ body.modal-open {
     border-radius: 10px;
     background: #ffffff;
 }
+
+/* Blinking Emergency Low Stock Pulse Animation v1.8.65 */
+.animate-pulse {
+    animation: animatePulse 1.2s infinite ease-in-out;
+}
+@keyframes animatePulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.75;
+        transform: scale(1.04);
+    }
+}
