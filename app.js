@@ -3199,13 +3199,6 @@ function getTeacherGroupedCatalog(rawInventoryData) {
         data: item
     }));
 }
-    });
-
-    return Array.from(teacherMap.values()).map(item => ({
-        id: item.groupKey,
-        data: item
-    }));
-}
 window.getTeacherGroupedCatalog = getTeacherGroupedCatalog;
 
 function fetchInventory() {
