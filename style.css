@@ -1031,6 +1031,20 @@ img.lazy-load {
 }
 .admin-actions-area button { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 
+/* ==================== MASTER INVENTORY REPORT HEADER ==================== */
+.inventory-header-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.report-action-buttons {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
 /* ==================== TABLES ==================== */
 .table-responsive {
     width: 100%; overflow-x: auto;
@@ -1137,6 +1151,142 @@ img.lazy-load {
     min-height: 36px;
 }
 .delete-cat-btn:hover { background: #ee3845; }
+
+/* ==================== CATEGORY MIRROR ITEM LIST UI ==================== */
+#category-items-mirror-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    margin-bottom: 1.2rem !important;
+}
+
+#category-items-search-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin-bottom: 8px !important;
+}
+
+#category-items-search-input {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    height: 38px !important;
+    padding: 6px 12px !important;
+    font-size: 13px !important;
+}
+
+#category-items-mirror-list {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    max-height: 280px !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    background: #f8fafc !important;
+    padding: 8px !important;
+}
+
+.category-cards-wrapper {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.category-item-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    padding: 10px 14px !important;
+
+    /* Grid layout: 1fr for item name, auto for Select button */
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 12px !important;
+    align-items: center !important;
+    transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out !important;
+}
+
+.category-item-card:hover, .category-item-card.selected-card {
+    background: #f0f7ff !important;
+    border-color: #3b82f6 !important;
+}
+
+.category-item-card-left {
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+    min-width: 0 !important; /* Critical to allow text wrapping in grid/flex */
+    width: 100% !important;
+}
+
+/* OVERRIDE: Radio button fix inside form-group */
+.form-group input.category-item-radio,
+.category-item-card input[type="radio"],
+.category-item-card input.category-item-radio {
+    width: 18px !important;
+    height: 18px !important;
+    min-width: 18px !important;
+    max-width: 18px !important;
+    flex: 0 0 18px !important;
+    margin: 3px 0 0 0 !important;
+    cursor: pointer !important;
+}
+
+.category-item-name {
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    cursor: pointer !important;
+}
+
+.category-item-select-btn {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 75px !important;
+    max-width: 120px !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    padding: 6px 12px !important;
+    border-radius: 6px !important;
+    white-space: nowrap !important;
+}
+
+/* Mobile responsive layout (< 768px) */
+@media (max-width: 768px) {
+    .category-item-card {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 8px !important;
+    }
+
+    .category-item-card-left {
+        width: 100% !important;
+    }
+
+    .category-item-select-btn {
+        width: 100% !important;
+        max-width: 100% !important;
+        text-align: center !important;
+        margin-top: 4px !important;
+    }
+}
 
 /* Prevent Action buttons from wrapping or hiding on mobile */
 .table td.action-column,

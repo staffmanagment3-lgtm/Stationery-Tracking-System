@@ -5,7 +5,332 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.50";
+const APP_VERSION = "1.8.85";
+
+// Complete 27 Category List
+const ALL_STATIONERY_CATEGORIES = [
+    "Writing & Marking",
+    "Paper & Coloured Paper",
+    "Sticky Notes & Notepads",
+    "Boards & Display Boards",
+    "Classroom Display & Decoration",
+    "Files & Folders",
+    "Dividers & Labels",
+    "Binding & Binding Supplies",
+    "Adhesives & Glue",
+    "Tapes & Tape Accessories",
+    "Clips & Fasteners",
+    "Stapling & Punching",
+    "Cutting Tools",
+    "Rulers & Measuring Tools",
+    "Envelopes & Mailing",
+    "Lamination",
+    "Office Equipment",
+    "Art & Craft Supplies",
+    "Electrical & Power",
+    "HDMI & Network Cables",
+    "Computer & IT Accessories",
+    "Batteries",
+    "Whiteboard Accessories",
+    "Storage & Organization",
+    "Shredding & Waste Management",
+    "Certificate & Document Supplies",
+    "Identification & Lanyards",
+    "Others"
+];
+window.ALL_STATIONERY_CATEGORIES = ALL_STATIONERY_CATEGORIES;
+
+// Category to Actual Stationery Products Master Mapping
+const STATIONERY_CATEGORY_ITEMS_MASTER = {
+    "Writing & Marking": [
+        { name: "Ball Pen - (Blue)" },
+        { name: "Ball Pen - (Black)" },
+        { name: "Ball Pen - (Red)" },
+        { name: "Ball Pen - (Green)" },
+        { name: "Uniball Eye Micro Roller UB-157 (Blue)" },
+        { name: "Uniball Eye Micro Roller UB-157 (Black)" },
+        { name: "Uniball Eye Micro Roller UB-157 (Red)" },
+        { name: "Uniball Eye Micro Roller UB-157 (Green)" },
+        { name: "Highlighter" },
+        { name: "Pencils Staedtler HB" },
+        { name: "Felt Tip Pens" },
+        { name: "Correction Pen" },
+        { name: "Whiteboard Markers - Blue" },
+        { name: "Whiteboard Markers - Black" },
+        { name: "Whiteboard Markers - Red" },
+        { name: "Whiteboard Markers - Green" },
+        { name: "Permanenet Markers - (Black, Blue, Green, Red)" },
+        { name: "Chalk White" },
+        { name: "Chalk Colored" },
+        { name: "Color Pencils Faber Castell 12 Colors" },
+        { name: "Faber Castell Crayons Medium Size" }
+    ],
+    "Paper & Coloured Paper": [
+        { name: "A4 Paper - 80 GSM" },
+        { name: "A4 Paper - 100 GSM" },
+        { name: "A4 Paper - 80 GSM (Light Pink, Light Green, Light Blue, Light Yellow)" },
+        { name: "A4 Paper - 160/180 GSM (White, Pink, Blue, Yellow)" },
+        { name: "A4 Paper - 160 /180GSM (Muli Colors)" },
+        { name: "A3 Paper- 80 Gsm" },
+        { name: "Bristol Card 70 X 100 x 180 GSM (Multi Colors)" },
+        { name: "Bristol Card - 70 x 100 - 180 GSM - Black" }
+    ],
+    "Sticky Notes & Notepads": [
+        { name: "Sticky Notes 3x3 Yellow" },
+        { name: "Sticky Notes 3x3 Neon Colors" },
+        { name: "Sticky Notes 2x3 Yellow" },
+        { name: "Page Markers / Index Flags" },
+        { name: "Cube Sticky Notes 4x4" },
+        { name: "Spiral Notepad A5" },
+        { name: "Writing Pad A4" },
+        { name: "Executive Notepad" }
+    ],
+    "Boards & Display Boards": [
+        { name: "Cork Board 90x60cm" },
+        { name: "Cork Board 120x90cm" },
+        { name: "Magnetic Whiteboard 90x60cm" },
+        { name: "Magnetic Whiteboard 120x90cm" },
+        { name: "Felt Notice Board Green 90x60cm" },
+        { name: "Felt Notice Board Blue 120x90cm" },
+        { name: "Flipchart Easel Stand" }
+    ],
+    "Classroom Display & Decoration": [
+        { name: "Classroom Border Rolls Assorted" },
+        { name: "Display Paper Rolls (Red, Blue, Green, Yellow)" },
+        { name: "Lettering Sets for Displays" },
+        { name: "Decorative Cutouts & Shapes" },
+        { name: "Poster Rolls 80GSM Assorted" },
+        { name: "Wall Mounting Putty / Tack" }
+    ],
+    "Files & Folders": [
+        { name: "Ring Binder A4 2-Ring" },
+        { name: "Lever Arch File A4 75mm" },
+        { name: "Clear Sleeve Folder 20 Pockets" },
+        { name: "Clear Sleeve Folder 40 Pockets" },
+        { name: "Document Wallet Button Folder A4" },
+        { name: "Expanding File 12 Pockets" },
+        { name: "Report Cover Folder Clear Front" },
+        { name: "Clip Folder A4" },
+        { name: "Suspension Files A4" }
+    ],
+    "Dividers & Labels": [
+        { name: "A4 Subject Dividers 1-5 Tab" },
+        { name: "A4 Subject Dividers 1-10 Tab" },
+        { name: "A4 Subject Dividers Jan-Dec" },
+        { name: "Address Labels 21 per Sheet A4" },
+        { name: "Multipurpose Round Labels" },
+        { name: "Name Badge Labels Self-Adhesive" },
+        { name: "Color Coding Dots Assorted" }
+    ],
+    "Binding & Binding Supplies": [
+        { name: "Plastic Binding Combs 8mm (Pack of 100)" },
+        { name: "Plastic Binding Combs 10mm (Pack of 100)" },
+        { name: "Plastic Binding Combs 12mm (Pack of 100)" },
+        { name: "Binding Covers Clear PVC A4" },
+        { name: "Binding Covers Leathergrain Back A4" },
+        { name: "Thermal Binding Covers A4" },
+        { name: "Wire Binding Spines 3:1 Pitch" }
+    ],
+    "Adhesives & Glue": [
+        { name: "Glue Stick 21g UHU/Pritt" },
+        { name: "Glue Stick 40g UHU/Pritt" },
+        { name: "Liquid PVA School Glue 500ml" },
+        { name: "Super Glue Precision 3g" },
+        { name: "Wood Glue D3 250ml" },
+        { name: "Adhesive Putty / Blu-Tack 75g" },
+        { name: "Glue Dots Roll" }
+    ],
+    "Tapes & Tape Accessories": [
+        { name: "Clear Stationery Tape 18mm x 33m" },
+        { name: "Clear Packing Tape 48mm x 50m" },
+        { name: "Brown Packing Tape 48mm x 50m" },
+        { name: "Masking Tape 24mm x 50m" },
+        { name: "Double-Sided Foam Tape 18mm" },
+        { name: "Double-Sided Tissue Tape 12mm" },
+        { name: "Heavy Duty Desktop Tape Dispenser" },
+        { name: "Packing Tape Hand Dispenser" }
+    ],
+    "Clips & Fasteners": [
+        { name: "Paper Clips 33mm Plain (Box of 100)" },
+        { name: "Paper Clips 50mm Jumbo (Box of 100)" },
+        { name: "Binder Clips 19mm Small (Box of 12)" },
+        { name: "Binder Clips 25mm Medium (Box of 12)" },
+        { name: "Binder Clips 32mm Large (Box of 12)" },
+        { name: "Binder Clips 51mm Extra Large (Box of 12)" },
+        { name: "Treasury Tags 25mm (Pack of 100)" },
+        { name: "Push Pins / Map Tacks Assorted (Box of 100)" }
+    ],
+    "Stapling & Punching": [
+        { name: "Desktop Stapler 24/6 No.10" },
+        { name: "Heavy Duty Stapler 100 Sheet Capacity" },
+        { name: "Staples 24/6 Standard (Box of 5000)" },
+        { name: "Staples 26/6 Premium (Box of 5000)" },
+        { name: "Heavy Duty Staples 23/13 (Box of 1000)" },
+        { name: "Staple Remover Claw Type" },
+        { name: "2-Hole Paper Punch 20 Sheet" },
+        { name: "Heavy Duty 2-Hole Punch 65 Sheet" },
+        { name: "4-Hole Punch A4 Standard" }
+    ],
+    "Cutting Tools": [
+        { name: "Scissors 7.5\"" },
+        { name: "Scissors small" },
+        { name: "3SCR Student Scissors Blister Pack 3 Pieces" },
+        { name: "Scissors with safety features for Cycle 1 students" },
+        { name: "Paper Knife Smaller" },
+        { name: "Paper knife Big Size" },
+        { name: "A3 Metal Base Paper Cutter" },
+        { name: "PAPER CUTTER A3" },
+        { name: "PAPER CUTTER A4" },
+        { name: "Cutting Mat 600x450mm" }
+    ],
+    "Rulers & Measuring Tools": [
+        { name: "Plastic Ruler 30cm / 12 Inch Clear" },
+        { name: "Plastic Ruler 15cm / 6 Inch Clear" },
+        { name: "Aluminium Safety Ruler 30cm" },
+        { name: "Stainless Steel Ruler 60cm / 24 Inch" },
+        { name: "Geometry Set 8-Piece Metal Case" },
+        { name: "Fiberglass Measuring Tape 15m" },
+        { name: "Chalkboard Compass & Protractor Set" }
+    ],
+    "Envelopes & Mailing": [
+        { name: "Envelope DL White Self-Seal (Box of 500)" },
+        { name: "Envelope C5 White Self-Seal (Box of 250)" },
+        { name: "Envelope C4 Brown Manila Board-Backed (Box of 125)" },
+        { name: "Envelope C4 White Self-Seal (Box of 250)" },
+        { name: "Bubble Padded Envelope Size 1 DL" },
+        { name: "Bubble Padded Envelope Size 4 A4" },
+        { name: "Postal Mailing Tubes A1 Size" }
+    ],
+    "Lamination": [
+        { name: "Laminating Pouches A4 80 Micron (Pack of 100)" },
+        { name: "Laminating Pouches A4 125 Micron (Pack of 100)" },
+        { name: "Laminating Pouches A3 80 Micron (Pack of 100)" },
+        { name: "Laminating Pouches ID Card Size 100 Micron" },
+        { name: "A3 Heavy Duty Laminator Machine" }
+    ],
+    "Office Equipment": [
+        { name: "Desktop Scientific Calculator 12-Digit" },
+        { name: "Cross-Cut Paper Shredder 10-Sheet" },
+        { name: "Electric Heavy Duty Pencil Sharpener" },
+        { name: "Thermal Label Printer USB" },
+        { name: "Cash Box 12 Inch Metal Key Lock" }
+    ],
+    "Art & Craft Supplies": [
+        { name: "Acrylic Paint Set 12 Colors x 12ml" },
+        { name: "Water Color Paint Set 24 Pan Palette" },
+        { name: "Paint Brushes Assorted Synthetic Set of 6" },
+        { name: "Modeling Clay 500g Non-Toxic" },
+        { name: "Origami Paper Pack 15x15cm 100 Sheets" },
+        { name: "Craft Glitter Shakers Pack of 6 Colors" },
+        { name: "Craft Foam Sheets A4 Assorted Pack of 10" }
+    ],
+    "Electrical & Power": [
+        { name: "Power Extension Socket 4-Way 3 Meter" },
+        { name: "Power Extension Socket 6-Way 5 Meter" },
+        { name: "Cable Reel Heavy Duty 15 Meter" },
+        { name: "UK 3-Pin Plug Adapter 13A" },
+        { name: "Universal Travel Adapter with USB" }
+    ],
+    "HDMI & Network Cables": [
+        { name: "HDMI Cable High Speed 1.8 Meter" },
+        { name: "HDMI Cable High Speed 3.0 Meter" },
+        { name: "HDMI Cable High Speed 5.0 Meter" },
+        { name: "CAT6 Ethernet Patch Network Cable 2M" },
+        { name: "CAT6 Ethernet Patch Network Cable 5M" },
+        { name: "VGA to HDMI Adapter Converter Cable" },
+        { name: "DisplayPort to HDMI Adapter Cable" }
+    ],
+    "Computer & IT Accessories": [
+        { name: "USB Wireless Mouse Optical" },
+        { name: "USB Wired Ergonomic Keyboard" },
+        { name: "USB Flash Drive 32GB 3.0" },
+        { name: "USB Flash Drive 64GB 3.0" },
+        { name: "USB 3.0 Multi-Port Hub 4-Port" },
+        { name: "External Hard Drive 1TB USB 3.0" },
+        { name: "Screen Cleaning Wipes Pack of 100" }
+    ],
+    "Batteries": [
+        { name: "AA Alkaline Batteries 1.5V (Pack of 12)" },
+        { name: "AAA Alkaline Batteries 1.5V (Pack of 12)" },
+        { name: "9V Block Battery Alkaline (Pack of 2)" },
+        { name: "C Size Batteries Alkaline (Pack of 4)" },
+        { name: "D Size Batteries Alkaline (Pack of 4)" },
+        { name: "CR2032 Lithium Coin Cell 3V (Pack of 5)" }
+    ],
+    "Whiteboard Accessories": [
+        { name: "Whiteboard Eraser Magnetic Foam" },
+        { name: "Whiteboard Cleaner Spray 250ml" },
+        { name: "Whiteboard Cleaner Wipes Container of 100" },
+        { name: "Magnetic Button Pins Assorted (Pack of 10)" },
+        { name: "Whiteboard Tape Grid Lines Black 3mm" }
+    ],
+    "Storage & Organization": [
+        { name: "Plastic Storage Box 24 Liter Clear" },
+        { name: "Plastic Storage Box 42 Liter Clear" },
+        { name: "Desktop Magazine Rack File Holder 3-Slot" },
+        { name: "Desk Organizer Pen Stand Mesh Metal" },
+        { name: "Drawer Organizer Tray 4-Compartment" }
+    ],
+    "Shredding & Waste Management": [
+        { name: "Waste Paper Bin Mesh Metal 15 Liter" },
+        { name: "Heavy Duty Trash Bags 50 Liter (Roll of 20)" },
+        { name: "Shredder Oil Lubricant Sheets Pack of 12" },
+        { name: "Shredder Waste Bags 50 Liter Pack of 50" }
+    ],
+    "Certificate & Document Supplies": [
+        { name: "Certificate Paper Heavy Weight A4 Pack of 50" },
+        { name: "Certificate Holders Leatherette Navy Blue" },
+        { name: "Certificate Gold Foil Seals Pack of 100" },
+        { name: "Document Presentation Folder A4 Premium" }
+    ],
+    "Identification & Lanyards": [
+        { name: "Lanyard Flat Polyester Blue with Clip (Pack of 10)" },
+        { name: "Lanyard Flat Polyester Red with Clip (Pack of 10)" },
+        { name: "ID Card Badge Holder Clear Rigid Plastic A1" },
+        { name: "ID Card Badge Holder Soft Vinyl Vertical" },
+        { name: "Retractable Badge Reel Clip Black (Pack of 5)" }
+    ]
+};
+window.STATIONERY_CATEGORY_ITEMS_MASTER = STATIONERY_CATEGORY_ITEMS_MASTER;
+
+function assignCategoryToItem(item) {
+    if (!item) return "Writing & Marking";
+    if (item.category && item.category !== 'Other' && item.category.trim()) return item.category.trim();
+    if (item.itemCategory && item.itemCategory !== 'Other' && item.itemCategory.trim()) return item.itemCategory.trim();
+
+    const name = ((item.itemName || item.name || '') + ' ' + (item.description || '')).toLowerCase();
+
+    if (/pen|pencil|marker|highlighter|correction|chalk|crayon|felt|sharpie/i.test(name)) return "Writing & Marking";
+    if (/paper|a4|a3|coloured paper|gsm|register|sheet/i.test(name)) return "Paper & Coloured Paper";
+    if (/sticky|notepad|post-it|pad|note/i.test(name)) return "Sticky Notes & Notepads";
+    if (/board|display board|notice|cork/i.test(name)) return "Boards & Display Boards";
+    if (/classroom|decoration|border|chart|banner/i.test(name)) return "Classroom Display & Decoration";
+    if (/file|folder|binder|portfolio|ring/i.test(name)) return "Files & Folders";
+    if (/divider|label|sticker|tag/i.test(name)) return "Dividers & Labels";
+    if (/binding|comb|spiral|spine|cover/i.test(name)) return "Binding & Binding Supplies";
+    if (/adhesive|glue|gum|stick|blu-tack/i.test(name)) return "Adhesives & Glue";
+    if (/tape|dispenser|sellotape|masking/i.test(name)) return "Tapes & Tape Accessories";
+    if (/clip|fastener|paperclip|binder clip|treasury/i.test(name)) return "Clips & Fasteners";
+    if (/staple|stapler|punch|puncher|remover/i.test(name)) return "Stapling & Punching";
+    if (/scissors|cutter|knife|mat|cutting/i.test(name)) return "Cutting Tools";
+    if (/ruler|scale|measure|tape measure/i.test(name)) return "Rulers & Measuring Tools";
+    if (/envelope|mailing|mail|padded/i.test(name)) return "Envelopes & Mailing";
+    if (/lamination|laminating|pouch/i.test(name)) return "Lamination";
+    if (/equipment|calculator|shredder|machine/i.test(name)) return "Office Equipment";
+    if (/art|craft|paint|brush|glitter|clay/i.test(name)) return "Art & Craft Supplies";
+    if (/electrical|power|extension|plug|socket/i.test(name)) return "Electrical & Power";
+    if (/hdmi|network|cable|lan|ethernet|vga/i.test(name)) return "HDMI & Network Cables";
+    if (/computer|mouse|keyboard|usb|it|adapter/i.test(name)) return "Computer & IT Accessories";
+    if (/battery|batteries|aa|aaa|9v|cell/i.test(name)) return "Batteries";
+    if (/whiteboard|eraser|cleaner|duster/i.test(name)) return "Whiteboard Accessories";
+    if (/storage|organization|box|tray|organizer/i.test(name)) return "Storage & Organization";
+    if (/shredding|waste|bin/i.test(name)) return "Shredding & Waste Management";
+    if (/certificate|document|certificate holder/i.test(name)) return "Certificate & Document Supplies";
+    if (/identification|lanyard|badge|holder|id/i.test(name)) return "Identification & Lanyards";
+
+    return "Writing & Marking";
+}
+window.assignCategoryToItem = assignCategoryToItem;
 
 window.isSystemReady = false;
 setTimeout(() => {
@@ -618,13 +943,17 @@ async function executeSingleStockDeduction(order) {
                 currentData.currentStock = newQty;
                 currentData.stock = newQty;
 
-                // Deduct from sub-batches FIFO if present
+                // Deduct from sub-batches FIFO if present (sort by receivedDate/createdAt ascending)
                 if (currentData.batches && typeof currentData.batches === 'object') {
                     let remainingToDeduct = qtyIssued;
-                    const batchKeys = Object.keys(currentData.batches);
-                    for (const bKey of batchKeys) {
+                    const sortedBatches = Object.entries(currentData.batches).sort((a, b) => {
+                        const dateA = new Date(a[1].receivedDate || a[1].createdAt || '1970-01-01');
+                        const dateB = new Date(b[1].receivedDate || b[1].createdAt || '1970-01-01');
+                        return dateA - dateB;
+                    });
+
+                    for (const [bKey, batch] of sortedBatches) {
                         if (remainingToDeduct <= 0) break;
-                        const batch = currentData.batches[bKey];
                         if (!batch || typeof batch !== 'object') continue;
 
                         const batchQty = parseInt(
@@ -637,6 +966,7 @@ async function executeSingleStockDeduction(order) {
                         const newBatchQty = batchQty - deductFromBatch;
                         batch.currentStock = newBatchQty;
                         batch.quantity = newBatchQty;
+                        batch.status = newBatchQty > 0 ? "In Stock" : "Depleted";
                         remainingToDeduct -= deductFromBatch;
                     }
                 }
@@ -894,9 +1224,9 @@ function isCanvasBlank(canvas) {
 
 function getStatusBadge(qty) {
     const numericQty = Number(qty) || 0;
-    if (numericQty <= 0) return `<span class="badge bg-danger">Out of Stock</span>`;
+    if (numericQty <= 0) return `<span class="badge bg-secondary text-white">Depleted (0)</span>`;
     if (numericQty <= 5) return `<span class="badge bg-warning text-dark">Low Stock (${numericQty})</span>`;
-    return `<span class="badge bg-success">In Stock</span>`;
+    return `<span class="badge bg-success text-white">In Stock</span>`;
 }
 
 // ==================== ADMIN AUTH ====================
@@ -1981,16 +2311,8 @@ async function seedDefaultCategoriesIfEmpty() {
     const categoriesRef = ref(db, 'settings/categories');
     const snapshot = await get(categoriesRef);
     if (!snapshot.exists()) {
-        console.log("No categories found. Seeding default stationery categories...");
-        const defaultCategories = [
-            "Writing & Marking",
-            "Paper & Registers",
-            "Desk Tools & Adhesives",
-            "Filing & Envelopes",
-            "Classroom & Board Supplies",
-            "Art & Craft"
-        ];
-        for (const cat of defaultCategories) {
+        console.log("No categories found. Seeding all 27 default stationery categories...");
+        for (const cat of ALL_STATIONERY_CATEGORIES) {
             await push(categoriesRef, cat);
         }
     }
@@ -2106,8 +2428,11 @@ window.updateCartQty = function(index, delta) {
     let newQty = (item.requestQuantity || 1) + delta;
     if (newQty < 1) return;
 
-    if (item.quantity && newQty > parseInt(item.quantity)) {
-        showToast("Maximum stock reached", "error");
+    const catalogItem = (window.allCatalogItems || []).find(c => c.id === item.id);
+    const totalStock = catalogItem ? getItemTotalAvailableStock(catalogItem.data) : (parseInt(item.quantity) || 999);
+
+    if (newQty > totalStock) {
+        showToast(`Only ${totalStock} Pcs currently available in total stock.`, "warning");
         return;
     }
 
@@ -2291,7 +2616,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitRequisitionBtn = $('submit-requisition-btn');
     const stationerySearch = $('stationery-search');
     const adminInventorySearch = $('admin-inventory-search');
-    const exportInventoryBtn = $('export-inventory-btn');
+    const btnExportFullExcel = $('btnExportFullExcel');
+    const btnPrintMasterReport = $('btnPrintMasterReport');
     const exportHistoryBtn = $('export-history-btn');
     const exportAuditBtn = $('export-audit-ledger-btn');
     const closeNotificationBtn = $('close-notification-btn');
@@ -2445,8 +2771,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (categorySelect) categorySelect.onchange = () => {
-        const customGroup = $('custom-category-group');
-        if (customGroup) customGroup.style.display = categorySelect.value === 'Other' ? 'block' : 'none';
+        window.handleCategorySelectionForForm(categorySelect.value);
     };
     if (serialNumberInput) serialNumberInput.oninput = () => {
         const serial = serialNumberInput.value.trim();
@@ -2503,7 +2828,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     if (closeOcrBtn) closeOcrBtn.onclick = stopOcrCamera;
 
-    if (exportInventoryBtn) exportInventoryBtn.onclick = exportInventory;
+    if (btnExportFullExcel) btnExportFullExcel.onclick = () => window.exportFullInventoryReport();
+    if (btnPrintMasterReport) btnPrintMasterReport.onclick = () => window.printInventoryReport();
     if (exportHistoryBtn) exportHistoryBtn.onclick = exportHistory;
     if (exportAuditBtn) exportAuditBtn.onclick = exportAuditLedgerToExcel;
 
@@ -2855,6 +3181,22 @@ function resetCatalog() {
     renderCatalogPage();
 }
 
+function getItemTotalAvailableStock(item) {
+    if (!item) return 0;
+    const data = item.data || item;
+    if (data.batches && typeof data.batches === 'object') {
+        const batchVals = Object.values(data.batches);
+        if (batchVals.length > 0) {
+            return batchVals.reduce((sum, b) => {
+                const stock = parseInt(b.currentStock ?? b.quantity ?? 0, 10) || 0;
+                return sum + Math.max(0, stock);
+            }, 0);
+        }
+    }
+    return Math.max(0, parseInt(data.quantity ?? data.availableStock ?? data.currentStock ?? data.stock ?? 0, 10) || 0);
+}
+window.getItemTotalAvailableStock = getItemTotalAvailableStock;
+
 function renderCatalogPage() {
     const list = $('stationery-list'); if (!list) return;
     list.innerHTML = '';
@@ -2869,6 +3211,9 @@ function renderCatalogPage() {
         const titleToDisplay = data.itemName && data.itemName !== 'Unnamed Item' ? data.itemName : (data.name || 'Stationery Item');
         const snToDisplay = data.serialNumber && data.serialNumber !== 'N/A' ? data.serialNumber : (data.sn || 'N/A');
         const productDesc = data.description || data.desc || '';
+        const totalAvailable = getItemTotalAvailableStock(data);
+        const stockBadgeColor = totalAvailable > 0 ? '#166534' : '#991b1b';
+        const stockBadgeBg = totalAvailable > 0 ? '#dcfce7' : '#fee2e2';
 
         card.innerHTML = `
             <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px;">
@@ -2882,9 +3227,14 @@ function renderCatalogPage() {
                 <h4 class="card-item-name" style="font-weight: 700; color: #111; margin-top: 10px; margin-bottom: 2px; font-size: 1.1rem;">
                     ${escapeHtml(titleToDisplay)}
                 </h4>
-                <p class="card-item-sn" style="font-size: 0.85rem; color: #6c757d; margin-bottom: 6px;">
-                    SN: ${escapeHtml(snToDisplay)}
-                </p>
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="card-item-sn" style="font-size: 0.8rem; color: #6c757d;">
+                        SN: ${escapeHtml(snToDisplay)}
+                    </span>
+                    <span class="badge" style="background-color: ${stockBadgeBg}; color: ${stockBadgeColor}; font-weight: 700; font-size: 0.8rem;">
+                        In Stock: ${totalAvailable} Pcs
+                    </span>
+                </div>
                 <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
                     ${escapeHtml(productDesc)}
                 </p>
@@ -2909,6 +3259,7 @@ window.viewItemDetails = function(itemId) {
     let productName = data.itemName || data.name || data.title || 'Unnamed Item';
     const productSN = (data.serialNumber && data.serialNumber !== 'N/A') ? data.serialNumber : (data.sn || 'N/A');
     const productDesc = data.description || data.desc || 'No description available.';
+    const totalAvailable = getItemTotalAvailableStock(data);
 
     if (productName === productSN && data.itemName !== productName) {
         productName = data.itemName || productName;
@@ -2918,7 +3269,7 @@ window.viewItemDetails = function(itemId) {
     $('detail-item-name').innerText = productName;
     $('detail-item-sn').innerText = productSN;
     $('detail-item-description').innerText = "Description: " + productDesc;
-    $('detail-item-stock').innerText = data.quantity || '0';
+    $('detail-item-stock').innerText = `${totalAvailable} Pcs`;
 
     const imgUrl = data.imageUrl || data.image || data.photoUrl;
     $('detail-item-image').src = getDirectDriveUrl(imgUrl) || FALLBACK_IMG;
@@ -2927,6 +3278,10 @@ window.viewItemDetails = function(itemId) {
     if (addBtn) {
         addBtn.onclick = () => {
             const qty = parseInt($('modal-item-qty').value) || 1;
+            if (qty > totalAvailable) {
+                showToast(`Only ${totalAvailable} Pcs currently available in total stock.`, 'warning');
+                return;
+            }
             addToCart(itemId, data, qty);
             bootstrap.Modal.getOrCreateInstance($('itemDetailsModal')).hide();
         };
@@ -2959,7 +3314,7 @@ function renderPaginationControls(containerId, state, renderFn) {
     if (nextBtn) nextBtn.onclick = () => { state.currentPage++; renderFn(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 
-// ==================== ✅ FIXED: handleAddStockBatch (syncs parent totals) ====================
+// ==================== ✅ FIXED: handleAddStockBatch (syncs parent totals & auto-reuses image for same serial) ====================
 window.handleAddStockBatch = async function(e) {
     if (e) e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
@@ -2977,6 +3332,22 @@ window.handleAddStockBatch = async function(e) {
         if (!category || !sn || qty <= 0) throw new Error("Category, SN and Qty required");
 
         let imageUrl = FALLBACK_IMG;
+
+        // Auto Image Reuse check: if no new file uploaded, find existing batch with matching serial number
+        if (!file && inventoryData) {
+            Object.values(inventoryData).forEach(catData => {
+                const batches = catData.batches || {};
+                Object.values(batches).forEach(b => {
+                    if ((b.serialNumber || '').trim() === sn && b.imageUrl && b.imageUrl !== FALLBACK_IMG) {
+                        imageUrl = b.imageUrl;
+                    }
+                });
+                if ((catData.serialNumber || '').trim() === sn && catData.imageUrl && catData.imageUrl !== FALLBACK_IMG) {
+                    imageUrl = catData.imageUrl;
+                }
+            });
+        }
+
         if (file) {
             showToast("Processing image...");
             const compressed = await window.compressAndScaleImage(file);
@@ -2985,7 +3356,8 @@ window.handleAddStockBatch = async function(e) {
             imageUrl = driveUrl || studio;
         }
 
-        const batchId = sn.replace(/[.#$[\]]/g, "_");
+        // Generate a unique receipt batch ID to preserve receipt history
+        const batchId = 'BATCH_' + Date.now().toString().slice(-6) + '_' + sn.replace(/[.#$[\]]/g, "_");
         const batchData = {
             brandName: brand,
             serialNumber: sn,
@@ -3000,7 +3372,7 @@ window.handleAddStockBatch = async function(e) {
 
         await set(ref(db, `inventory/${category}/batches/${batchId}`), batchData);
 
-        // ✅ Recalculate and sync parent inventory totals
+        // Recalculate and sync parent inventory totals
         const parentRef = ref(db, `inventory/${category}`);
         const parentSnap = await get(parentRef);
         if (parentSnap.exists()) {
@@ -3039,6 +3411,7 @@ function fetchMasterInventory() {
     addListener(ref(db, 'inventory'), (snapshot) => {
         const data = snapshot.val() || {};
         inventoryData = data;
+        window.masterInventoryList = getFlatInventoryList();
         renderMasterInventory();
     });
 }
@@ -3046,103 +3419,190 @@ function fetchMasterInventory() {
 function renderMasterInventory() {
     const container = $('inventory-container');
     if (!container) return;
+    window.masterInventoryList = getFlatInventoryList();
 
     try {
-        const term = adminInventoryState.searchTerm;
-        const catFilter = $('inventory-filter-category')?.value;
+        const term = (adminInventoryState.searchTerm || '').toLowerCase().trim();
+        const catFilter = ($('inventory-filter-category')?.value || '').trim().toLowerCase();
 
-        let html = '';
+        // Group inventory by Category -> Product -> Batches
+        const categoryGroupMap = new Map();
 
-        Object.entries(inventoryData).forEach(([catId, catData]) => {
-            if (catFilter && catId !== catFilter) return;
+        Object.entries(inventoryData || {}).forEach(([catId, catData]) => {
+            if (!catData) return;
+            const categoryName = (catData.category || catData.itemCategory || assignCategoryToItem(catData)).trim();
+            const productName = (catData.itemName || catData.name || catId).trim();
+
+            // Strict Category Filter
+            if (catFilter && catFilter !== "all categories" && catFilter !== "") {
+                if (categoryName.toLowerCase() !== catFilter && catId.toLowerCase() !== catFilter) {
+                    return; // Skip items outside selected category
+                }
+            }
 
             const batches = catData.batches || {};
             const batchEntries = Object.entries(batches);
 
-            let totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentStock) || 0), 0);
+            let totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentStock ?? b.quantity) || 0), 0);
             if (batchEntries.length === 0 && (catData.quantity || catData.currentStock)) {
                 totalStock = parseInt(catData.quantity || catData.currentStock || 0);
             }
 
-            const itemNameDisplay = catData.itemName || catData.name || catId;
-
+            // Search Filter (Category, Item Name, Brand, Serial/Batch No)
             const matchesTerm = !term ||
-                                itemNameDisplay.toLowerCase().includes(term) ||
-                                catId.toLowerCase().includes(term) ||
-                                batchEntries.some(([id, b]) => (b.brandName || '').toLowerCase().includes(term) || (b.serialNumber || '').toLowerCase().includes(term));
+                categoryName.toLowerCase().includes(term) ||
+                productName.toLowerCase().includes(term) ||
+                catId.toLowerCase().includes(term) ||
+                batchEntries.some(([id, b]) =>
+                    (b.brandName || b.brand || '').toLowerCase().includes(term) ||
+                    (b.serialNumber || b.batchNo || '').toLowerCase().includes(term)
+                );
 
             if (!matchesTerm) return;
 
-            html += `
-                <div class="card mb-4 border-0 shadow-sm overflow-hidden" style="border-radius: 12px;">
-                    <div class="card-header bg-white py-3 inventory-item-header border-bottom">
-                        <h5 class="mb-0 fw-bold text-primary inventory-item-title"><i class="bi bi-tag-fill me-2"></i>${escapeHtml(itemNameDisplay)}</h5>
-                        <div class="inventory-item-actions d-flex align-items-center gap-3">
-                            <span class="badge ${totalStock < 20 ? 'bg-danger' : 'bg-success'} total-stock-badge p-2 px-3 fs-6">
-                                Total Stock: ${totalStock}
-                            </span>
-                            <button class="btn btn-sm btn-outline-primary fw-bold add-stock-btn" onclick="window.openAddStockModal('${escapeHtml(catId)}')">
-                                + Add Stock
-                            </button>
-                        </div>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0 batch-inventory-table" style="font-size: 13px;">
-                            <thead class="bg-light text-muted">
-                                <tr>
-                                    <th style="width: 60px;">Image</th>
-                                    <th>Brand / Manufacturer</th>
-                                    <th>Serial / Batch No.</th>
-                                    <th>Received Date</th>
-                                    <th class="text-center">Current Stock</th>
-                                    <th class="text-center">Initial Qty</th>
-                                    <th>Status</th>
-                                    <th class="text-end">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>`;
-
-            if (batchEntries.length === 0) {
-                if (totalStock > 0) {
-                    html += `
-                        <tr>
-                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
-                            <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
-                            <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
-                            <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
-                            <td data-label="Current Stock" class="text-center"><span class="badge bg-light text-dark border">${totalStock}</span></td>
-                            <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock}</td>
-                            <td data-label="Status">${getStatusBadge(totalStock)}</td>
-                            <td data-label="Actions" class="text-end">
-                                <span class="text-muted small">Legacy Record</span>
-                            </td>
-                        </tr>`;
-                } else {
-                    html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active batches for this category.</td></tr>`;
-                }
-            } else {
-                batchEntries.forEach(([batchId, batch]) => {
-                    const cStock = parseInt(batch.currentStock) || 0;
-                    html += `
-                        <tr>
-                            <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${batch.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
-                            <td data-label="Brand / Manufacturer"><span class="fw-bold">${escapeHtml(batch.brandName || '-')}</span></td>
-                            <td data-label="Serial / Batch No."><code>${escapeHtml(batch.serialNumber)}</code></td>
-                            <td data-label="Received Date">${batch.receivedDate || '-'}</td>
-                            <td data-label="Current Stock" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'}">${cStock}</span></td>
-                            <td data-label="Initial Qty" class="text-center text-muted">${batch.initialQty || '-'}</td>
-                            <td data-label="Status">${getStatusBadge(cStock)}</td>
-                            <td data-label="Actions" class="text-end">
-                                <button class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${batchId}')">Delete</button>
-                            </td>
-                        </tr>`;
-                });
+            if (!categoryGroupMap.has(categoryName)) {
+                categoryGroupMap.set(categoryName, []);
             }
 
-            html += `</tbody></table></div></div>`;
+            categoryGroupMap.get(categoryName).push({
+                catId,
+                catData,
+                productName,
+                totalStock,
+                batchEntries
+            });
         });
 
-        if (!html) html = '<div class="text-center text-muted p-5 bg-light rounded">No inventory categories found matching filters.</div>';
+        if (categoryGroupMap.size === 0) {
+            if (catFilter && catFilter !== "all categories" && catFilter !== "") {
+                container.innerHTML = `<div class="text-center text-muted p-5 bg-light rounded border">
+                    <i class="bi bi-folder-x fs-1 text-secondary mb-2 d-block"></i>
+                    <h5>No items found in this category.</h5>
+                    <p class="small mb-0">Select another category or click "All Categories" to view all items.</p>
+                </div>`;
+            } else {
+                container.innerHTML = '<div class="text-center text-muted p-5 bg-light rounded border">No inventory items found matching filters.</div>';
+            }
+            return;
+        }
+
+        // Build Accordion HTML for Category -> Product -> Batches
+        let html = '<div class="accordion inventory-category-accordion" id="adminInventoryCategoryAccordion">';
+        let categoryIndex = 0;
+
+        categoryGroupMap.forEach((productsList, categoryName) => {
+            categoryIndex++;
+            const categoryAccordionId = `inv_cat_acc_${categoryIndex}`;
+            const isFirst = categoryIndex === 1;
+
+            const categoryTotalStock = productsList.reduce((sum, p) => sum + p.totalStock, 0);
+
+            html += `
+                <div class="accordion-item mb-3 border rounded shadow-sm overflow-hidden" style="border-radius: 12px !important;">
+                    <h2 class="accordion-header" id="heading_${categoryAccordionId}">
+                        <button class="accordion-button ${isFirst ? '' : 'collapsed'} bg-white py-3 fw-bold fs-5 text-dark d-flex justify-content-between align-items-center"
+                                type="button" data-bs-toggle="collapse" data-bs-target="#collapse_${categoryAccordionId}"
+                                aria-expanded="${isFirst ? 'true' : 'false'}" aria-controls="collapse_${categoryAccordionId}">
+                            <div class="d-flex align-items-center gap-2">
+                                <i class="bi bi-folder-fill text-warning me-1"></i>
+                                <span>${escapeHtml(categoryName)}</span>
+                                <span class="badge bg-light text-secondary border small ms-2">${productsList.length} Product${productsList.length === 1 ? '' : 's'}</span>
+                            </div>
+                            <span class="badge ${categoryTotalStock < 20 ? 'bg-danger' : 'bg-primary'} p-2 px-3 me-3">
+                                Category Stock: ${categoryTotalStock} Pcs
+                            </span>
+                        </button>
+                    </h2>
+                    <div id="collapse_${categoryAccordionId}" class="accordion-collapse collapse ${isFirst ? 'show' : ''}"
+                         aria-labelledby="heading_${categoryAccordionId}" data-bs-parent="#adminInventoryCategoryAccordion">
+                        <div class="accordion-body bg-light p-3">
+            `;
+
+            productsList.forEach((prod) => {
+                const { catId, catData, productName, totalStock, batchEntries } = prod;
+
+                html += `
+                    <div class="card mb-3 border-0 shadow-sm overflow-hidden" style="border-radius: 10px;">
+                        <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div>
+                                <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-box-seam text-primary me-2"></i>${escapeHtml(productName)}</h5>
+                                <small class="text-muted">Product Identity: <strong>${escapeHtml(categoryName)} → ${escapeHtml(productName)}</strong></small>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge ${totalStock < 20 ? 'bg-warning text-dark' : 'bg-success text-white'} p-2 px-3 fs-6">
+                                    Total Current Stock: ${totalStock} Pcs
+                                </span>
+                                <button class="btn btn-sm btn-outline-primary fw-bold" onclick="window.openAddStockModal('${escapeHtml(categoryName)}')">
+                                    + Add Stock
+                                </button>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0 batch-inventory-table" style="font-size: 13px;">
+                                <thead class="bg-light text-muted">
+                                    <tr>
+                                        <th style="width: 60px;">Image</th>
+                                        <th>Brand / Manufacturer</th>
+                                        <th>Serial / Batch No.</th>
+                                        <th>Received Date</th>
+                                        <th class="text-center">Current Qty</th>
+                                        <th class="text-center">Initial Qty</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>`;
+
+                if (batchEntries.length === 0) {
+                    if (totalStock > 0) {
+                        html += `
+                            <tr>
+                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                                <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
+                                <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
+                                <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
+                                <td data-label="Current Qty" class="text-center"><span class="badge bg-light text-dark border">${totalStock}</span></td>
+                                <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock}</td>
+                                <td data-label="Status">${getStatusBadge(totalStock)}</td>
+                                <td data-label="Actions" class="text-end">
+                                    <span class="text-muted small">Legacy Record</span>
+                                </td>
+                            </tr>`;
+                    } else {
+                        html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active stock batches for this product.</td></tr>`;
+                    }
+                } else {
+                    batchEntries.forEach(([batchId, batch]) => {
+                        const cStock = parseInt(batch.currentStock ?? batch.quantity ?? 0);
+                        const iStock = parseInt(batch.initialQty ?? batch.openingQuantity ?? cStock);
+                        const bBrand = batch.brandName || batch.brand || batch.supplier || 'Standard';
+                        const bSerial = batch.serialNumber || batch.batchNo || 'N/A';
+                        const bDate = batch.receivedDate || (batch.createdAt ? batch.createdAt.split('T')[0] : '-');
+
+                        html += `
+                            <tr>
+                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${batch.imageUrl || catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                                <td data-label="Brand / Manufacturer"><span class="fw-bold text-dark">${escapeHtml(bBrand)}</span></td>
+                                <td data-label="Serial / Batch No."><code>${escapeHtml(bSerial)}</code></td>
+                                <td data-label="Received Date">${escapeHtml(bDate)}</td>
+                                <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock}</span></td>
+                                <td data-label="Initial Qty" class="text-center text-muted">${iStock}</td>
+                                <td data-label="Status">${getStatusBadge(cStock)}</td>
+                                <td data-label="Actions" class="text-end">
+                                    <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" onclick="window.openEditBatchModal('${escapeHtml(catId)}', '${escapeHtml(batchId)}')">Edit</button>
+                                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${escapeHtml(batchId)}')">Delete</button>
+                                </td>
+                            </tr>`;
+                    });
+                }
+
+                html += `</tbody></table></div></div>`;
+            });
+
+            html += `</div></div></div>`;
+        });
+
+        html += '</div>';
 
         container.innerHTML = html;
 
@@ -3156,12 +3616,68 @@ function renderMasterInventory() {
     }
 }
 
+window.renderMasterInventoryReport = renderMasterInventory;
+
 window.openAddStockModal = function(catName) {
     const modalEl = $('addStockModal');
     if (modalEl) {
         const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-        if (catName) $('stock-category-name').value = catName;
+        if (catName && $('stock-category-name')) {
+            $('stock-category-name').value = catName;
+        }
+        if ($('stock-date') && !$('stock-date').value) {
+            $('stock-date').value = new Date().toISOString().split('T')[0];
+        }
         modal.show();
+    }
+};
+
+window.openEditBatchModal = async function(catId, batchId) {
+    const itemData = inventoryData[catId];
+    if (!itemData || !itemData.batches || !itemData.batches[batchId]) {
+        showToast("Batch record not found", "error");
+        return;
+    }
+    const batch = itemData.batches[batchId];
+    const currentStock = batch.currentStock ?? batch.quantity ?? 0;
+    const newQtyStr = prompt(`Update Current Stock for batch "${batch.serialNumber || batchId}":`, currentStock);
+    if (newQtyStr === null) return;
+
+    const newQty = parseInt(newQtyStr, 10);
+    if (isNaN(newQty) || newQty < 0) {
+        showToast("Invalid quantity entered", "error");
+        return;
+    }
+
+    try {
+        const batchRef = ref(db, `inventory/${catId}/batches/${batchId}`);
+        await update(batchRef, {
+            currentStock: newQty,
+            quantity: newQty,
+            status: newQty > 0 ? "In Stock" : "Depleted"
+        });
+
+        const parentRef = ref(db, `inventory/${catId}`);
+        const parentSnap = await get(parentRef);
+        if (parentSnap.exists()) {
+            const pVal = parentSnap.val();
+            const allBatches = pVal.batches || {};
+            const totalQty = Object.values(allBatches).reduce(
+                (sum, b) => sum + (parseInt(b.currentStock ?? b.quantity ?? 0, 10) || 0),
+                0
+            );
+            await update(parentRef, {
+                quantity: totalQty,
+                availableStock: totalQty,
+                currentStock: totalQty,
+                stock: totalQty
+            });
+        }
+
+        showToast("Batch updated successfully!");
+        fetchMasterInventory();
+    } catch (e) {
+        showToast("Error updating batch: " + e.message, "error");
     }
 };
 
@@ -3516,27 +4032,35 @@ window.exportAuditLedgerToExcel = async function() {
 
 // ==================== CART / ORDERS ====================
 function addToCart(id, data, customQty = 1) {
-    const stock = parseInt(data.quantity) || 0;
+    const totalStock = getItemTotalAvailableStock(data);
     const existingItem = window.stationeryCart.find(i => i.id === id);
 
+    if (totalStock <= 0) {
+        showToast("This item is currently out of stock", 'error');
+        return;
+    }
+
+    const currentCartQty = existingItem ? existingItem.requestQuantity : 0;
+    const targetQty = currentCartQty + customQty;
+
+    if (targetQty > totalStock) {
+        showToast(`Only ${totalStock} Pcs currently available in total stock.`, 'warning');
+        return;
+    }
+
     if (existingItem) {
-        if (existingItem.requestQuantity + customQty <= stock) {
-            existingItem.requestQuantity += customQty;
-            showToast(`Updated ${data.itemName} quantity`);
-        } else {
-            showToast("Insufficient stock available", 'error');
-            return;
-        }
+        existingItem.requestQuantity = targetQty;
+        showToast(`Updated ${data.itemName || 'item'} quantity to ${targetQty}`);
     } else {
         window.stationeryCart.push({
             id,
-            itemName: data.itemName,
-            serialNumber: data.serialNumber,
-            quantity: data.quantity,
-            imageUrl: data.imageUrl,
+            itemName: data.itemName || data.name || 'Stationery Item',
+            serialNumber: data.serialNumber || data.sn || 'N/A',
+            quantity: totalStock,
+            imageUrl: data.imageUrl || data.image || '',
             requestQuantity: customQty
         });
-        showToast(`${data.itemName} added to cart!`);
+        showToast(`${data.itemName || 'Item'} added to cart!`);
     }
     window.saveCartToStorage();
 }
@@ -4072,27 +4596,41 @@ window.listenAndPopulateCategories = function() {
         const dropdownElements = document.querySelectorAll('.category-select-element');
         const list = $('system-categories-list');
 
+        let dbCategories = [];
+        if (snapshot.exists()) {
+            const data = snapshot.val();
+            if (typeof data === 'object') {
+                dbCategories = Object.values(data);
+            }
+        }
+
+        // De-duplicated list of all 27 categories + DB categories
+        const categorySet = new Set([...ALL_STATIONERY_CATEGORIES, ...dbCategories]);
+        const combinedCategories = Array.from(categorySet);
+
+        // Calculate live category counts
+        const categoryCounts = {};
+        Object.values(inventoryData || {}).forEach(catData => {
+            const catName = (catData.category || catData.itemCategory || assignCategoryToItem(catData)).trim();
+            categoryCounts[catName] = (categoryCounts[catName] || 0) + 1;
+        });
+
         let optionsHtml = '<option value="" disabled selected>Select Category</option>';
         let filterOptionsHtml = '<option value="">All Categories</option>';
         if (list) list.innerHTML = '';
 
-        if (snapshot.exists()) {
-            const data = snapshot.val();
-            Object.entries(data).forEach(([key, name]) => {
-                optionsHtml += `<option value="${name}">${name}</option>`;
-                filterOptionsHtml += `<option value="${name}">${name}</option>`;
+        combinedCategories.forEach((name) => {
+            const count = categoryCounts[name] || 0;
+            optionsHtml += `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`;
+            filterOptionsHtml += `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${count} item${count === 1 ? '' : 's'})</option>`;
 
-                if (list) {
-                    const li = document.createElement('li');
-                    li.className = 'category-item';
-                    li.innerHTML = `<span>${escapeHtml(name)}</span><button class="delete-cat-btn">Delete</button>`;
-                    li.querySelector('button').onclick = async () => {
-                        if(confirm(`Delete category "${name}"?`)) await set(ref(db, `settings/categories/${key}`), null);
-                    };
-                    list.appendChild(li);
-                }
-            });
-        }
+            if (list) {
+                const li = document.createElement('li');
+                li.className = 'category-item d-flex justify-content-between align-items-center py-1 border-bottom';
+                li.innerHTML = `<span>${escapeHtml(name)} <small class="text-muted">(${count} items)</small></span>`;
+                list.appendChild(li);
+            }
+        });
 
         optionsHtml += '<option value="Other">Other (Custom)</option>';
 
@@ -4104,6 +4642,266 @@ window.listenAndPopulateCategories = function() {
                 if (currentVal) selectEl.value = currentVal;
             }
         });
+    });
+};
+
+window.handleCategorySelectionForForm = function(selectedCat) {
+    const customGroup = $('custom-category-group');
+    const isOther = (selectedCat === 'Other' || selectedCat === 'Others' || selectedCat === 'Other (Custom)');
+
+    if (customGroup) {
+        customGroup.style.display = isOther ? 'block' : 'none';
+        const customInput = $('inv-custom-category');
+        if (customInput) {
+            customInput.required = isOther;
+            if (!isOther) customInput.value = '';
+        }
+    }
+
+    const titleEl = $('category-items-mirror-title');
+    const searchWrapper = $('category-items-search-wrapper');
+    const searchInput = $('category-items-search-input');
+
+    if (searchInput) searchInput.value = '';
+
+    if (!selectedCat || isOther) {
+        if (titleEl) titleEl.innerText = "Items in Selected Category";
+        if (searchWrapper) searchWrapper.style.display = 'none';
+        const listEl = $('category-items-mirror-list');
+        if (listEl) {
+            listEl.innerHTML = isOther
+                ? '<p class="text-muted small mb-0 p-2 text-center">Custom category selected. Enter custom category and item name below.</p>'
+                : '<p class="text-muted small mb-0 p-2 text-center">Select a category to view available items.</p>';
+        }
+        return;
+    }
+
+    if (titleEl) titleEl.innerText = `Items in ${selectedCat}`;
+    window.renderCategoryItemsMirror(selectedCat, '');
+};
+
+window.handleCategoryItemSearch = function(term) {
+    const selectedCat = $('item-category-dropdown')?.value || '';
+    if (selectedCat && selectedCat !== 'Other' && selectedCat !== 'Others') {
+        window.renderCategoryItemsMirror(selectedCat, term);
+    }
+};
+
+window.selectMirroredItem = function(name, sn, desc, radioId) {
+    if (!name) return;
+
+    if ($('inv-item-name')) {
+        $('inv-item-name').value = name;
+    }
+    if ($('inv-serial-number') && sn && !$('inv-serial-number').value) {
+        $('inv-serial-number').value = sn;
+    }
+    if ($('inv-description') && desc && !$('inv-description').value) {
+        $('inv-description').value = desc;
+    }
+
+    if (radioId && $(radioId)) {
+        $(radioId).checked = true;
+    }
+
+    document.querySelectorAll('.category-item-card').forEach(card => card.classList.remove('selected-card'));
+    if (radioId) {
+        const cardEl = document.getElementById(`card_${radioId}`);
+        if (cardEl) cardEl.classList.add('selected-card');
+    }
+
+    if (typeof showToast === 'function') {
+        showToast(`Selected "${name}"`, 'success');
+    }
+};
+
+window.triggerNewItemInput = function() {
+    const radio = document.getElementById('radio_new_item_option');
+    if (radio) radio.checked = true;
+
+    document.querySelectorAll('.category-item-card').forEach(c => c.classList.remove('selected-card'));
+    const card = document.getElementById('card_radio_new_item_option');
+    if (card) card.classList.add('selected-card');
+
+    const inputContainer = document.getElementById('new-item-input-container');
+    if (inputContainer) {
+        inputContainer.style.display = 'block';
+        const input = document.getElementById('custom-new-item-name-input');
+        if (input) {
+            input.focus();
+        }
+    }
+};
+
+window.confirmCustomNewItemName = function(selectedCat) {
+    const input = document.getElementById('custom-new-item-name-input');
+    if (!input) return;
+
+    const newItemName = input.value.trim();
+    if (!newItemName) {
+        if (typeof showToast === 'function') showToast("Please enter the new item name.", "warning");
+        else alert("Please enter the new item name.");
+        input.focus();
+        return;
+    }
+
+    if (newItemName.toLowerCase() === (selectedCat || '').trim().toLowerCase()) {
+        if (typeof showToast === 'function') showToast("Item name cannot be identical to category name.", "warning");
+        else alert("Item name cannot be identical to category name.");
+        return;
+    }
+
+    // Populate Item Name field
+    if ($('inv-item-name')) {
+        $('inv-item-name').value = newItemName;
+    }
+
+    // Persist new item in STATIONERY_CATEGORY_ITEMS_MASTER for this category
+    if (selectedCat && STATIONERY_CATEGORY_ITEMS_MASTER[selectedCat]) {
+        const exists = STATIONERY_CATEGORY_ITEMS_MASTER[selectedCat].some(i => (i.name || '').toLowerCase() === newItemName.toLowerCase());
+        if (!exists) {
+            STATIONERY_CATEGORY_ITEMS_MASTER[selectedCat].push({ name: newItemName });
+        }
+    }
+
+    if (typeof showToast === 'function') {
+        showToast(`Selected "${newItemName}" in category "${selectedCat}"`, "success");
+    }
+};
+
+window.renderCategoryItemsMirror = function(selectedCat, searchTerm = '') {
+    const listEl = $('category-items-mirror-list');
+    const searchWrapper = $('category-items-search-wrapper');
+    if (!listEl) return;
+
+    const isOther = (selectedCat === 'Other' || selectedCat === 'Others' || selectedCat === 'Other (Custom)');
+    if (!selectedCat || isOther) {
+        if (searchWrapper) searchWrapper.style.display = 'none';
+        listEl.innerHTML = isOther
+            ? '<p class="text-muted small mb-0 p-2 text-center">Custom category selected. Enter custom category and item name below.</p>'
+            : '<p class="text-muted small mb-0 p-2 text-center">Select a category to view available items.</p>';
+        return;
+    }
+
+    const normCat = selectedCat.trim().toLowerCase();
+
+    // 1. Get pre-populated master items for this category from STATIONERY_CATEGORY_ITEMS_MASTER
+    const masterItems = STATIONERY_CATEGORY_ITEMS_MASTER[selectedCat] || STATIONERY_CATEGORY_ITEMS_MASTER[
+        Object.keys(STATIONERY_CATEGORY_ITEMS_MASTER).find(k => k.toLowerCase() === normCat)
+    ] || [];
+
+    const itemsMap = new Map();
+
+    // Add master items (CRITICAL: exclude category name itself)
+    masterItems.forEach(item => {
+        const iName = (item.name || '').trim();
+        if (iName && iName.toLowerCase() !== normCat) {
+            itemsMap.set(iName.toLowerCase(), {
+                name: iName,
+                serialNumber: item.serialNumber || '',
+                description: item.description || ''
+            });
+        }
+    });
+
+    // 2. Add real inventory items from Firebase (inventoryData)
+    const sourceData = inventoryData || {};
+    Object.entries(sourceData).forEach(([catId, catData]) => {
+        const itemCategory = (catData.category || catData.itemCategory || assignCategoryToItem(catData)).trim();
+        if (itemCategory.toLowerCase() === normCat || catId.toLowerCase() === normCat) {
+            const itemName = (catData.itemName || catData.name || '').trim();
+            // CRITICAL FIX: EXCLUDE category name itself if it was saved as item name!
+            if (itemName && itemName.toLowerCase() !== normCat && catId.toLowerCase() !== normCat) {
+                const sn = catData.serialNumber || catData.sn || '';
+                const desc = catData.description || catData.desc || '';
+                itemsMap.set(itemName.toLowerCase(), {
+                    name: itemName,
+                    serialNumber: sn,
+                    description: desc
+                });
+            }
+        }
+    });
+
+    const allItems = Array.from(itemsMap.values());
+
+    if (searchWrapper) searchWrapper.style.display = 'block';
+
+    const term = (searchTerm || '').trim().toLowerCase();
+    const filtered = term ? allItems.filter(i => i.name.toLowerCase().includes(term) || i.serialNumber.toLowerCase().includes(term)) : allItems;
+
+    // Build selectable responsive card list
+    let html = '<div class="category-cards-wrapper">';
+    if (filtered.length > 0) {
+        filtered.forEach((item, idx) => {
+            const radioId = `cat_item_radio_${idx}`;
+            html += `
+                <div class="category-item-card" id="card_${radioId}">
+                    <div class="category-item-card-left">
+                        <input type="radio" name="category_item_radio" id="${radioId}" class="form-check-input mt-1 category-item-radio"
+                               value="${escapeHtml(item.name)}"
+                               data-name="${escapeHtml(item.name)}"
+                               data-sn="${escapeHtml(item.serialNumber)}"
+                               data-desc="${escapeHtml(item.description)}">
+                        <label for="${radioId}" class="category-item-name mb-0 cursor-pointer">
+                            ${escapeHtml(item.name)}
+                            ${item.serialNumber ? `<div class="text-muted small font-normal fw-normal">SN: ${escapeHtml(item.serialNumber)}</div>` : ''}
+                        </label>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary category-item-select-btn" onclick="window.selectMirroredItem('${escapeHtml(item.name)}', '${escapeHtml(item.serialNumber)}', '${escapeHtml(item.description)}', '${radioId}')">
+                        Select
+                    </button>
+                </div>
+            `;
+        });
+    } else {
+        html += `<p class="text-muted small mb-0 p-2 text-center">No predefined items matching "${escapeHtml(searchTerm)}". You can add a new item below.</p>`;
+    }
+
+    // ALWAYS DYNAMICALLY APPEND "+ New / Other Item" AT THE BOTTOM OF EVERY CATEGORY!
+    html += `
+        <div class="category-item-card border-primary bg-light mt-2" id="card_radio_new_item_option" style="border-style: dashed !important; border-width: 2px !important;">
+            <div class="category-item-card-left">
+                <input type="radio" name="category_item_radio" id="radio_new_item_option" class="form-check-input mt-1 category-item-radio" value="__NEW_ITEM__">
+                <label for="radio_new_item_option" class="category-item-name mb-0 text-primary cursor-pointer fw-bold">
+                    <i class="bi bi-plus-circle-fill me-1"></i>＋ New / Other Item
+                    <div class="text-muted small font-normal fw-normal">Add a custom new item under category "${escapeHtml(selectedCat)}"</div>
+                </label>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary category-item-select-btn fw-bold" onclick="window.triggerNewItemInput()">
+                Select
+            </button>
+        </div>
+        <div id="new-item-input-container" class="p-3 border rounded bg-white shadow-sm mt-2" style="display: none;">
+            <label for="custom-new-item-name-input" class="form-label small fw-bold text-primary mb-1">
+                New Item Name for category "${escapeHtml(selectedCat)}"
+            </label>
+            <div class="input-group input-group-sm mb-2">
+                <input type="text" id="custom-new-item-name-input" class="form-control form-control-sm" placeholder="e.g. Gel Pen - Purple">
+                <button type="button" class="btn btn-success fw-bold px-3" onclick="window.confirmCustomNewItemName('${escapeHtml(selectedCat)}')">
+                    Use This Item
+                </button>
+            </div>
+            <small class="text-muted">Item will inherit category "${escapeHtml(selectedCat)}" when saved.</small>
+        </div>
+    `;
+
+    html += '</div>';
+
+    listEl.innerHTML = html;
+
+    // Attach click/change handlers to radio buttons
+    listEl.querySelectorAll('.category-item-radio').forEach(radio => {
+        radio.onchange = () => {
+            if (!radio.checked) return;
+            if (radio.value === '__NEW_ITEM__') {
+                window.triggerNewItemInput();
+            } else {
+                const inputContainer = document.getElementById('new-item-input-container');
+                if (inputContainer) inputContainer.style.display = 'none';
+                window.selectMirroredItem(radio.dataset.name, radio.dataset.sn, radio.dataset.desc, radio.id);
+            }
+        };
     });
 };
 
@@ -4120,17 +4918,308 @@ async function addCategory(name) {
     showToast("Added!");
 }
 
-async function exportInventory() {
-    const data = Object.values((await get(ref(db, 'inventory'))).val() || {}).map(i => ({
-        'Serial': i.serialNumber,
-        'Name': i.itemName,
-        'Qty': i.quantity
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Inventory");
-    XLSX.writeFile(wb, `Inv_${Date.now()}.xlsx`);
+function getFlatInventoryList() {
+    const list = [];
+    const sourceData = inventoryData || {};
+    Object.entries(sourceData).forEach(([catId, catData]) => {
+        const category = catData.category || catId || 'General';
+        const itemName = catData.itemName || catData.name || catId || 'N/A';
+        const batches = catData.batches || {};
+        const batchEntries = Object.entries(batches);
+
+        if (batchEntries.length > 0) {
+            batchEntries.forEach(([batchId, b]) => {
+                const curStock = parseInt(b.currentStock ?? b.quantity ?? 0);
+                const initQty = parseInt(b.initialQty ?? b.openingQuantity ?? b.totalQty ?? curStock);
+                list.push({
+                    category: category,
+                    name: itemName,
+                    itemName: itemName,
+                    imageUrl: b.imageUrl || catData.imageUrl || b.photo || b.image || '',
+                    photo: b.imageUrl || catData.imageUrl || b.photo || b.image || '',
+                    image: b.imageUrl || catData.imageUrl || b.photo || b.image || '',
+                    brand: b.brandName || b.brand || b.manufacturer || catData.brand || 'Standard',
+                    manufacturer: b.brandName || b.brand || b.manufacturer || catData.brand || 'Standard',
+                    serialNumber: b.serialNumber || b.batchNo || catData.serialNumber || 'N/A',
+                    batchNo: b.serialNumber || b.batchNo || catData.serialNumber || 'N/A',
+                    receivedDate: b.receivedDate || b.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
+                    date: b.receivedDate || b.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
+                    currentStock: curStock,
+                    quantity: curStock,
+                    initialQty: initQty,
+                    totalQty: initQty,
+                    status: b.status || (curStock > 0 ? 'In Stock' : 'Out of Stock')
+                });
+            });
+        } else {
+            const curStock = parseInt(catData.currentStock ?? catData.quantity ?? catData.availableStock ?? 0);
+            const initQty = parseInt(catData.initialQty ?? catData.openingQuantity ?? catData.totalQty ?? catData.quantity ?? curStock);
+            list.push({
+                category: category,
+                name: itemName,
+                itemName: itemName,
+                imageUrl: catData.imageUrl || catData.photo || catData.image || '',
+                photo: catData.imageUrl || catData.photo || catData.image || '',
+                image: catData.imageUrl || catData.photo || catData.image || '',
+                brand: catData.brand || catData.brandName || catData.manufacturer || 'Standard',
+                manufacturer: catData.brand || catData.brandName || catData.manufacturer || 'Standard',
+                serialNumber: catData.serialNumber || catData.batchNo || 'N/A',
+                batchNo: catData.serialNumber || catData.batchNo || 'N/A',
+                receivedDate: catData.receivedDate || catData.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
+                date: catData.receivedDate || catData.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
+                currentStock: curStock,
+                quantity: curStock,
+                initialQty: initQty,
+                totalQty: initQty,
+                status: catData.status || (curStock > 0 ? 'In Stock' : 'Out of Stock')
+            });
+        }
+    });
+    return list;
 }
+
+function downloadExcelWorkbook(reportRows, fileName = 'Master_Inventory_Report_Full.xlsx') {
+    if (window.XLSX) {
+        const ws = XLSX.utils.aoa_to_sheet(reportRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Master Inventory");
+        XLSX.writeFile(wb, fileName);
+    } else if (window.ExcelJS) {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Master Inventory');
+        reportRows.forEach(row => worksheet.addRow(row));
+        workbook.xlsx.writeBuffer().then(buffer => {
+            const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            if (window.saveAs) {
+                saveAs(blob, fileName);
+            } else {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+        });
+    } else {
+        let csvContent = "data:text/csv;charset=utf-8," + reportRows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", fileName.replace('.xlsx', '.csv'));
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+}
+
+function exportFullInventoryReport() {
+    const inventoryDataList = (window.masterInventoryList && Array.isArray(window.masterInventoryList) && window.masterInventoryList.length > 0)
+        ? window.masterInventoryList
+        : getFlatInventoryList();
+
+    const reportRows = [
+        ['Category', 'Item Name', 'Photo Link', 'Brand / Manufacturer', 'Serial / Batch No.', 'Received Date', 'Current Stock', 'Initial Qty', 'Status']
+    ];
+
+    inventoryDataList.forEach(item => {
+        reportRows.push([
+            item.category || 'General',
+            item.name || item.itemName || 'N/A',
+            item.imageUrl || item.photo || item.image || 'No Photo',
+            item.brand || item.manufacturer || 'Standard',
+            item.serialNumber || item.batchNo || 'N/A',
+            item.receivedDate || item.date || 'N/A',
+            item.currentStock ?? item.quantity ?? 0,
+            item.initialQty ?? item.totalQty ?? 0,
+            item.status || (item.currentStock > 0 ? 'In Stock' : 'Out of Stock')
+        ]);
+    });
+
+    downloadExcelWorkbook(reportRows, 'Master_Inventory_Report_Full.xlsx');
+}
+
+function printInventoryReport() {
+    const list = (window.masterInventoryList && Array.isArray(window.masterInventoryList) && window.masterInventoryList.length > 0)
+        ? window.masterInventoryList
+        : getFlatInventoryList();
+
+    if (!list || list.length === 0) {
+        if (typeof showToast === 'function') showToast("No inventory items available to print", "warning");
+        else alert("No inventory items available to print.");
+        return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=1000,height=800');
+    if (!printWindow) {
+        alert("Please allow popups for this site to print the report.");
+        return;
+    }
+
+    const rowsHtml = list.map(item => {
+        const rawImg = item.imageUrl || item.photo || item.image;
+        const imgUrl = (rawImg && rawImg !== 'No Photo') ? rawImg : FALLBACK_IMG;
+        const category = escapeHtml(item.category || 'General');
+        const itemName = escapeHtml(item.name || item.itemName || 'N/A');
+        const brand = escapeHtml(item.brand || item.manufacturer || 'Standard');
+        const serial = escapeHtml(item.serialNumber || item.batchNo || 'N/A');
+        const receivedDate = escapeHtml(item.receivedDate || item.date || 'N/A');
+        const initialQty = item.initialQty ?? item.totalQty ?? 0;
+        const currentStock = item.currentStock ?? item.quantity ?? 0;
+        const status = escapeHtml(item.status || (currentStock > 0 ? 'In Stock' : 'Out of Stock'));
+        const statusClass = currentStock > 10 ? 'status-in-stock' : (currentStock > 0 ? 'status-low-stock' : 'status-out-of-stock');
+
+        return `
+            <tr>
+                <td style="text-align: center; vertical-align: middle;">
+                    <img src="${imgUrl}" style="width: 40px; height: 40px; object-fit: cover; border-radius: 4px;" onerror="this.src='${FALLBACK_IMG}'" alt="${itemName}">
+                </td>
+                <td style="vertical-align: middle;">
+                    <div style="font-weight: bold; font-size: 13px; color: #0f172a;">${itemName}</div>
+                    <div style="font-size: 11px; color: #64748b;">Category: ${category}</div>
+                </td>
+                <td style="vertical-align: middle;">${brand}</td>
+                <td style="vertical-align: middle;"><code>${serial}</code></td>
+                <td style="vertical-align: middle;">${receivedDate}</td>
+                <td style="text-align: center; vertical-align: middle;">${initialQty}</td>
+                <td style="text-align: center; vertical-align: middle; font-weight: bold;">${currentStock}</td>
+                <td style="text-align: center; vertical-align: middle;">
+                    <span class="badge-status ${statusClass}">${status}</span>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    const todayStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const reportHtml = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Master Inventory Full Report - ${todayStr}</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            margin: 20px;
+            color: #1e293b;
+            background: #ffffff;
+        }
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #0f172a;
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+        }
+        .report-header h1 {
+            margin: 0;
+            font-size: 22px;
+            color: #0f172a;
+        }
+        .report-header .meta {
+            text-align: right;
+            font-size: 12px;
+            color: #64748b;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        th {
+            background-color: #f8fafc;
+            color: #334155;
+            font-weight: 700;
+            text-align: left;
+            padding: 10px;
+            border-bottom: 2px solid #cbd5e1;
+        }
+        td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+        code {
+            font-family: monospace;
+            background: #f1f5f9;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .badge-status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .status-in-stock { background: #dcfce7; color: #166534; }
+        .status-low-stock { background: #fef9c3; color: #854d0e; }
+        .status-out-of-stock { background: #fee2e2; color: #991b1b; }
+        @media print {
+            body { margin: 0; }
+            .no-print { display: none !important; }
+            @page { size: auto; margin: 10mm; }
+        }
+    </style>
+</head>
+<body>
+    <div class="no-print" style="margin-bottom: 15px; text-align: right;">
+        <button onclick="window.print()" style="background: #2563eb; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold;">🖨️ Print Report</button>
+        <button onclick="window.close()" style="background: #64748b; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-left: 8px;">Close</button>
+    </div>
+    <div class="report-header">
+        <div>
+            <h1>Master Inventory Full Report</h1>
+            <div style="font-size: 13px; color: #475569; margin-top: 4px;">Stationery & Supplies Tracker</div>
+        </div>
+        <div class="meta">
+            <div><strong>Generated:</strong> ${todayStr}</div>
+            <div><strong>Total Items:</strong> ${list.length}</div>
+        </div>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 50px; text-align: center;">Image</th>
+                <th>Item Name & Category</th>
+                <th>Brand</th>
+                <th>Serial / Batch</th>
+                <th>Received Date</th>
+                <th style="text-align: center;">Initial Qty</th>
+                <th style="text-align: center;">Current Stock</th>
+                <th style="text-align: center;">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${rowsHtml}
+        </tbody>
+    </table>
+</body>
+</html>`;
+
+    printWindow.document.write(reportHtml);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+        printWindow.print();
+    }, 500);
+}
+
+const exportInventory = exportFullInventoryReport;
+
+// Bind to window
+window.getFlatInventoryList = getFlatInventoryList;
+window.downloadExcelWorkbook = downloadExcelWorkbook;
+window.exportFullInventoryReport = exportFullInventoryReport;
+window.exportMasterInventoryExcel = exportFullInventoryReport;
+window.generateInventoryReport = exportFullInventoryReport;
+window.exportInventory = exportFullInventoryReport;
+window.printInventoryReport = printInventoryReport;
+window.printReport = printInventoryReport;
 
 async function exportHistory() {
     const data = [];
