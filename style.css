@@ -71,21 +71,29 @@ body {
     min-height: 100vh;
 }
 
+#stationeryRainContainer,
+#stationeryRainCanvas,
 #stationery-rain-container,
 .stationery-rain-container {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: 100vw;
-    height: 100vh;
-    pointer-events: none;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 9999 !important; /* Render ABOVE login page card overlay */
+    pointer-events: none !important; /* CRITICAL: Pass-through all touch & mouse clicks to form inputs */
     overflow: hidden;
-    z-index: 1;
     -webkit-transform: translateZ(0);
     -moz-transform: translateZ(0);
     transform: translateZ(0);
+}
+
+/* Ensure Login Card sits cleanly underneath but visible */
+.login-container,
+.login-card-container,
+.login-card {
+    position: relative;
+    z-index: 10;
 }
 
 .stationery-drop {

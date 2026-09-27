@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.60";
+const APP_VERSION = "1.8.62";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -465,17 +465,27 @@ try {
 
 // ==================== STATIONERY RAIN ANIMATION ====================
 
+function getStationeryItemSize() {
+    const screenWidth = window.innerWidth;
+    if (screenWidth >= 1200) {
+        // Large Desktop / PC Screens: 80px to 110px (Very clear & large)
+        return Math.floor(Math.random() * 30) + 80;
+    } else if (screenWidth >= 768) {
+        // Tablets / Laptops: 55px to 75px
+        return Math.floor(Math.random() * 20) + 55;
+    } else {
+        // Mobile Devices: 35px to 50px
+        return Math.floor(Math.random() * 15) + 35;
+    }
+}
+window.getStationeryItemSize = getStationeryItemSize;
+
 window.initStationeryRain = function() {
-    const container = document.getElementById('stationery-rain-container');
+    const container = document.getElementById('stationery-rain-container') || document.getElementById('stationeryRainContainer');
     if (!container) return;
 
     const isMobile = window.innerWidth <= 768;
     const targetCount = isMobile ? 18 : 32;
-
-    const existingDrops = container.querySelectorAll('.stationery-drop');
-    if (existingDrops.length === targetCount) {
-        return; // Already initialized correctly with exact drop count
-    }
 
     container.innerHTML = '';
 
@@ -530,20 +540,29 @@ window.initStationeryRain = function() {
         drop.innerHTML = stationerySVGs[svgIndex];
 
         const leftPos = Math.random() * 92 + 2; // 2% to 94%
-        const size = Math.floor(Math.random() * 16) + 24; // 24px to 40px
+        const size = getStationeryItemSize(); // Responsive item size
         const duration = (Math.random() * 8 + 7).toFixed(2); // 7s to 15s
         const delay = (Math.random() * -12).toFixed(2); // -12s to 0s
         const sway = (Math.random() * 50 - 25).toFixed(0); // -25px to 25px
+        const opacity = (Math.random() * 0.15 + 0.85).toFixed(2); // 0.85 to 1.0 opacity
 
         drop.style.setProperty('--x', `${leftPos}%`);
         drop.style.setProperty('--size', `${size}px`);
         drop.style.setProperty('--duration', `${duration}s`);
         drop.style.setProperty('--delay', `${delay}s`);
         drop.style.setProperty('--sway', `${sway}px`);
+        drop.style.opacity = opacity;
 
         container.appendChild(drop);
     }
 };
+
+window.addEventListener('resize', () => {
+    const loginView = document.getElementById('login-view');
+    if (loginView && loginView.style.display !== 'none' && !loginView.classList.contains('hidden')) {
+        window.initStationeryRain();
+    }
+});
 
 // ==================== IMAGE UTILITIES ====================
 function isValidImageUrl(url) {
@@ -1714,23 +1733,8 @@ window.submitHandoverWithSignature = async function(event) {
         if (handoverSignature.startsWith('data:image')) {
             try {
                 const compressedSig = await window.compressBase64Image(handoverSignature);
-                const signaturePayload = {
-                    image: compressedSig,
-                    filename: `Handover_${orderId}.jpg`,
-                    folderType: 'signatures',
-                    orderId: orderId,
-                    issuedBy: adminName
-                };
-                const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
-                if (url) {
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                        body: JSON.stringify(signaturePayload)
-                    });
-                    const result = await response.json();
-                    if (result.status === 'success') driveSignatureUrl = result.fileUrl;
-                }
+                const uploadedUrl = await uploadToGoogleDrive(compressedSig, `Handover_${orderId}.jpg`, 'admin_sig');
+                if (uploadedUrl) driveSignatureUrl = uploadedUrl;
             } catch (e) {
                 console.warn("Signature upload fallback:", e);
             }
@@ -2271,7 +2275,7 @@ function updateDriveUIStatus(isConnected, message) {
     }
 }
 
-window.uploadPhotoToGoogleDrive = async function(base64Image, fileName, folderType = 'product') {
+async function uploadToGoogleDrive(base64Image, fileName, folderType = 'product') {
     const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
     if (!url) {
         alert("Google Drive Connector URL missing! Please save valid URL in Admin Settings.");
@@ -2279,13 +2283,13 @@ window.uploadPhotoToGoogleDrive = async function(base64Image, fileName, folderTy
     }
 
     try {
-        console.log("Compressing and uploading photo to Google Drive...");
+        console.log(`Compressing and uploading photo (${folderType}) to Google Drive...`);
         const compressed = await window.compressBase64Image(base64Image);
 
         const payload = {
             image: compressed,
             filename: fileName || `Item_${Date.now()}.jpg`,
-            folderType: folderType
+            folderType: folderType // 'product' | 'teacher_sig' | 'admin_sig'
         };
 
         const response = await fetch(url, {
@@ -2304,7 +2308,9 @@ window.uploadPhotoToGoogleDrive = async function(base64Image, fileName, folderTy
         console.error("Google Drive Fetch Error:", error);
         return null;
     }
-};
+}
+window.uploadToGoogleDrive = uploadToGoogleDrive;
+window.uploadPhotoToGoogleDrive = uploadToGoogleDrive;
 
 // ==================== SEED / CART ====================
 async function seedDefaultCategoriesIfEmpty() {
@@ -3465,7 +3471,7 @@ window.handleSaveRestockBatch = async function(e) {
             showToast("Processing batch photo...");
             const compressed = await window.compressAndScaleImage(file);
             const studio = await window.generateStudioProductPhoto(compressed);
-            const driveUrl = await uploadPhotoToGoogleDrive(studio, `Restock_${serialNumber}_${Date.now()}.jpg`);
+            const driveUrl = await uploadToGoogleDrive(studio, `Restock_${serialNumber}_${Date.now()}.jpg`, 'product');
             imageUrl = driveUrl || studio;
         }
 
@@ -4239,7 +4245,7 @@ window.submitFinalOrderWithSignature = async function() {
         let driveSignatureUrl = signatureDataUrl;
         try {
             const compressedSig = await window.compressBase64Image(signatureDataUrl);
-            const uploadedUrl = await uploadPhotoToGoogleDrive(compressedSig, `TeacherSign_${orderId}.jpg`, 'signatures');
+            const uploadedUrl = await uploadToGoogleDrive(compressedSig, `TeacherSign_${orderId}.jpg`, 'teacher_sig');
             if (uploadedUrl) driveSignatureUrl = uploadedUrl;
         } catch (uploadErr) {
             console.warn("Teacher signature upload failed, using local data:", uploadErr);

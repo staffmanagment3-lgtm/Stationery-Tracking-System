@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stationery-app-v1.8.60';
+const CACHE_NAME = 'stationery-app-v1.8.62';
 const ASSETS = [
   'index.html',
   'style.css',
