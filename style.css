@@ -1805,18 +1805,6 @@ body.modal-open {
     }
 
     .batch-inventory-table td:last-child {
-
-    .user-profile-badge .text-muted {
-        font-size: 9px !important;
-    }
-
-    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
-        height: 32px !important;
-        min-height: 32px !important;
-        font-size: 0.75rem !important;
-        padding: 2px 8px !important;
-    }
-}
         border-bottom: none !important;
     }
 
