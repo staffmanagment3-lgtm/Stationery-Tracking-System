@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.62";
+const APP_VERSION = "1.8.63";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -3158,76 +3158,47 @@ function getTeacherGroupedCatalog(rawInventoryData) {
         }
 
         const mainDesc = catData.description || catData.desc || "Stationery supplies.";
-        const parentImage = catData.imageUrl || FALLBACK_IMG;
+        const parentImage = catData.imageUrl || catData.photo || FALLBACK_IMG;
 
+        // Unique Key based on Serial Number (fallback to category + itemName)
+        const rawSN = (catData.serialNumber || catData.sn || catData.batchNo || '').toString().trim();
+        const normSN = rawSN.toLowerCase().replace(/[\s\n\r]/g, '');
+
+        let groupKey = (normSN && normSN !== 'n/a') ? normSN : `${category.toLowerCase().trim()}|${itemName.toLowerCase().trim()}`;
+
+        let itemStock = 0;
         if (batchEntries.length > 0) {
-            batchEntries.forEach(([batchId, batch]) => {
-                const bItemName = (batch.itemName || itemName).trim();
-                const brand = (batch.brandName || batch.brand || catData.brand || 'Standard').trim();
-                const serialNumber = (batch.serialNumber || batch.batchNo || catData.serialNumber || 'N/A').trim();
-                const cStock = parseInt(batch.currentStock ?? batch.quantity ?? 0, 10) || 0;
-                const img = batch.imageUrl || parentImage;
-
-                const normCat = category.toLowerCase().trim();
-                const normItem = bItemName.toLowerCase().trim();
-                const normBrand = brand.toLowerCase().trim();
-                const normSn = serialNumber.toLowerCase().trim();
-
-                const groupKey = `${normCat}|${normItem}|${normBrand}|${normSn}`;
-
-                if (teacherMap.has(groupKey)) {
-                    const existing = teacherMap.get(groupKey);
-                    existing.quantity += cStock; // SUM CURRENT STOCK FOR SAME PRODUCT IDENTITY!
-                    if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && img && img !== FALLBACK_IMG) {
-                        existing.imageUrl = img;
-                    }
-                } else {
-                    teacherMap.set(groupKey, {
-                        groupKey,
-                        catId,
-                        category,
-                        itemName: bItemName,
-                        brand,
-                        serialNumber,
-                        quantity: cStock,
-                        imageUrl: img || FALLBACK_IMG,
-                        description: mainDesc
-                    });
-                }
-            });
+            itemStock = batchEntries.reduce((sum, [bId, b]) => sum + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) || 0), 0);
         } else {
-            const brand = (catData.brand || 'Standard').trim();
-            const serialNumber = (catData.serialNumber || catData.sn || 'N/A').trim();
-            const cStock = parseInt(catData.quantity ?? catData.availableStock ?? catData.currentStock ?? 0, 10) || 0;
-            const img = catData.imageUrl || FALLBACK_IMG;
-
-            const normCat = category.toLowerCase().trim();
-            const normItem = itemName.toLowerCase().trim();
-            const normBrand = brand.toLowerCase().trim();
-            const normSn = serialNumber.toLowerCase().trim();
-
-            const groupKey = `${normCat}|${normItem}|${normBrand}|${normSn}`;
-
-            if (teacherMap.has(groupKey)) {
-                const existing = teacherMap.get(groupKey);
-                existing.quantity += cStock;
-                if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && img && img !== FALLBACK_IMG) {
-                    existing.imageUrl = img;
-                }
-            } else {
-                teacherMap.set(groupKey, {
-                    groupKey,
-                    catId,
-                    category,
-                    itemName,
-                    brand,
-                    serialNumber,
-                    quantity: cStock,
-                    imageUrl: img,
-                    description: mainDesc
-                });
-            }
+            itemStock = parseInt(catData.quantity ?? catData.currentStock ?? catData.availableStock ?? 0, 10) || 0;
         }
+
+        if (teacherMap.has(groupKey)) {
+            const existing = teacherMap.get(groupKey);
+            existing.quantity += itemStock; // SUM ALL STOCKS FOR IDENTICAL SERIAL NUMBER!
+            if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && parentImage && parentImage !== FALLBACK_IMG) {
+                existing.imageUrl = parentImage;
+            }
+        } else {
+            teacherMap.set(groupKey, {
+                groupKey,
+                catId,
+                category,
+                itemName,
+                brand: catData.brand || 'Standard',
+                serialNumber: rawSN || 'N/A',
+                quantity: itemStock,
+                imageUrl: parentImage || FALLBACK_IMG,
+                description: mainDesc
+            });
+        }
+    });
+
+    return Array.from(teacherMap.values()).map(item => ({
+        id: item.catId || item.groupKey,
+        data: item
+    }));
+}
     });
 
     return Array.from(teacherMap.values()).map(item => ({
@@ -5439,6 +5410,28 @@ async function saveInventoryItem(e) {
         const itemCategory = cat === 'Other' ? $('inv-custom-category').value.trim() : cat;
 
         if (!itemName || !serialNumber) throw new Error("Name and SN required");
+
+        // Duplicate Check for Serial Number (Side Menu "Add New Item")
+        const normSN = serialNumber.toLowerCase().replace(/[\s\n\r]/g, '');
+        if (normSN && normSN !== 'n/a' && inventoryData) {
+            const existingMatch = Object.values(inventoryData).find(catData => {
+                if (!catData) return false;
+                const cSN = (catData.serialNumber || catData.sn || catData.batchNo || '').toString().toLowerCase().trim().replace(/[\s\n\r]/g, '');
+                if (cSN === normSN) return true;
+                const batches = catData.batches || {};
+                return Object.values(batches).some(b => {
+                    const bSN = (b.serialNumber || b.batchNo || '').toString().toLowerCase().trim().replace(/[\s\n\r]/g, '');
+                    return bSN === normSN;
+                });
+            });
+
+            if (existingMatch) {
+                const matchedName = existingMatch.itemName || existingMatch.name || 'existing item';
+                alert(`This Serial Number (${serialNumber}) already exists for "${matchedName}"!\n\nPlease use "+ Add Stock" on the existing item card in Master Inventory instead.`);
+                throw new Error(`Serial Number ${serialNumber} already exists under "${matchedName}". Use + Add Stock on existing card.`);
+            }
+        }
+
         if (!file) throw new Error("Image required");
 
         if (msg) msg.textContent = "Step 1: Compressing Image...";
