@@ -3158,44 +3158,80 @@ function getTeacherGroupedCatalog(rawInventoryData) {
         }
 
         const mainDesc = catData.description || catData.desc || "Stationery supplies.";
-        const parentImage = catData.imageUrl || catData.photo || FALLBACK_IMG;
+        const parentImage = catData.imageUrl || FALLBACK_IMG;
 
-        // Unique Key based on Serial Number (fallback to category + itemName)
-        const rawSN = (catData.serialNumber || catData.sn || catData.batchNo || '').toString().trim();
-        const normSN = rawSN.toLowerCase().replace(/[\s\n\r]/g, '');
-
-        let groupKey = (normSN && normSN !== 'n/a') ? normSN : `${category.toLowerCase().trim()}|${itemName.toLowerCase().trim()}`;
-
-        let itemStock = 0;
         if (batchEntries.length > 0) {
-            itemStock = batchEntries.reduce((sum, [bId, b]) => sum + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) || 0), 0);
-        } else {
-            itemStock = parseInt(catData.quantity ?? catData.currentStock ?? catData.availableStock ?? 0, 10) || 0;
-        }
+            batchEntries.forEach(([batchId, batch]) => {
+                const bItemName = (batch.itemName || itemName).trim();
+                const brand = (batch.brandName || batch.brand || catData.brand || 'Standard').trim();
+                const serialNumber = (batch.serialNumber || batch.batchNo || catData.serialNumber || 'N/A').trim();
+                const cStock = parseInt(batch.currentStock ?? batch.quantity ?? 0, 10) || 0;
+                const img = batch.imageUrl || parentImage;
 
-        if (teacherMap.has(groupKey)) {
-            const existing = teacherMap.get(groupKey);
-            existing.quantity += itemStock; // SUM ALL STOCKS FOR IDENTICAL SERIAL NUMBER!
-            if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && parentImage && parentImage !== FALLBACK_IMG) {
-                existing.imageUrl = parentImage;
-            }
-        } else {
-            teacherMap.set(groupKey, {
-                groupKey,
-                catId,
-                category,
-                itemName,
-                brand: catData.brand || 'Standard',
-                serialNumber: rawSN || 'N/A',
-                quantity: itemStock,
-                imageUrl: parentImage || FALLBACK_IMG,
-                description: mainDesc
+                const normCat = category.toLowerCase().trim();
+                const normItem = bItemName.toLowerCase().trim();
+                const normBrand = brand.toLowerCase().trim();
+                const normSn = serialNumber.toLowerCase().trim();
+
+                const groupKey = `${normCat}|${normItem}|${normBrand}|${normSn}`;
+
+                if (teacherMap.has(groupKey)) {
+                    const existing = teacherMap.get(groupKey);
+                    existing.quantity += cStock; // SUM CURRENT STOCK FOR SAME PRODUCT IDENTITY!
+                    if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && img && img !== FALLBACK_IMG) {
+                        existing.imageUrl = img;
+                    }
+                } else {
+                    teacherMap.set(groupKey, {
+                        groupKey,
+                        catId,
+                        category,
+                        itemName: bItemName,
+                        brand,
+                        serialNumber,
+                        quantity: cStock,
+                        imageUrl: img || FALLBACK_IMG,
+                        description: mainDesc
+                    });
+                }
             });
+        } else {
+            const brand = (catData.brand || 'Standard').trim();
+            const serialNumber = (catData.serialNumber || catData.sn || 'N/A').trim();
+            const cStock = parseInt(catData.quantity ?? catData.availableStock ?? catData.currentStock ?? 0, 10) || 0;
+            const img = catData.imageUrl || FALLBACK_IMG;
+
+            const normCat = category.toLowerCase().trim();
+            const normItem = itemName.toLowerCase().trim();
+            const normBrand = brand.toLowerCase().trim();
+            const normSn = serialNumber.toLowerCase().trim();
+
+            const groupKey = `${normCat}|${normItem}|${normBrand}|${normSn}`;
+
+            if (teacherMap.has(groupKey)) {
+                const existing = teacherMap.get(groupKey);
+                existing.quantity += cStock;
+                if ((!existing.imageUrl || existing.imageUrl === FALLBACK_IMG) && img && img !== FALLBACK_IMG) {
+                    existing.imageUrl = img;
+                }
+            } else {
+                teacherMap.set(groupKey, {
+                    groupKey,
+                    catId,
+                    category,
+                    itemName,
+                    brand,
+                    serialNumber,
+                    quantity: cStock,
+                    imageUrl: img,
+                    description: mainDesc
+                });
+            }
         }
     });
 
     return Array.from(teacherMap.values()).map(item => ({
-        id: item.catId || item.groupKey,
+        id: item.groupKey,
         data: item
     }));
 }
@@ -3243,53 +3279,98 @@ function getItemTotalAvailableStock(item) {
 }
 window.getItemTotalAvailableStock = getItemTotalAvailableStock;
 
-function renderCatalogPage() {
-    const list = $('stationery-list'); if (!list) return;
-    list.innerHTML = '';
-    const start = (catalogState.currentPage - 1) * PAGE_SIZE;
-    const end = start + PAGE_SIZE;
-    const pageItems = catalogState.filtered.slice(start, end);
-    if (pageItems.length === 0) { list.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#64748b;padding:30px;">No items found.</p>'; return; }
+function renderTeacherCatalog() {
+    const rawInventory = (window.masterInventoryList && window.masterInventoryList.length > 0)
+        ? window.masterInventoryList
+        : getFlatInventoryList();
+    const groupedCatalog = {};
 
-    pageItems.forEach(({ id, data }) => {
-        const card = document.createElement('div'); card.className = 'inventory-card';
+    const term = (catalogState.searchTerm || '').toLowerCase().trim();
 
-        const titleToDisplay = data.itemName || 'Stationery Item';
-        const brandToDisplay = data.brand && data.brand !== 'Standard' ? data.brand : '';
-        const snToDisplay = data.serialNumber && data.serialNumber !== 'N/A' ? data.serialNumber : '';
-        const totalAvailable = data.quantity || 0;
-        const stockBadgeColor = totalAvailable > 0 ? '#166534' : '#991b1b';
-        const stockBadgeBg = totalAvailable > 0 ? '#dcfce7' : '#fee2e2';
+    rawInventory.forEach(item => {
+        const sn = (item.serialNumber || item.batchNo || '').toString().trim();
+        const itemName = item.itemName || item.name || '';
+        const category = item.category || 'General';
 
-        card.innerHTML = `
-            <div class="catalog-card" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0;">
-                <div class="card-img-wrapper" style="width: 100%; height: 130px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; margin-bottom: 8px;">
-                    <img src="${data.imageUrl || FALLBACK_IMG}"
-                         alt="${escapeHtml(titleToDisplay)}"
-                         style="max-width: 100%; max-height: 100%; object-fit: contain;"
-                         onerror="this.onerror=null; this.src='${FALLBACK_IMG}';"
-                         loading="lazy" />
-                </div>
-                <h4 class="card-item-name mb-1" style="font-weight: 700; color: #111; font-size: 1.05rem;">
-                    ${escapeHtml(titleToDisplay)}
-                </h4>
-                ${brandToDisplay ? `<div class="text-muted small fw-bold mb-1"><i class="bi bi-building me-1"></i>Brand: ${escapeHtml(brandToDisplay)}</div>` : ''}
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="card-item-sn text-muted" style="font-size: 0.8rem;">
-                        ${snToDisplay ? `SN: ${escapeHtml(snToDisplay)}` : `Category: ${escapeHtml(data.category || '')}`}
-                    </span>
-                    <span class="badge" style="background-color: ${stockBadgeBg}; color: ${stockBadgeColor}; font-weight: 700; font-size: 0.8rem;">
-                        Available: ${totalAvailable} Pcs
-                    </span>
-                </div>
-                <p class="card-item-desc" style="font-size: 0.85rem; color: #444; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em;">
-                    ${escapeHtml(data.description || '')}
-                </p>
-                <button class="add-to-cart-btn w-100 mt-auto" onclick="window.viewItemDetails('${escapeHtml(id)}')">View Details</button>
-            </div>`;
-        list.appendChild(card);
+        if (term) {
+            const matches = itemName.toLowerCase().includes(term) ||
+                            category.toLowerCase().includes(term) ||
+                            (item.brand || '').toLowerCase().includes(term) ||
+                            sn.toLowerCase().includes(term);
+            if (!matches) return;
+        }
+
+        // Unique Key based on Serial Number (or fallback to itemName + category)
+        const key = (sn && sn !== 'N/A' && sn !== 'undefined' && sn !== '')
+            ? sn.toLowerCase()
+            : (item.id || `${itemName}_${category}`).toString().trim().toLowerCase();
+
+        // Calculate stock for this item node (including nested batches)
+        let itemStock = 0;
+        if (item.batches && typeof item.batches === 'object' && Object.keys(item.batches).length > 0) {
+            itemStock = Object.values(item.batches).reduce((sum, b) => sum + (parseInt(b.currentQty || b.currentStock || b.quantity || 0, 10) || 0), 0);
+        } else {
+            itemStock = parseInt(item.currentQty || item.currentStock || item.quantity || item.totalAvailableStock || 0, 10) || 0;
+        }
+
+        if (!groupedCatalog[key]) {
+            groupedCatalog[key] = {
+                id: item.id || key,
+                itemName: itemName,
+                category: category,
+                serialNumber: sn || 'N/A',
+                imageUrl: item.imageUrl || item.photo || item.image || FALLBACK_IMG,
+                brand: item.brand || item.manufacturer || 'Standard',
+                totalAvailableStock: Math.max(0, itemStock),
+                batchCount: item.batches ? Object.keys(item.batches).length : 1,
+                rawItem: item
+            };
+        } else {
+            // Aggregate stock for identical serial number entries
+            groupedCatalog[key].totalAvailableStock += Math.max(0, itemStock);
+            if ((!groupedCatalog[key].imageUrl || groupedCatalog[key].imageUrl === FALLBACK_IMG) && item.imageUrl && item.imageUrl !== FALLBACK_IMG) {
+                groupedCatalog[key].imageUrl = item.imageUrl;
+            }
+        }
     });
-    renderPaginationControls('stationery-list', catalogState, renderCatalogPage);
+
+    window.teacherGroupedCatalog = groupedCatalog;
+
+    // Render grouped catalog cards on Teacher Dashboard
+    const catalogContainer = document.getElementById('teacherCatalogGrid') || document.getElementById('stationery-list');
+    if (!catalogContainer) return;
+    catalogContainer.innerHTML = '';
+
+    const products = Object.values(groupedCatalog);
+    if (products.length === 0) {
+        catalogContainer.innerHTML = '<div class="col-12 text-center text-muted p-5 bg-light rounded border w-100"><p class="mb-0">No stationery items found.</p></div>';
+        return;
+    }
+
+    products.forEach(product => {
+        // Generate ONE single card per unique Serial Number
+        const cardHTML = `
+            <div class="col-md-4 mb-3">
+                <div class="card h-100 shadow-sm border-0" style="border-radius: 12px; overflow: hidden; background: #fff; border: 1px solid #e2e8f0;">
+                    <img src="${product.imageUrl || FALLBACK_IMG}" class="card-img-top p-2" style="height: 180px; object-fit: contain; background: #f8f9fa;" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">
+                    <div class="card-body d-flex flex-column p-3">
+                        <span class="badge bg-secondary mb-1 align-self-start" style="font-size: 0.75rem;">${escapeHtml(product.category)}</span>
+                        <h5 class="card-title font-bold text-dark mb-1" style="font-size: 1.1rem; font-weight: 700;">${escapeHtml(product.itemName)}</h5>
+                        <p class="text-muted small mb-2">SN: <span class="text-danger fw-bold">${escapeHtml(product.serialNumber)}</span></p>
+                        <div class="mt-auto d-flex justify-content-between align-items-center pt-2">
+                            <span class="badge ${product.totalAvailableStock > 0 ? 'bg-success' : 'bg-danger'} fs-6">Available: ${product.totalAvailableStock} Pcs</span>
+                            <button class="btn btn-primary btn-sm px-3 fw-bold" onclick="window.addToCart('${escapeHtml(product.id)}')">Add to Cart</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        catalogContainer.insertAdjacentHTML('beforeend', cardHTML);
+    });
+}
+window.renderTeacherCatalog = renderTeacherCatalog;
+
+function renderCatalogPage() {
+    renderTeacherCatalog();
 }
 
 window.viewItemDetails = function(itemId) {
@@ -3526,7 +3607,7 @@ function renderMasterInventory() {
         const term = (adminInventoryState.searchTerm || '').toLowerCase().trim();
         const catFilter = ($('inventory-filter-category')?.value || '').trim().toLowerCase();
 
-        // Group inventory by Category -> Product -> Batches
+        // Group inventory by Category -> Serial Number (Unique Parent Card) -> Batches Sub-Rows
         const categoryGroupMap = new Map();
 
         Object.entries(inventoryData || {}).forEach(([catId, catData]) => {
@@ -3534,7 +3615,6 @@ function renderMasterInventory() {
             const categoryName = (catData.category || catData.itemCategory || assignCategoryToItem(catData)).trim();
             let productName = (catData.itemName || catData.name || catId).trim();
 
-            // Safety Fix: If productName was saved identically to categoryName, resolve real item name
             if (productName.toLowerCase() === categoryName.toLowerCase()) {
                 const batches = catData.batches || {};
                 const bVals = Object.values(batches);
@@ -3548,23 +3628,24 @@ function renderMasterInventory() {
             // Strict Category Filter
             if (catFilter && catFilter !== "all categories" && catFilter !== "") {
                 if (categoryName.toLowerCase() !== catFilter && catId.toLowerCase() !== catFilter) {
-                    return; // Skip items outside selected category
+                    return;
                 }
             }
 
             const batches = catData.batches || {};
             const batchEntries = Object.entries(batches);
 
-            let totalStock = batchEntries.reduce((sum, [id, b]) => sum + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity) || 0), 0);
-            if (batchEntries.length === 0 && (catData.quantity || catData.currentStock)) {
-                totalStock = parseInt(catData.quantity || catData.currentStock || 0);
-            }
+            const serialNumber = (catData.serialNumber || catData.batchNo || 'N/A').toString().trim();
+            const snKey = (serialNumber !== 'N/A' && serialNumber !== '' && serialNumber !== 'undefined')
+                ? serialNumber.toLowerCase()
+                : `${categoryName}_${productName}`.toLowerCase();
 
-            // Search Filter (Category, Item Name, Brand, Serial/Batch No)
+            // Search Filter
             const matchesTerm = !term ||
                 categoryName.toLowerCase().includes(term) ||
                 productName.toLowerCase().includes(term) ||
                 catId.toLowerCase().includes(term) ||
+                serialNumber.toLowerCase().includes(term) ||
                 batchEntries.some(([id, b]) =>
                     (b.brandName || b.brand || '').toLowerCase().includes(term) ||
                     (b.serialNumber || b.batchNo || '').toLowerCase().includes(term)
@@ -3573,16 +3654,58 @@ function renderMasterInventory() {
             if (!matchesTerm) return;
 
             if (!categoryGroupMap.has(categoryName)) {
-                categoryGroupMap.set(categoryName, []);
+                categoryGroupMap.set(categoryName, new Map());
             }
 
-            categoryGroupMap.get(categoryName).push({
-                catId,
-                catData,
-                productName,
-                totalStock,
-                batchEntries
-            });
+            const categoryProductsMap = categoryGroupMap.get(categoryName);
+
+            if (!categoryProductsMap.has(snKey)) {
+                categoryProductsMap.set(snKey, {
+                    catId,
+                    catData,
+                    productName,
+                    serialNumber,
+                    categoryName,
+                    totalStock: 0,
+                    allBatches: []
+                });
+            }
+
+            const prod = categoryProductsMap.get(snKey);
+
+            if (batchEntries.length > 0) {
+                batchEntries.forEach(([bId, b]) => {
+                    const cStock = parseInt(b.currentStock ?? b.currentQty ?? b.quantity ?? 0, 10) || 0;
+                    prod.totalStock += cStock;
+                    prod.allBatches.push({
+                        catId,
+                        batchId: bId,
+                        batch: b,
+                        currentStock: cStock,
+                        initialQty: parseInt(b.initialQty ?? b.openingQuantity ?? cStock, 10) || 0,
+                        brand: b.brandName || b.brand || b.supplier || catData.brand || 'Standard',
+                        serialNumber: b.serialNumber || b.batchNo || serialNumber,
+                        receivedDate: b.receivedDate || (b.createdAt ? b.createdAt.split('T')[0] : (catData.createdAt ? catData.createdAt.split('T')[0] : '-')),
+                        imageUrl: b.imageUrl || catData.imageUrl || FALLBACK_IMG,
+                        isLegacy: false
+                    });
+                });
+            } else {
+                const cStock = parseInt(catData.currentStock ?? catData.quantity ?? catData.availableStock ?? 0, 10) || 0;
+                prod.totalStock += cStock;
+                prod.allBatches.push({
+                    catId,
+                    batchId: null,
+                    batch: catData,
+                    currentStock: cStock,
+                    initialQty: parseInt(catData.openingQuantity || catData.initialQty || cStock, 10) || 0,
+                    brand: catData.brand || catData.brandName || 'Initial / Legacy Stock',
+                    serialNumber: serialNumber,
+                    receivedDate: catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A',
+                    imageUrl: catData.imageUrl || FALLBACK_IMG,
+                    isLegacy: true
+                });
+            }
         });
 
         if (categoryGroupMap.size === 0) {
@@ -3598,15 +3721,16 @@ function renderMasterInventory() {
             return;
         }
 
-        // Build Accordion HTML for Category -> Product -> Batches
+        // Build Accordion HTML for Category -> Unique Parent Card (per Serial Number) -> Batch Sub-Rows
         let html = '<div class="accordion inventory-category-accordion" id="adminInventoryCategoryAccordion">';
         let categoryIndex = 0;
 
-        categoryGroupMap.forEach((productsList, categoryName) => {
+        categoryGroupMap.forEach((categoryProductsMap, categoryName) => {
             categoryIndex++;
             const categoryAccordionId = `inv_cat_acc_${categoryIndex}`;
             const isFirst = categoryIndex === 1;
 
+            const productsList = Array.from(categoryProductsMap.values());
             const categoryTotalStock = productsList.reduce((sum, p) => sum + p.totalStock, 0);
 
             html += `
@@ -3618,7 +3742,7 @@ function renderMasterInventory() {
                             <div class="d-flex align-items-center gap-2">
                                 <i class="bi bi-folder-fill text-warning me-1"></i>
                                 <span>${escapeHtml(categoryName)}</span>
-                                <span class="badge bg-light text-secondary border small ms-2">${productsList.length} Product${productsList.length === 1 ? '' : 's'}</span>
+                                <span class="badge bg-light text-secondary border small ms-2">${productsList.length} Unique Product${productsList.length === 1 ? '' : 's'}</span>
                             </div>
                             <span class="badge ${categoryTotalStock < 20 ? 'bg-danger' : 'bg-primary'} p-2 px-3 me-3">
                                 Category Stock: ${categoryTotalStock} Pcs
@@ -3631,14 +3755,14 @@ function renderMasterInventory() {
             `;
 
             productsList.forEach((prod) => {
-                const { catId, catData, productName, totalStock, batchEntries } = prod;
+                const { catId, catData, productName, serialNumber, totalStock, allBatches } = prod;
 
                 html += `
                     <div class="card mb-3 border-0 shadow-sm overflow-hidden" style="border-radius: 10px;">
                         <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
                             <div>
                                 <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-box-seam text-primary me-2"></i>${escapeHtml(productName)}</h5>
-                                <small class="text-muted">Product Identity: <strong>${escapeHtml(categoryName)} → ${escapeHtml(productName)}</strong></small>
+                                <small class="text-muted">SN: <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | Category: <strong>${escapeHtml(categoryName)}</strong></small>
                             </div>
                             <div class="d-flex align-items-center gap-2">
                                 <span class="badge ${totalStock < 20 ? 'bg-warning text-dark' : 'bg-success text-white'} p-2 px-3 fs-6">
@@ -3665,46 +3789,30 @@ function renderMasterInventory() {
                                 </thead>
                                 <tbody>`;
 
-                if (batchEntries.length === 0) {
-                    if (totalStock > 0) {
-                        html += `
-                            <tr>
-                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
-                                <td data-label="Brand / Manufacturer"><span class="fw-bold">Initial / Legacy Stock</span></td>
-                                <td data-label="Serial / Batch No."><code>${escapeHtml(catData.serialNumber || 'N/A')}</code></td>
-                                <td data-label="Received Date">${catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'}</td>
-                                <td data-label="Current Qty" class="text-center"><span class="badge bg-light text-dark border">${totalStock}</span></td>
-                                <td data-label="Initial Qty" class="text-center text-muted">${catData.openingQuantity || totalStock}</td>
-                                <td data-label="Status">${getStatusBadge(totalStock)}</td>
-                                <td data-label="Actions" class="text-end">
-                                    <span class="text-muted small">Legacy Record</span>
-                                </td>
-                            </tr>`;
-                    } else {
-                        html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active stock batches for this product.</td></tr>`;
-                    }
+                if (allBatches.length === 0) {
+                    html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active stock batches for this product.</td></tr>`;
                 } else {
-                    batchEntries.forEach(([batchId, batch]) => {
-                        const cStock = parseInt(batch.currentStock ?? batch.quantity ?? 0);
-                        const iStock = parseInt(batch.initialQty ?? batch.openingQuantity ?? cStock);
-                        const bBrand = batch.brandName || batch.brand || batch.supplier || 'Standard';
-                        const bSerial = batch.serialNumber || batch.batchNo || 'N/A';
-                        const bDate = batch.receivedDate || (batch.createdAt ? batch.createdAt.split('T')[0] : '-');
+                    allBatches.forEach((batchItem) => {
+                        const { catId: bCatId, batchId, currentStock: cStock, initialQty, brand, serialNumber: bSerial, receivedDate, imageUrl, isLegacy } = batchItem;
 
                         html += `
                             <tr>
-                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${batch.imageUrl || catData.imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
-                                <td data-label="Brand / Manufacturer"><span class="fw-bold text-dark">${escapeHtml(bBrand)}</span></td>
+                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                                <td data-label="Brand / Manufacturer"><span class="fw-bold text-dark">${escapeHtml(brand)}</span></td>
                                 <td data-label="Serial / Batch No."><code>${escapeHtml(bSerial)}</code></td>
-                                <td data-label="Received Date">${escapeHtml(bDate)}</td>
+                                <td data-label="Received Date">${escapeHtml(receivedDate)}</td>
                                 <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock}</span></td>
-                                <td data-label="Initial Qty" class="text-center text-muted">${iStock}</td>
+                                <td data-label="Initial Qty" class="text-center text-muted">${initialQty}</td>
                                 <td data-label="Status">${getStatusBadge(cStock)}</td>
-                                <td data-label="Actions" class="text-end">
-                                    <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" onclick="window.openEditBatchModal('${escapeHtml(catId)}', '${escapeHtml(batchId)}')">Edit</button>
-                                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="window.deleteBatch('${escapeHtml(catId)}', '${escapeHtml(batchId)}')">Delete</button>
-                                </td>
-                            </tr>`;
+                                <td data-label="Actions" class="text-end">`;
+                        if (!isLegacy && batchId) {
+                            html += `
+                                    <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Edit</button>
+                                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Delete</button>`;
+                        } else {
+                            html += `<span class="text-muted small">Legacy Record</span>`;
+                        }
+                        html += `</td></tr>`;
                     });
                 }
 
@@ -4144,8 +4252,34 @@ window.exportAuditLedgerToExcel = async function() {
 
 // ==================== CART / ORDERS ====================
 function addToCart(id, data, customQty = 1) {
+    if (!data) {
+        if (window.teacherGroupedCatalog && window.teacherGroupedCatalog[id]) {
+            const p = window.teacherGroupedCatalog[id];
+            data = {
+                id: p.id,
+                itemName: p.itemName,
+                serialNumber: p.serialNumber,
+                quantity: p.totalAvailableStock,
+                availableStock: p.totalAvailableStock,
+                currentStock: p.totalAvailableStock,
+                imageUrl: p.imageUrl,
+                category: p.category
+            };
+        } else {
+            const rawList = window.masterInventoryList || getFlatInventoryList();
+            const found = rawList.find(i => i.id === id || i.catId === id || (i.serialNumber && i.serialNumber.toLowerCase() === id.toString().toLowerCase()));
+            if (found) {
+                data = found;
+            } else if (inventoryData && inventoryData[id]) {
+                data = inventoryData[id];
+            } else {
+                data = { id, itemName: 'Stationery Item', serialNumber: id, quantity: 0 };
+            }
+        }
+    }
+
     const totalStock = getItemTotalAvailableStock(data);
-    const existingItem = window.stationeryCart.find(i => i.id === id);
+    const existingItem = window.stationeryCart.find(i => i.id === id || (i.serialNumber && data.serialNumber && i.serialNumber.toLowerCase() === data.serialNumber.toLowerCase()));
 
     if (totalStock <= 0) {
         showToast("This item is currently out of stock", 'error');
@@ -4165,7 +4299,7 @@ function addToCart(id, data, customQty = 1) {
         showToast(`Updated ${data.itemName || 'item'} quantity to ${targetQty}`);
     } else {
         window.stationeryCart.push({
-            id,
+            id: id || data.id,
             itemName: data.itemName || data.name || 'Stationery Item',
             serialNumber: data.serialNumber || data.sn || 'N/A',
             quantity: totalStock,
@@ -4176,6 +4310,7 @@ function addToCart(id, data, customQty = 1) {
     }
     window.saveCartToStorage();
 }
+window.addToCart = addToCart;
 
 function renderCart() {
     window.renderCartModalItems();
@@ -5404,25 +5539,27 @@ async function saveInventoryItem(e) {
 
         if (!itemName || !serialNumber) throw new Error("Name and SN required");
 
-        // Duplicate Check for Serial Number (Side Menu "Add New Item")
-        const normSN = serialNumber.toLowerCase().replace(/[\s\n\r]/g, '');
-        if (normSN && normSN !== 'n/a' && inventoryData) {
-            const existingMatch = Object.values(inventoryData).find(catData => {
-                if (!catData) return false;
-                const cSN = (catData.serialNumber || catData.sn || catData.batchNo || '').toString().toLowerCase().trim().replace(/[\s\n\r]/g, '');
-                if (cSN === normSN) return true;
-                const batches = catData.batches || {};
-                return Object.values(batches).some(b => {
-                    const bSN = (b.serialNumber || b.batchNo || '').toString().toLowerCase().trim().replace(/[\s\n\r]/g, '');
-                    return bSN === normSN;
-                });
+        // Duplicate Serial Number Check
+        const snClean = serialNumber.toLowerCase();
+        let duplicateFound = false;
+        if (inventoryData) {
+            Object.values(inventoryData).forEach(item => {
+                if (!item) return;
+                const parentSN = (item.serialNumber || item.batchNo || '').toString().trim().toLowerCase();
+                if (parentSN === snClean) duplicateFound = true;
+                if (item.batches && typeof item.batches === 'object') {
+                    Object.values(item.batches).forEach(b => {
+                        const bSN = (b.serialNumber || b.batchNo || '').toString().trim().toLowerCase();
+                        if (bSN === snClean) duplicateFound = true;
+                    });
+                }
             });
+        }
 
-            if (existingMatch) {
-                const matchedName = existingMatch.itemName || existingMatch.name || 'existing item';
-                alert(`This Serial Number (${serialNumber}) already exists for "${matchedName}"!\n\nPlease use "+ Add Stock" on the existing item card in Master Inventory instead.`);
-                throw new Error(`Serial Number ${serialNumber} already exists under "${matchedName}". Use + Add Stock on existing card.`);
-            }
+        if (duplicateFound) {
+            const dupeAlert = `This Serial Number (${serialNumber}) already exists! Please use '+ Add Stock' on the existing item card instead.`;
+            alert(dupeAlert);
+            throw new Error(dupeAlert);
         }
 
         if (!file) throw new Error("Image required");
@@ -5488,6 +5625,8 @@ async function saveInventoryItem(e) {
         btn.textContent = originalText;
     }
 }
+window.saveNewInventoryItem = saveInventoryItem;
+window.saveInventoryItem = saveInventoryItem;
 
 /**
  * Processes Order Completion, decrements stock in /inventory/,

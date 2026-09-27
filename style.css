@@ -1894,3 +1894,17 @@ body.modal-open {
         content: "" !important;
     }
 }
+
+/* Teacher Catalog Grid Styling v1.8.63 */
+#teacherCatalogGrid .card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    border-radius: 12px;
+}
+#teacherCatalogGrid .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.1) !important;
+}
+#teacherCatalogGrid .card-img-top {
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+}
