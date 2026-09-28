@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "1.8.68";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -759,40 +759,12 @@ window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
 
 window.generateStudioProductPhoto = async function(base64OrFile) {
     try {
-        console.log("🤖 Processing AI Background Removal for Pure White Studio Look...");
-
-        let blob;
-        if (typeof base64OrFile === 'string') {
-            if (base64OrFile.startsWith('data:')) {
-                const res = await fetch(base64OrFile);
-                blob = await res.blob();
-            } else {
-                blob = new Blob([base64OrFile]);
-            }
-        } else {
-            blob = base64OrFile;
-        }
-
-        let transparentUrl = null;
-        let removeBgFn = window.imglyRemoveBackground;
-        if (typeof removeBgFn !== 'function' && window['@imgly/background-removal']) {
-            removeBgFn = window['@imgly/background-removal'].removeBackground || window['@imgly/background-removal'].default;
-        }
-
-        if (typeof removeBgFn === 'function') {
-            try {
-                const bgBlob = await removeBgFn(blob);
-                transparentUrl = URL.createObjectURL(bgBlob);
-            } catch (bgErr) {
-                console.warn("imglyRemoveBackground execution error:", bgErr);
-            }
-        }
-
-        const sourceUrl = transparentUrl || (typeof base64OrFile === 'string' ? base64OrFile : URL.createObjectURL(blob));
-
+        console.log("🤖 Processing AI Background Removal for Studio Look...");
+        const blob = await imglyRemoveBackground(base64OrFile);
+        const transparentUrl = URL.createObjectURL(blob);
         return new Promise((resolve) => {
             const img = new Image();
-            img.src = sourceUrl;
+            img.src = transparentUrl;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = 800;
@@ -800,29 +772,23 @@ window.generateStudioProductPhoto = async function(base64OrFile) {
                 const ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                const padding = 60;
+                const padding = 80;
                 const maxDim = 800 - (padding * 2);
-                const scale = Math.min(maxDim / (img.width || 800), maxDim / (img.height || 800));
-                const x = (canvas.width - (img.width || 800) * scale) / 2;
-                const y = (canvas.height - (img.height || 800) * scale) / 2;
+                const scale = Math.min(maxDim / img.width, maxDim / img.height);
+                const x = (canvas.width - img.width * scale) / 2;
+                const y = (canvas.height - img.height * scale) / 2;
                 ctx.imageSmoothingEnabled = true;
                 ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(img, x, y, (img.width || 800) * scale, (img.height || 800) * scale);
-                if (transparentUrl) URL.revokeObjectURL(transparentUrl);
-                resolve(canvas.toDataURL('image/jpeg', 0.90));
-            };
-            img.onerror = () => {
-                if (transparentUrl) URL.revokeObjectURL(transparentUrl);
-                resolve(typeof base64OrFile === 'string' ? base64OrFile : URL.createObjectURL(blob));
+                ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+                URL.revokeObjectURL(transparentUrl);
+                resolve(canvas.toDataURL('image/jpeg', 0.85));
             };
         });
     } catch (err) {
-        console.warn("AI Processing Warning, falling back to original photo:", err);
+        console.warn("AI Processing Warning, falling back to compressed photo:", err);
         return typeof base64OrFile === 'string' ? base64OrFile : await window.compressAndScaleImage(base64OrFile);
     }
 };
-
-window.processAndCleanImage = window.generateStudioProductPhoto;
 
 // ==================== UTILITIES ====================
 function escapeHtml(text) {
@@ -2265,7 +2231,11 @@ window.safeShowView = function(viewIdToShow) {
 };
 
 window.addEventListener('error', function(e) {
-    console.error("Global JS Error caught:", e.error || e.message);
+    console.error("Global JS Error caught:", e.error);
+    const userView = $('user-view-container');
+    if (userView && (userView.classList.contains('d-none') || userView.style.display === 'none')) {
+        window.safeShowView('user-view-container');
+    }
 });
 
 // ==================== CATEGORIES ====================
@@ -2652,7 +2622,7 @@ window.submitCartOrder = function() {
 
 // ==================== MAIN LIFECYCLE ====================
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("App Initialized v2.1.0");
+    console.log("App Initialized");
     window.initStationeryRain();
     window.updateFcmUIStatus();
     window.loadCartFromStorage();
@@ -3081,7 +3051,6 @@ document.addEventListener('DOMContentLoaded', () => {
 function listenForNewOrders() {
     addListener(ref(db, 'orders'), (snapshot) => {
         const data = snapshot.val() || {};
-        window.masterOrdersList = Object.values(data);
         const pendingCount = Object.values(data).filter(o => o.status === 'Pending Approval').length;
         const badge = $('notif-badge');
         if (badge) {
@@ -3098,14 +3067,6 @@ function listenForNewOrders() {
                 }
             }
         });
-
-        // CRITICAL FIX: Only update UI belonging to CURRENT ACTIVE SCREEN
-        const activeRole = (window.currentActiveRole || sessionStorage.getItem('activeRole') || '').toLowerCase();
-        if (activeRole === 'admin' || activeRole === 'developer' || activeRole === 'super_admin') {
-            if (typeof fetchAdminOrders === 'function') fetchAdminOrders();
-        } else if (activeRole === 'teacher') {
-            if (typeof renderTeacherOrderHistory === 'function') renderTeacherOrderHistory();
-        }
     });
 }
 
@@ -3151,11 +3112,6 @@ function renderNotificationList() {
 
 // ==================== ROLE / DASHBOARD ====================
 window.renderDashboardForRole = function(userRole, adecNumber) {
-    const roleUpper = String(userRole).toUpperCase();
-    const roleLower = String(userRole).toLowerCase();
-    window.currentActiveRole = roleLower;
-    sessionStorage.setItem('activeRole', roleLower);
-
     document.querySelectorAll('.view, .dashboard-view').forEach(container => {
         container.classList.remove('active');
         container.classList.add('d-none');
@@ -3171,6 +3127,7 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
         sidebar.classList.remove('open');
     }
 
+    const roleUpper = String(userRole).toUpperCase();
     if ($('admin-menu')) $('admin-menu').style.display = (roleUpper === 'ADMIN' || roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') ? 'flex' : 'none';
     if ($('teacher-menu')) $('teacher-menu').style.display = roleUpper === 'TEACHER' ? 'flex' : 'none';
 
@@ -3471,89 +3428,24 @@ function getItemTotalAvailableStock(item) {
 }
 window.getItemTotalAvailableStock = getItemTotalAvailableStock;
 
-function populateTeacherCategoryDropdown() {
-    const categorySelect = document.getElementById('teacherCategoryFilter');
-    if (!categorySelect) return;
-
-    const rawInventory = (window.masterInventoryList && window.masterInventoryList.length > 0)
-        ? window.masterInventoryList
-        : getFlatInventoryList();
-
-    const categoriesSet = new Set();
-    rawInventory.forEach(item => {
-        if (item && item.category && item.category.trim()) {
-            categoriesSet.add(item.category.trim());
-        }
-    });
-
-    if (Array.isArray(ALL_STATIONERY_CATEGORIES)) {
-        ALL_STATIONERY_CATEGORIES.forEach(cat => {
-            if (cat && cat.trim()) categoriesSet.add(cat.trim());
-        });
-    }
-
-    const categories = Array.from(categoriesSet).sort();
-    const currentSelection = categorySelect.value || 'ALL';
-
-    let optionsHTML = '<option value="ALL">📁 All Categories</option>';
-    categories.forEach(cat => {
-        optionsHTML += `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`;
-    });
-
-    categorySelect.innerHTML = optionsHTML;
-    categorySelect.value = currentSelection;
-}
-window.populateTeacherCategoryDropdown = populateTeacherCategoryDropdown;
-
-function filterTeacherCatalog() {
-    renderTeacherCatalog();
-}
-window.filterTeacherCatalog = filterTeacherCatalog;
-
-function resetTeacherFilters() {
-    const searchInput = document.getElementById('teacherSearchInput') || document.getElementById('stationery-search');
-    const categorySelect = document.getElementById('teacherCategoryFilter');
-    if (searchInput) searchInput.value = '';
-    if (categorySelect) categorySelect.value = 'ALL';
-    catalogState.searchTerm = '';
-    renderTeacherCatalog();
-}
-window.resetTeacherFilters = resetTeacherFilters;
-
 function renderTeacherCatalog() {
-    populateTeacherCategoryDropdown();
-
     const rawInventory = (window.masterInventoryList && window.masterInventoryList.length > 0)
         ? window.masterInventoryList
         : getFlatInventoryList();
-
-    const searchInput = document.getElementById('teacherSearchInput') || document.getElementById('stationery-search');
-    const categorySelect = document.getElementById('teacherCategoryFilter');
-
-    const searchKeyword = (searchInput?.value || catalogState.searchTerm || '').toLowerCase().trim();
-    const selectedCategory = (categorySelect?.value || 'ALL').trim();
-
     const groupedCatalog = {};
+
+    const term = (catalogState.searchTerm || '').toLowerCase().trim();
 
     rawInventory.forEach(item => {
         const sn = (item.serialNumber || item.batchNo || '').toString().trim();
         const itemName = item.itemName || item.name || '';
         const category = item.category || 'General';
-        const brand = item.brand || item.manufacturer || 'Standard';
 
-        // Category Filter match
-        if (selectedCategory !== 'ALL') {
-            if (category.toLowerCase() !== selectedCategory.toLowerCase()) {
-                return;
-            }
-        }
-
-        // Search Keyword match
-        if (searchKeyword) {
-            const matches = itemName.toLowerCase().includes(searchKeyword) ||
-                            category.toLowerCase().includes(searchKeyword) ||
-                            brand.toLowerCase().includes(searchKeyword) ||
-                            sn.toLowerCase().includes(searchKeyword);
+        if (term) {
+            const matches = itemName.toLowerCase().includes(term) ||
+                            category.toLowerCase().includes(term) ||
+                            (item.brand || '').toLowerCase().includes(term) ||
+                            sn.toLowerCase().includes(term);
             if (!matches) return;
         }
 
@@ -3577,7 +3469,7 @@ function renderTeacherCatalog() {
                 category: category,
                 serialNumber: sn || 'N/A',
                 imageUrl: item.imageUrl || item.photo || item.image || FALLBACK_IMG,
-                brand: brand || 'Standard',
+                brand: item.brand || item.manufacturer || 'Standard',
                 unit: item.unit || 'Pcs',
                 color: item.color || '',
                 totalAvailableStock: Math.max(0, itemStock),
@@ -3602,13 +3494,7 @@ function renderTeacherCatalog() {
 
     const products = Object.values(groupedCatalog);
     if (products.length === 0) {
-        catalogContainer.innerHTML = `
-            <div class="col-12 text-center py-5 bg-light rounded border w-100 my-3">
-                <div class="fs-1">📦</div>
-                <h6 class="fw-bold text-muted mt-2">No matching items found</h6>
-                <p class="small text-secondary mb-3">Try changing the category filter or search keywords.</p>
-                <button class="btn btn-sm btn-primary fw-bold px-3 py-2" onclick="window.resetTeacherFilters()">Show All Items</button>
-            </div>`;
+        catalogContainer.innerHTML = '<div class="col-12 text-center text-muted p-5 bg-light rounded border w-100"><p class="mb-0">No stationery items found.</p></div>';
         return;
     }
 
@@ -3646,7 +3532,6 @@ function renderTeacherCatalog() {
             </div>`;
         catalogContainer.insertAdjacentHTML('beforeend', cardHTML);
     });
-}
 }
 window.renderTeacherCatalog = renderTeacherCatalog;
 
@@ -4049,13 +3934,13 @@ function renderMasterInventory() {
 
                 let adminStockBadgeHTML = '';
                 if (totalStock <= 0) {
-                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white stock-pill-badge fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white p-2 px-3 fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
                 } else if (totalStock <= 5) {
-                    adminStockBadgeHTML = `<span class="badge bg-danger text-white stock-pill-badge fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${unitLabel} Left)</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-danger text-white p-2 px-3 fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${unitLabel} Left)</span>`;
                 } else if (totalStock < 20) {
-                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark stock-pill-badge fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
                 } else {
-                    adminStockBadgeHTML = `<span class="badge bg-success text-white stock-pill-badge fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-success text-white p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
                 }
 
                 html += `
@@ -4063,12 +3948,12 @@ function renderMasterInventory() {
                         <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
                             <div>
                                 <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-box-seam text-primary me-2"></i>${escapeHtml(productName)}</h5>
-                                <small class="text-muted"><span class="text-secondary fw-semibold">SERIAL NO:</span> <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | <span class="text-secondary fw-semibold">CATEGORY:</span> <strong>${escapeHtml(categoryName)}</strong></small>
+                                <small class="text-muted">SN: <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | Category: <strong>${escapeHtml(categoryName)}</strong></small>
                             </div>
                             <div class="d-flex align-items-center gap-2">
                                 ${adminStockBadgeHTML}
-                                <button class="btn btn-sm btn-success fw-bold ms-2 d-inline-flex align-items-center gap-1" onclick="window.openRestockModal('${escapeHtml(catId)}')">
-                                    ➕ <span>Add Stock</span>
+                                <button class="btn btn-sm btn-success fw-bold ms-2" onclick="window.openRestockModal('${escapeHtml(catId)}')">
+                                    <i class="bi bi-plus-circle me-1"></i> + Add Stock
                                 </button>
                             </div>
                         </div>
@@ -4096,35 +3981,20 @@ function renderMasterInventory() {
 
                         html += `
                             <tr>
-                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${imageUrl}" style="width: 44px; height: 44px; object-fit: contain; background: #ffffff;" loading="lazy"></td>
-                                <td data-label="Brand / Manufacturer"><span class="text-secondary small fw-semibold d-md-none">BRAND: </span><span class="fw-bold text-dark">${escapeHtml(brand)}</span></td>
-                                <td data-label="Serial / Batch No."><span class="text-secondary small fw-semibold d-md-none">SERIAL NO: </span><code>${escapeHtml(bSerial)}</code></td>
-                                <td data-label="Received Date"><span class="text-secondary small fw-semibold d-md-none">RECEIVED: </span>${escapeHtml(receivedDate)}</td>
-                                <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock} ${unitLabel}</span></td>
-                                <td data-label="Initial Qty" class="text-center text-muted">${initialQty} ${unitLabel}</td>
+                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
+                                <td data-label="Brand / Manufacturer"><span class="fw-bold text-dark">${escapeHtml(brand)}</span></td>
+                                <td data-label="Serial / Batch No."><code>${escapeHtml(bSerial)}</code></td>
+                                <td data-label="Received Date">${escapeHtml(receivedDate)}</td>
+                                <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock}</span></td>
+                                <td data-label="Initial Qty" class="text-center text-muted">${initialQty}</td>
                                 <td data-label="Status">${getStatusBadge(cStock)}</td>
                                 <td data-label="Actions" class="text-end">`;
                         if (!isLegacy && batchId) {
                             html += `
-                                    <div class="card-actions-wrapper d-inline-flex flex-wrap gap-1 justify-content-end">
-                                        <button class="btn btn-sm btn-success fw-bold d-inline-flex align-items-center gap-1 py-1 px-2" onclick="window.openRestockModal('${escapeHtml(bCatId)}')">
-                                            ➕ <span>Add Stock</span>
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-primary fw-semibold py-1 px-2" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">
-                                            ✏️ Edit
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-danger fw-semibold py-1 px-2" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">
-                                            🗑️ Delete
-                                        </button>
-                                    </div>`;
+                                    <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Edit</button>
+                                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Delete</button>`;
                         } else {
-                            html += `
-                                    <div class="card-actions-wrapper d-inline-flex flex-wrap gap-1 justify-content-end">
-                                        <button class="btn btn-sm btn-success fw-bold d-inline-flex align-items-center gap-1 py-1 px-2" onclick="window.openRestockModal('${escapeHtml(bCatId)}')">
-                                            ➕ <span>Add Stock</span>
-                                        </button>
-                                        <span class="text-muted small align-self-center">Legacy Record</span>
-                                    </div>`;
+                            html += `<span class="text-muted small">Legacy Record</span>`;
                         }
                         html += `</td></tr>`;
                     });

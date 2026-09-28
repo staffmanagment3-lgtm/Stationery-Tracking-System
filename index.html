@@ -4,16 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#1565C0">
-    <link rel="manifest" href="./manifest.json?v=2.1.0">
+    <link rel="manifest" href="./manifest.json?v=1.8.68">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=2.1.0">
+    <link rel="stylesheet" href="style.css?v=1.8.68">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/index.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -104,7 +103,7 @@
     <!-- Login View -->
     <section id="login-view" class="view active">
         <div id="stationery-rain-container" class="stationery-rain-container" aria-hidden="true"></div>
-        <div class="login-container shadow-lg border-0 rounded-4">
+        <div class="login-container">
             <img src="school.png" alt="School Logo" class="login-logo" onerror="this.style.display='none'">
             <h2>School Stationery Tracker</h2>
             <form id="login-form">
@@ -592,30 +591,9 @@
         <div class="content">
             <div id="stationery-catalog-section" class="dashboard-section">
                 <h2>Stationery Catalog</h2>
-                <div class="teacher-filter-bar card p-3 mb-3 shadow-sm border-0">
-                    <div class="row g-2 align-items-center">
-                        <!-- Text Search Input -->
-                        <div class="col-12 col-md-6">
-                            <div class="input-group">
-                                <span class="input-group-text bg-light border-end-0">🔍</span>
-                                <input type="text" id="teacherSearchInput" class="form-control border-start-0"
-                                       placeholder="Search item name, brand, or SN code..." oninput="window.filterTeacherCatalog()">
-                            </div>
-                        </div>
-                        <!-- Category Dropdown Filter -->
-                        <div class="col-8 col-md-4">
-                            <select id="teacherCategoryFilter" class="form-select" onchange="window.filterTeacherCatalog()">
-                                <option value="ALL">📁 All Categories</option>
-                                <!-- Dynamic categories injected by JavaScript -->
-                            </select>
-                        </div>
-                        <!-- Clear Filters Button -->
-                        <div class="col-4 col-md-2 text-end">
-                            <button class="btn btn-outline-secondary w-100 fw-semibold" onclick="window.resetTeacherFilters()">
-                                🔄 Reset
-                            </button>
-                        </div>
-                    </div>
+                <div class="search-bar mb-3">
+                    <label for="stationery-search" class="visually-hidden">Search</label>
+                    <input type="text" id="stationery-search" class="form-control" placeholder="🔍 Search by name or serial..." autocomplete="off">
                 </div>
                 <div id="teacherCatalogGrid" class="row">
                     <div id="stationery-list" class="grid-container w-100">
@@ -1097,7 +1075,7 @@
                 <div class="modal-body p-4">
                     <div class="input-group mb-4 shadow-sm">
                         <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
-                        <input type="text" id="teacherAnalyticsSearchInput" class="form-control border-start-0" placeholder="Search teacher by name or Pass ID..." autocomplete="off">
+                        <input type="text" id="teacherSearchInput" class="form-control border-start-0" placeholder="Search teacher by name or Pass ID..." autocomplete="off">
                     </div>
                     <div class="table-responsive" style="max-height: 500px; overflow-y: auto; border-radius: 8px; border: 1px solid #eef2f7;">
                         <table class="table table-hover align-middle mb-0">
@@ -1149,6 +1127,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=2.1.0"></script>
+<script type="module" src="app.js?v=1.8.68"></script>
 </body>
 </html>
