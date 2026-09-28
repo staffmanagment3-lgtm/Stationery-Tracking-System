@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#1565C0">
-    <link rel="manifest" href="./manifest.json?v=1.8.79">
+    <link rel="manifest" href="./manifest.json?v=1.8.84">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.8.79">
+    <link rel="stylesheet" href="style.css?v=1.8.84">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
@@ -629,7 +629,7 @@
 
     <!-- Teacher Order Signature Modal -->
     <div class="modal fade" id="teacher-signature-modal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content rounded-4 shadow">
                 <div class="modal-header bg-primary text-white">
                     <h5 class="modal-title fs-6 fw-bold">Sign to Confirm Item Request</h5>
@@ -637,8 +637,27 @@
                 </div>
                 <div class="modal-body text-center p-4">
                     <p class="small text-muted mb-2">Please draw your signature below to authorize this stationery request.</p>
-                    <div class="border rounded-3 p-1 bg-light mb-2">
-                        <canvas id="teacher-request-canvas" width="340" height="150" style="touch-action: none; background: #fff; cursor: crosshair; width: 100%;"></canvas>
+                    <div class="signature-pad-wrapper border rounded-3 p-2 bg-light mb-2 position-relative" id="wrapper-teacher-request-canvas">
+                        <div class="signature-toolbar d-flex align-items-center justify-content-between mb-2 p-1 bg-white border rounded">
+                            <span class="small text-muted fw-bold ps-1"><i class="bi bi-pen me-1"></i>Draw Signature</span>
+                            <div class="d-flex align-items-center gap-1 flex-wrap">
+                                <button type="button" class="btn btn-sm btn-success fw-bold d-none confirm-sig-btn" onclick="window.confirmFullScreenSignature('wrapper-teacher-request-canvas', 'teacher-request-canvas')" title="Confirm Signature"><i class="bi bi-check-circle-fill me-1"></i> Confirm Signature</button>
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="window.zoomSignatureCanvas('teacher-request-canvas', 1.2)" title="Zoom In"><i class="bi bi-zoom-in"></i> +</button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="window.zoomSignatureCanvas('teacher-request-canvas', 0.8)" title="Zoom Out"><i class="bi bi-zoom-out"></i> -</button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="window.resetSignatureCanvasZoom('teacher-request-canvas')" title="Reset Scale"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
+                                    <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.toggleFullScreenSignature('wrapper-teacher-request-canvas', 'teacher-request-canvas')" title="Full Screen"><i class="bi bi-arrows-fullscreen me-1"></i> Fullscreen Sign</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="canvas-zoom-container overflow-auto position-relative text-center">
+                            <canvas id="teacher-request-canvas" width="450" height="180" class="signature-canvas" style="touch-action: none; background: #fff; cursor: crosshair; max-width: 100%; border: 1px solid #cbd5e1; border-radius: 6px;"></canvas>
+                        </div>
+                        <div class="fullscreen-footer text-center mt-3 d-none">
+                            <button type="button" class="btn btn-lg btn-success fw-bold shadow px-4 py-2" onclick="window.confirmFullScreenSignature('wrapper-teacher-request-canvas', 'teacher-request-canvas')">
+                                <i class="bi bi-check-circle-fill me-2"></i> Confirm Signature & Minimize
+                            </button>
+                        </div>
                     </div>
                     <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="clearTeacherRequestCanvas()">Clear Signature</button>
                     <button type="button" class="btn btn-success w-100 py-2 fw-bold" onclick="submitFinalOrderWithSignature()">
@@ -814,7 +833,7 @@
 
     <!-- Handover Modal -->
     <div class="modal fade" id="handoverModal" tabindex="-1" aria-labelledby="handoverModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content border-0 shadow">
                 <div class="modal-header bg-primary text-white">
                     <h5 class="modal-title fw-bold" id="handoverModalLabel">Final Order Handover & Receiver Signature</h5>
@@ -831,8 +850,27 @@
                     <div id="existingReceiverSigPreview"></div>
 
                     <p class="small text-muted mb-2 text-start fw-bold">Receiver Signature (Teacher / Staff):</p>
-                    <div class="border rounded-3 p-1 bg-light mb-2">
-                        <canvas id="handover-signature-pad" width="340" height="150" style="touch-action: none; background: #fff; cursor: crosshair; width: 100%;"></canvas>
+                    <div class="signature-pad-wrapper border rounded-3 p-2 bg-light mb-2 position-relative" id="wrapper-handover-signature-pad">
+                        <div class="signature-toolbar d-flex align-items-center justify-content-between mb-2 p-1 bg-white border rounded">
+                            <span class="small text-muted fw-bold ps-1"><i class="bi bi-pen me-1"></i>Draw Signature</span>
+                            <div class="d-flex align-items-center gap-1 flex-wrap">
+                                <button type="button" class="btn btn-sm btn-success fw-bold d-none confirm-sig-btn" onclick="window.confirmFullScreenSignature('wrapper-handover-signature-pad', 'handover-signature-pad')" title="Confirm Signature"><i class="bi bi-check-circle-fill me-1"></i> Confirm Signature</button>
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="window.zoomSignatureCanvas('handover-signature-pad', 1.2)" title="Zoom In"><i class="bi bi-zoom-in"></i> +</button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="window.zoomSignatureCanvas('handover-signature-pad', 0.8)" title="Zoom Out"><i class="bi bi-zoom-out"></i> -</button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="window.resetSignatureCanvasZoom('handover-signature-pad')" title="Reset Scale"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
+                                    <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.toggleFullScreenSignature('wrapper-handover-signature-pad', 'handover-signature-pad')" title="Full Screen"><i class="bi bi-arrows-fullscreen me-1"></i> Fullscreen Sign</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="canvas-zoom-container overflow-auto position-relative text-center">
+                            <canvas id="handover-signature-pad" width="450" height="180" class="signature-canvas" style="touch-action: none; background: #fff; cursor: crosshair; max-width: 100%; border: 1px solid #cbd5e1; border-radius: 6px;"></canvas>
+                        </div>
+                        <div class="fullscreen-footer text-center mt-3 d-none">
+                            <button type="button" class="btn btn-lg btn-success fw-bold shadow px-4 py-2" onclick="window.confirmFullScreenSignature('wrapper-handover-signature-pad', 'handover-signature-pad')">
+                                <i class="bi bi-check-circle-fill me-2"></i> Confirm Signature & Minimize
+                            </button>
+                        </div>
                     </div>
                     <button type="button" id="clear-handover-sig" class="btn btn-sm btn-outline-secondary mb-3">Clear Signature</button>
                     <button type="button" class="btn btn-success w-100 py-2 fw-bold shadow-sm" onclick="window.submitHandoverWithSignature(event)">
@@ -1137,6 +1175,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.8.79"></script>
+<script type="module" src="app.js?v=1.8.84"></script>
 </body>
 </html>

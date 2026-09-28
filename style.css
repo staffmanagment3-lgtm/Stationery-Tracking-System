@@ -2091,3 +2091,139 @@ body.modal-open {
         padding: 5px 8px !important;
     }
 }
+
+/* Full-Screen & Auto-Minimize Signature Overlay v1.8.82 */
+.signature-fullscreen-active {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 10050 !important;
+    background: #0f172a !important;
+    padding: 16px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    border-radius: 0 !important;
+    box-sizing: border-box !important;
+}
+
+.signature-fullscreen-active .signature-toolbar {
+    width: 100% !important;
+    max-width: 900px !important;
+    background: #1e293b !important;
+    color: #ffffff !important;
+    border-color: #334155 !important;
+    padding: 10px 14px !important;
+    margin-bottom: 10px !important;
+}
+
+.signature-fullscreen-active .signature-toolbar span {
+    color: #ffffff !important;
+    font-size: 1rem !important;
+}
+
+.signature-fullscreen-active .confirm-sig-btn {
+    display: inline-flex !important;
+}
+
+.signature-fullscreen-active .fullscreen-footer {
+    display: block !important;
+    width: 100% !important;
+    max-width: 900px !important;
+    padding: 10px 0 !important;
+}
+
+.signature-fullscreen-active .canvas-zoom-container {
+    width: 100% !important;
+    max-width: 900px !important;
+    flex: 1 !important;
+    height: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.signature-fullscreen-active canvas {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    background: #ffffff !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+    border-radius: 12px !important;
+}
+
+.canvas-zoom-container {
+    transition: all 0.2s ease;
+    overflow: hidden;
+}
+
+/* Table Signature Image Styling v1.8.84 */
+.table-sign-img {
+    max-height: 35px !important;
+    max-width: 100px !important;
+    object-fit: contain !important;
+    background: transparent !important;
+    border: none !important;
+    vertical-align: middle !important;
+    display: inline-block !important;
+}
+
+.signature-canvas {
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Signature Pad Modal Responsiveness & Layout Fix v1.8.81 */
+#teacher-signature-modal .modal-dialog,
+#handoverModal .modal-dialog,
+#admin-approval-modal .modal-dialog {
+    max-width: 650px !important;
+    width: 92vw !important;
+    margin: 1.75rem auto !important;
+}
+
+.signature-pad-wrapper {
+    overflow: visible !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.signature-toolbar {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    row-gap: 8px !important;
+}
+
+.canvas-zoom-container {
+    width: 100% !important;
+    overflow: hidden !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    min-height: 180px !important;
+}
+
+.signature-canvas {
+    width: 100% !important;
+    height: 180px !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    touch-action: none !important;
+}
+
+@media (max-width: 576px) {
+    #teacher-signature-modal .modal-dialog,
+    #handoverModal .modal-dialog {
+        width: 96vw !important;
+        margin: 10px auto !important;
+    }
+    .signature-toolbar {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+    }
+    .signature-toolbar .btn-group {
+        width: 100% !important;
+        justify-content: space-between !important;
+    }
+}

@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.79";
+const APP_VERSION = "1.8.84";
 
 // Global Full-Screen Loader Helpers
 window.showGlobalLoader = function(message = "Processing, please wait...") {
@@ -24,6 +24,33 @@ window.hideGlobalLoader = function() {
         loader.classList.add('d-none');
         loader.style.display = 'none';
     }
+};
+
+// ==================== TABLE SIGNATURE RENDERER v1.8.84 ====================
+window.renderTableSignature = function(signData) {
+    if (!signData || typeof signData !== 'string') {
+        return `<span class="badge bg-light text-secondary">N/A</span>`;
+    }
+    const cleanData = signData.trim();
+    if (!cleanData ||
+        cleanData === 'N/A' ||
+        cleanData === 'null' ||
+        cleanData === 'undefined' ||
+        cleanData === 'Teacher Sign' ||
+        cleanData === 'Issuer Sign' ||
+        cleanData.length < 20) {
+        return `<span class="badge bg-light text-secondary">N/A</span>`;
+    }
+
+    const isValidSign = cleanData.startsWith('data:image/') ||
+                        cleanData.startsWith('http://') ||
+                        cleanData.startsWith('https://');
+
+    if (!isValidSign) {
+        return `<span class="badge bg-light text-secondary">N/A</span>`;
+    }
+
+    return `<img src="${escapeHtml(cleanData)}" alt="Sign" class="table-sign-img" onerror="this.outerHTML='<span class=\"badge bg-light text-secondary\">No Sign</span>';">`;
 };
 
 // Complete 27 Category List
@@ -1202,18 +1229,92 @@ function buildHandoverBatchOptions(item, fullInventory) {
 window.buildHandoverBatchOptions = buildHandoverBatchOptions;
 
 // ==================== SIGNATURE PAD ====================
+// ==================== ZOOMABLE & FULL-SCREEN SIGNATURE PAD SYSTEM v1.8.80 ====================
+window._canvasZoomScales = window._canvasZoomScales || {};
+
+window.zoomSignatureCanvas = function(canvasId, factor) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    window._canvasZoomScales[canvasId] = (window._canvasZoomScales[canvasId] || 1) * factor;
+    window._canvasZoomScales[canvasId] = Math.max(0.5, Math.min(window._canvasZoomScales[canvasId], 3.0));
+
+    canvas.style.transform = `scale(${window._canvasZoomScales[canvasId]})`;
+    canvas.style.transformOrigin = `center center`;
+    showToast(`Signature Pad Zoom: ${Math.round(window._canvasZoomScales[canvasId] * 100)}%`, "info");
+};
+
+window.resetSignatureCanvasZoom = function(canvasId) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    window._canvasZoomScales[canvasId] = 1;
+    canvas.style.transform = `scale(1)`;
+    showToast("Signature Pad Zoom Reset (100%)", "info");
+};
+
+window.confirmFullScreenSignature = function(wrapperId, canvasId) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    if (typeof isCanvasBlank === 'function' && isCanvasBlank(canvas)) {
+        showToast("Please draw your signature before confirming.", "warning");
+        return;
+    }
+
+    window.isSignatureProvided = true;
+    window.resetSignatureCanvasZoom(canvasId);
+
+    const wrapper = document.getElementById(wrapperId);
+    if (wrapper && wrapper.classList.contains('signature-fullscreen-active')) {
+        wrapper.classList.remove('signature-fullscreen-active');
+        canvas.classList.remove('canvas-fullscreen');
+        document.body.style.overflow = '';
+    }
+
+    showToast("✅ Signature Confirmed & Captured! Scroll down to submit.", "success");
+};
+
+window.toggleFullScreenSignature = function(wrapperId, canvasId) {
+    const wrapper = document.getElementById(wrapperId);
+    const canvas = document.getElementById(canvasId);
+    if (!wrapper || !canvas) return;
+
+    if (!wrapper.classList.contains('signature-fullscreen-active')) {
+        wrapper.classList.add('signature-fullscreen-active');
+        canvas.classList.add('canvas-fullscreen');
+        document.body.style.overflow = 'hidden';
+        showToast("Full-Screen Signature Pad Enabled. Draw smoothly!", "info");
+    } else {
+        wrapper.classList.remove('signature-fullscreen-active');
+        canvas.classList.remove('canvas-fullscreen');
+        document.body.style.overflow = '';
+        showToast("Exited Full-Screen Signature Mode", "info");
+    }
+
+    if (canvasId === 'teacher-request-canvas' && teacherRequestPad && teacherRequestPad.resizeCanvas) {
+        teacherRequestPad.resizeCanvas();
+    } else if (canvasId === 'handover-signature-pad') {
+        window.initSignaturePad('handover-signature-pad', 'clear-handover-sig');
+    }
+};
+
 window.initSignaturePad = function(canvasId, clearBtnId) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return null;
 
     const ctx = canvas.getContext('2d');
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width || 400;
-    canvas.height = 200;
+    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+    const parentRect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : canvas.getBoundingClientRect();
+    canvas.width = (parentRect.width || canvas.offsetWidth || 400) * ratio;
+    canvas.height = 180 * ratio;
 
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(ratio, ratio);
     ctx.strokeStyle = "#000000";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
 
     let isDrawing = false;
 
@@ -1221,10 +1322,16 @@ window.initSignaturePad = function(canvasId, clearBtnId) {
         const r = canvas.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        return { x: clientX - r.left, y: clientY - r.top };
+        const scaleX = (canvas.width / ratio) / (r.width || 1);
+        const scaleY = (canvas.height / ratio) / (r.height || 1);
+        return {
+            x: (clientX - r.left) * scaleX,
+            y: (clientY - r.top) * scaleY
+        };
     }
 
     function startDraw(e) {
+        if (e.cancelable) e.preventDefault();
         isDrawing = true;
         const pos = getPos(e);
         ctx.beginPath();
@@ -1270,8 +1377,8 @@ function setupResponsiveSignaturePad(canvasId) {
 
     function resizeCanvas() {
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        const rect = canvas.parentElement.getBoundingClientRect();
-        canvas.width = rect.width * ratio;
+        const parentRect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : canvas.getBoundingClientRect();
+        canvas.width = (parentRect.width || canvas.offsetWidth || 340) * ratio;
         canvas.height = 180 * ratio;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(ratio, ratio);
@@ -1294,7 +1401,12 @@ function setupResponsiveSignaturePad(canvasId) {
             clientX = e.clientX;
             clientY = e.clientY;
         }
-        return { x: clientX - rect.left, y: clientY - rect.top };
+        const scaleX = (canvas.width / (window.devicePixelRatio || 1)) / (rect.width || 1);
+        const scaleY = (canvas.height / (window.devicePixelRatio || 1)) / (rect.height || 1);
+        return {
+            x: (clientX - rect.left) * scaleX,
+            y: (clientY - rect.top) * scaleY
+        };
     }
 
     function startDrawing(e) {
@@ -1335,7 +1447,8 @@ function setupResponsiveSignaturePad(canvasId) {
             const pixelBuffer = new Uint32Array(ctx.getImageData(0, 0, canvas.width, canvas.height).data.buffer);
             return !pixelBuffer.some(color => color !== 0);
         },
-        getDataUrl: () => canvas.toDataURL('image/png')
+        getDataUrl: () => canvas.toDataURL('image/png'),
+        resizeCanvas
     };
 }
 
@@ -2253,10 +2366,7 @@ window.safeShowView = function(viewIdToShow) {
 
 window.addEventListener('error', function(e) {
     console.error("Global JS Error caught:", e.error);
-    const userView = $('user-view-container');
-    if (userView && (userView.classList.contains('d-none') || userView.style.display === 'none')) {
-        window.safeShowView('user-view-container');
-    }
+    // Preserves active dashboard view cleanly without forcing redirect to teacher view
 });
 
 // ==================== CATEGORIES ====================
@@ -2850,6 +2960,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const bioEnabled = localStorage.getItem('biometricEnabled') === 'true';
     const savedUserRaw = localStorage.getItem('currentUser');
     const savedUser = savedUserRaw ? JSON.parse(savedUserRaw) : null;
+    const savedRole = (savedUser?.role || localStorage.getItem('currentUserRole') || sessionStorage.getItem('userRole') || '').toUpperCase();
 
     const adminToggle = $('biometric-toggle-admin');
     const teacherToggle = $('biometric-toggle-drawer');
@@ -2857,22 +2968,28 @@ document.addEventListener('DOMContentLoaded', () => {
     if (teacherToggle) teacherToggle.checked = bioEnabled;
 
     if (savedAdec) {
-        if (savedAdec === 'Asif' || (savedUser && savedUser.role === 'ADMIN')) {
-            currentUser = {
+        if (savedAdec === 'Asif' || savedAdec === 'ASIF' || savedRole === 'ADMIN' || savedRole === 'ADMINISTRATOR') {
+            currentUser = savedUser || {
                 role: 'ADMIN',
                 name: 'Asif',
-                uid: 'Asif',
-                adecPassNumber: 'Asif'
+                uid: savedAdec,
+                adecPassNumber: savedAdec
             };
-            window.renderDashboardForRole('ADMIN', 'Asif');
-        } else if (savedAdec === 'DEV001' || (savedUser && savedUser.role === 'developer')) {
-            currentUser = {
-                role: 'developer',
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            localStorage.setItem('currentUserRole', 'ADMIN');
+            sessionStorage.setItem('userRole', 'ADMIN');
+            window.renderDashboardForRole('ADMIN', savedAdec);
+        } else if (savedAdec === 'DEV001' || savedRole === 'DEVELOPER' || savedRole === 'SUPER_ADMIN') {
+            currentUser = savedUser || {
+                role: 'DEVELOPER',
                 name: 'Developer Mode',
                 uid: 'DEV001',
                 adecPassNumber: 'DEV001'
             };
-            window.renderDashboardForRole('developer', 'DEV001');
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            localStorage.setItem('currentUserRole', 'DEVELOPER');
+            sessionStorage.setItem('userRole', 'DEVELOPER');
+            window.renderDashboardForRole('DEVELOPER', savedAdec);
         } else if (bioEnabled) {
             window.loginWithBiometrics().catch(err => {
                 console.warn("Initial biometric unlock failed/canceled.");
@@ -3201,21 +3318,45 @@ async function handleUserRole(adecNumber) {
         const snapshot = await get(child(ref(db), `users/${adecNumber}`));
         if (snapshot.exists()) {
             const userData = snapshot.val();
-            currentUser = { uid: adecNumber, ...userData };
+            const role = userData.role || 'TEACHER';
+            currentUser = { uid: adecNumber, ...userData, role: role };
 
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            localStorage.setItem('currentUserRole', role);
+            sessionStorage.setItem('userRole', role);
 
             fetchSystemBranding(); fetchCategories();
 
             if ("Notification" in window) Notification.requestPermission();
 
-            window.renderDashboardForRole(userData.role, adecNumber);
+            window.renderDashboardForRole(role, adecNumber);
         } else {
-            localStorage.removeItem('stationery_user_adec');
-            showView('login-view');
+            const savedUserRaw = localStorage.getItem('currentUser');
+            const savedUser = savedUserRaw ? JSON.parse(savedUserRaw) : null;
+            const savedRole = (savedUser?.role || localStorage.getItem('currentUserRole') || sessionStorage.getItem('userRole') || '').toUpperCase();
+
+            if (savedRole === 'ADMIN' || adecNumber === 'Asif' || adecNumber === 'ASIF') {
+                window.renderDashboardForRole('ADMIN', adecNumber);
+            } else if (savedRole === 'DEVELOPER' || adecNumber === 'DEV001') {
+                window.renderDashboardForRole('DEVELOPER', adecNumber);
+            } else {
+                localStorage.removeItem('stationery_user_adec');
+                showView('login-view');
+            }
         }
     } catch (e) {
         console.error("Role Handling Error:", e);
+        const savedUserRaw = localStorage.getItem('currentUser');
+        const savedUser = savedUserRaw ? JSON.parse(savedUserRaw) : null;
+        const savedRole = (savedUser?.role || localStorage.getItem('currentUserRole') || sessionStorage.getItem('userRole') || '').toUpperCase();
+
+        if (savedRole === 'ADMIN' || adecNumber === 'Asif' || adecNumber === 'ASIF') {
+            window.renderDashboardForRole('ADMIN', adecNumber);
+        } else if (savedRole === 'DEVELOPER' || adecNumber === 'DEV001') {
+            window.renderDashboardForRole('DEVELOPER', adecNumber);
+        } else {
+            showView('login-view');
+        }
     }
 }
 
@@ -4356,9 +4497,9 @@ function renderAuditLedger() {
             <td>${escapeHtml(row.itemName)}</td>
             <td><code>${row.itemSn}</code></td>
             <td class="text-center"><strong>${row.qtyIssued}</strong></td>
-            <td>${row.teacherSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.teacherSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
+            <td class="text-center">${window.renderTableSignature(row.teacherSignatureUrl || row.teacherSign)}</td>
             <td>${escapeHtml(row.issuerName)}</td>
-            <td>${row.issuerSignatureUrl ? `<img src="${FALLBACK_IMG}" class="audit-thumb" data-url="${row.issuerSignatureUrl}" style="height:30px; background:#fff; border:1px solid #eee;" loading="lazy">` : '-'}</td>
+            <td class="text-center">${window.renderTableSignature(row.issuerSignatureUrl || row.issuerSign)}</td>
             <td class="text-center"><span class="badge bg-secondary">${row.stockBalance}</span></td>
             <td><span class="badge ${statusBadge}">${row.status}</span></td>
         `;
@@ -6066,8 +6207,8 @@ async function loadStockMovementAuditSheet() {
             const formattedStock = (typeof stockVal === 'number') ? `${stockVal} Pcs` : (stockVal || 'In Stock');
 
             const photoHtml = row.itemPhoto ? window.createReloadableImgHtml(row.itemPhoto, row.itemName, 'width: 40px; height: 40px;', true) : '-';
-            const teacherSignHtml = row.teacherSign && row.teacherSign !== 'N/A' ? window.createReloadableImgHtml(row.teacherSign, "Teacher Sign", 'height: 30px; width: 60px;', true) : 'N/A';
-            const issuerSignHtml = row.issuerSign && row.issuerSign !== 'N/A' ? window.createReloadableImgHtml(row.issuerSign, "Issuer Sign", 'height: 30px; width: 60px;', true) : 'N/A';
+            const teacherSignHtml = window.renderTableSignature(row.teacherSign || row.teacherSignatureUrl);
+            const issuerSignHtml = window.renderTableSignature(row.issuerSign || row.issuerSignatureUrl);
 
             html += `
                 <tr>
