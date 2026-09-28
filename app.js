@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.84";
+const APP_VERSION = "1.8.86";
 
 // Global Full-Screen Loader Helpers
 window.showGlobalLoader = function(message = "Processing, please wait...") {
@@ -26,7 +26,7 @@ window.hideGlobalLoader = function() {
     }
 };
 
-// ==================== TABLE SIGNATURE RENDERER v1.8.84 ====================
+// ==================== CLEAN TABLE SIGNATURE RENDERER v1.8.85 ====================
 window.renderTableSignature = function(signData) {
     if (!signData || typeof signData !== 'string') {
         return `<span class="badge bg-light text-secondary">N/A</span>`;
@@ -50,7 +50,7 @@ window.renderTableSignature = function(signData) {
         return `<span class="badge bg-light text-secondary">N/A</span>`;
     }
 
-    return `<img src="${escapeHtml(cleanData)}" alt="Sign" class="table-sign-img" onerror="this.outerHTML='<span class=\"badge bg-light text-secondary\">No Sign</span>';">`;
+    return `<img src="${cleanData}" alt="Sign" class="table-sign-img" style="max-height: 35px; max-width: 90px; object-fit: contain;">`;
 };
 
 // Complete 27 Category List
@@ -1253,27 +1253,7 @@ window.resetSignatureCanvasZoom = function(canvasId) {
     showToast("Signature Pad Zoom Reset (100%)", "info");
 };
 
-window.confirmFullScreenSignature = function(wrapperId, canvasId) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-
-    if (typeof isCanvasBlank === 'function' && isCanvasBlank(canvas)) {
-        showToast("Please draw your signature before confirming.", "warning");
-        return;
-    }
-
-    window.isSignatureProvided = true;
-    window.resetSignatureCanvasZoom(canvasId);
-
-    const wrapper = document.getElementById(wrapperId);
-    if (wrapper && wrapper.classList.contains('signature-fullscreen-active')) {
-        wrapper.classList.remove('signature-fullscreen-active');
-        canvas.classList.remove('canvas-fullscreen');
-        document.body.style.overflow = '';
-    }
-
-    showToast("✅ Signature Confirmed & Captured! Scroll down to submit.", "success");
-};
+window._originalPadParents = window._originalPadParents || {};
 
 window.toggleFullScreenSignature = function(wrapperId, canvasId) {
     const wrapper = document.getElementById(wrapperId);
@@ -1281,22 +1261,77 @@ window.toggleFullScreenSignature = function(wrapperId, canvasId) {
     if (!wrapper || !canvas) return;
 
     if (!wrapper.classList.contains('signature-fullscreen-active')) {
+        // Save original parent container
+        if (!window._originalPadParents[wrapperId]) {
+            window._originalPadParents[wrapperId] = {
+                parent: wrapper.parentElement,
+                nextSibling: wrapper.nextSibling
+            };
+        }
+
+        // True Breakout: move directly to document.body
+        document.body.appendChild(wrapper);
         wrapper.classList.add('signature-fullscreen-active');
-        canvas.classList.add('canvas-fullscreen');
         document.body.style.overflow = 'hidden';
-        showToast("Full-Screen Signature Pad Enabled. Draw smoothly!", "info");
+
+        // Recalculate canvas size for full viewport
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        const fullW = Math.max(window.innerWidth - 32, 300);
+        const fullH = Math.max(window.innerHeight - 160, 200);
+
+        canvas.width = fullW * ratio;
+        canvas.height = fullH * ratio;
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.scale(ratio, ratio);
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = '#000000';
+        }
+
+        showToast("📱 Full-Screen Signature Pad Active. Draw smoothly!", "info");
     } else {
-        wrapper.classList.remove('signature-fullscreen-active');
-        canvas.classList.remove('canvas-fullscreen');
-        document.body.style.overflow = '';
-        showToast("Exited Full-Screen Signature Mode", "info");
+        window.confirmFullScreenSignature(wrapperId, canvasId);
+    }
+};
+
+window.confirmFullScreenSignature = function(wrapperId, canvasId) {
+    const wrapper = document.getElementById(wrapperId);
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !wrapper) return;
+
+    if (typeof isCanvasBlank === 'function' && !isCanvasBlank(canvas)) {
+        window.isSignatureProvided = true;
     }
 
-    if (canvasId === 'teacher-request-canvas' && teacherRequestPad && teacherRequestPad.resizeCanvas) {
-        teacherRequestPad.resizeCanvas();
-    } else if (canvasId === 'handover-signature-pad') {
-        window.initSignaturePad('handover-signature-pad', 'clear-handover-sig');
+    window.resetSignatureCanvasZoom(canvasId);
+
+    if (wrapper.classList.contains('signature-fullscreen-active')) {
+        wrapper.classList.remove('signature-fullscreen-active');
+        document.body.style.overflow = '';
+
+        // Restore back to original modal parent
+        const savedInfo = window._originalPadParents[wrapperId];
+        if (savedInfo && savedInfo.parent) {
+            if (savedInfo.nextSibling) {
+                savedInfo.parent.insertBefore(wrapper, savedInfo.nextSibling);
+            } else {
+                savedInfo.parent.appendChild(wrapper);
+            }
+        }
+
+        // Resize canvas back to modal width
+        if (canvasId === 'teacher-request-canvas' && teacherRequestPad && teacherRequestPad.resizeCanvas) {
+            teacherRequestPad.resizeCanvas();
+        } else if (canvasId === 'handover-signature-pad') {
+            window.initSignaturePad('handover-signature-pad', 'clear-handover-sig');
+        }
     }
+
+    showToast("✅ Signature Confirmed & Captured! Scroll down to submit.", "success");
 };
 
 window.initSignaturePad = function(canvasId, clearBtnId) {
@@ -3685,9 +3720,11 @@ function renderTeacherCatalog() {
                         </div>
                         <h5 class="card-title font-bold text-dark mb-1" style="font-size: 1.1rem; font-weight: 700;">${escapeHtml(product.itemName)}</h5>
                         <p class="text-muted small mb-2">SN: <span class="text-danger fw-bold">${escapeHtml(product.serialNumber)}</span></p>
-                        <div class="mt-auto d-flex justify-content-between align-items-center pt-2">
-                            ${stockBadgeHTML}
-                            <button class="btn btn-primary btn-sm px-3 fw-bold" onclick="window.addToCart('${escapeHtml(product.id)}')">Add to Cart</button>
+                        <div class="mt-auto pt-2 catalog-action-bar">
+                            <div class="catalog-stock-badge-wrap">${stockBadgeHTML}</div>
+                            <button class="btn btn-primary btn-sm px-3 py-2 fw-bold catalog-add-btn" onclick="window.addToCart('${escapeHtml(product.id)}')">
+                                <i class="bi bi-cart-plus me-1"></i> Add to Cart
+                            </button>
                         </div>
                     </div>
                 </div>
