@@ -930,9 +930,10 @@ img.lazy-load {
 .qty-btn:hover { background: #e2e8f0; }
 .qty-btn:active { transform: translateY(2px); box-shadow: none; }
 .qty-input {
-    width: 55px; padding: 8px; border: 1px solid #cbd5e1;
+    width: 60px; min-width: 52px; padding: 6px 4px; border: 1px solid #cbd5e1;
     border-radius: 8px; text-align: center;
     font-weight: 700; font-size: 15px; min-height: 44px;
+    box-sizing: border-box;
 }
 .remove-item-btn {
     background: #ef4444; color: white; border: none;
@@ -1805,6 +1806,18 @@ body.modal-open {
     }
 
     .batch-inventory-table td:last-child {
+
+    .user-profile-badge .text-muted {
+        font-size: 9px !important;
+    }
+
+    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
+        height: 32px !important;
+        min-height: 32px !important;
+        font-size: 0.75rem !important;
+        padding: 2px 8px !important;
+    }
+}
         border-bottom: none !important;
     }
 
@@ -1921,4 +1934,33 @@ body.modal-open {
         opacity: 0.75;
         transform: scale(1.04);
     }
+}
+
+/* Fix Quantity Counter Display Clipping v1.8.67 */
+.qty-counter-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 110px; /* Ensure sufficient width for 3+ digits */
+}
+
+.qty-counter-input {
+    width: 52px !important; /* Expanded width to easily fit 10, 100+ */
+    min-width: 48px !important;
+    text-align: center !important;
+    padding: 2px 4px !important;
+    font-weight: bold !important;
+    font-size: 0.95rem !important;
+    border: 1px solid #ced4da !important;
+    border-radius: 4px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+    -moz-appearance: textfield;
+}
+
+/* Hide Chrome/Safari inner spinner arrows for cleaner multi-digit display */
+.qty-counter-input::-webkit-outer-spin-button,
+.qty-counter-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }

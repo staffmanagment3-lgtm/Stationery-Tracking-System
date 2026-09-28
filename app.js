@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.65";
+const APP_VERSION = "1.8.68";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -2458,6 +2458,7 @@ window.renderCartModalItems = function() {
 
     let html = '<ul class="list-group list-group-flush">';
     cart.forEach((item, index) => {
+        const unitLabel = item.unit || 'Pcs';
         html += `<li class="list-group-item d-flex justify-content-between align-items-center py-3">
             <div class="d-flex align-items-center gap-3">
                 <img src="${item.imageUrl || item.image || FALLBACK_IMG}" style="width: 50px; height: 50px; object-fit: contain;" class="rounded border">
@@ -2466,12 +2467,13 @@ window.renderCartModalItems = function() {
                     <small class="text-muted">SN: ${item.serialNumber || 'N/A'}</small>
                 </div>
             </div>
-            <div class="d-flex align-items-center gap-3">
-                <div class="input-group input-group-sm" style="width: 110px;">
-                    <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, -1)">-</button>
-                    <input type="text" class="form-control text-center bg-white" value="${item.requestQuantity || 1}" readonly>
-                    <button class="btn btn-outline-secondary" onclick="window.updateCartQty(${index}, 1)">+</button>
+            <div class="d-flex align-items-center gap-2">
+                <div class="qty-counter-container">
+                    <button class="btn btn-outline-secondary btn-sm fw-bold" style="width: 32px; height: 32px; padding: 0;" onclick="window.updateCartQty(${index}, -1)">-</button>
+                    <input type="text" class="qty-counter-input" value="${item.requestQuantity || 1}" readonly>
+                    <button class="btn btn-outline-secondary btn-sm fw-bold" style="width: 32px; height: 32px; padding: 0;" onclick="window.updateCartQty(${index}, 1)">+</button>
                 </div>
+                <span class="fw-bold small text-muted me-2">${unitLabel}</span>
                 <button class="btn btn-outline-danger btn-sm" onclick="window.removeFromCart(${index})">🗑️</button>
             </div>
         </li>`;
@@ -3425,6 +3427,8 @@ function renderTeacherCatalog() {
                 serialNumber: sn || 'N/A',
                 imageUrl: item.imageUrl || item.photo || item.image || FALLBACK_IMG,
                 brand: item.brand || item.manufacturer || 'Standard',
+                unit: item.unit || 'Pcs',
+                color: item.color || '',
                 totalAvailableStock: Math.max(0, itemStock),
                 batchCount: item.batches ? Object.keys(item.batches).length : 1,
                 rawItem: item
@@ -3452,13 +3456,14 @@ function renderTeacherCatalog() {
     }
 
     products.forEach(product => {
+        const unitLabel = product.unit || product.rawItem?.unit || 'Pcs';
         let stockBadgeHTML = '';
         if (product.totalAvailableStock <= 0) {
-            stockBadgeHTML = `<span class="badge bg-secondary text-white fs-6">❌ Out of Stock (0 Pcs)</span>`;
+            stockBadgeHTML = `<span class="badge bg-secondary text-white fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
         } else if (product.totalAvailableStock <= 5) {
-            stockBadgeHTML = `<span class="badge bg-danger text-white fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${product.totalAvailableStock} ${product.totalAvailableStock === 1 ? 'Pc' : 'Pcs'} Left)</span>`;
+            stockBadgeHTML = `<span class="badge bg-danger text-white fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${product.totalAvailableStock} ${unitLabel} Left)</span>`;
         } else {
-            stockBadgeHTML = `<span class="badge bg-success fs-6">Available: ${product.totalAvailableStock} Pcs</span>`;
+            stockBadgeHTML = `<span class="badge bg-success fs-6">Available: ${product.totalAvailableStock} ${unitLabel}</span>`;
         }
 
         // Generate ONE single card per unique Serial Number
@@ -3467,7 +3472,10 @@ function renderTeacherCatalog() {
                 <div class="card h-100 shadow-sm border-0" style="border-radius: 12px; overflow: hidden; background: #fff; border: 1px solid #e2e8f0;">
                     <img src="${product.imageUrl || FALLBACK_IMG}" class="card-img-top p-2" style="height: 180px; object-fit: contain; background: #f8f9fa;" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">
                     <div class="card-body d-flex flex-column p-3">
-                        <span class="badge bg-secondary mb-1 align-self-start" style="font-size: 0.75rem;">${escapeHtml(product.category)}</span>
+                        <div class="d-flex flex-wrap gap-1 mb-1">
+                            <span class="badge bg-secondary align-self-start" style="font-size: 0.75rem;">${escapeHtml(product.category)}</span>
+                            ${product.color ? `<span class="badge bg-info text-dark align-self-start" style="font-size: 0.75rem;"><i class="bi bi-palette me-1"></i>${escapeHtml(product.color)}</span>` : ''}
+                        </div>
                         <h5 class="card-title font-bold text-dark mb-1" style="font-size: 1.1rem; font-weight: 700;">${escapeHtml(product.itemName)}</h5>
                         <p class="text-muted small mb-2">SN: <span class="text-danger fw-bold">${escapeHtml(product.serialNumber)}</span></p>
                         <div class="mt-auto d-flex justify-content-between align-items-center pt-2">
@@ -3781,6 +3789,7 @@ function renderMasterInventory() {
                     productName,
                     serialNumber,
                     categoryName,
+                    unit: catData.unit || 'Pcs',
                     totalStock: 0,
                     allBatches: []
                 });
@@ -3865,7 +3874,7 @@ function renderMasterInventory() {
                                 <span class="badge bg-light text-secondary border small ms-2">${productsList.length} Unique Product${productsList.length === 1 ? '' : 's'}</span>
                             </div>
                             <span class="badge ${catBadgeClass} p-2 px-3 me-3">
-                                Category Stock: ${categoryTotalStock} Pcs
+                                Category Stock: ${categoryTotalStock}
                             </span>
                         </button>
                     </h2>
@@ -3875,17 +3884,18 @@ function renderMasterInventory() {
             `;
 
             productsList.forEach((prod) => {
-                const { catId, catData, productName, serialNumber, totalStock, allBatches } = prod;
+                const { catId, catData, productName, serialNumber, totalStock, allBatches, unit } = prod;
+                const unitLabel = unit || catData?.unit || 'Pcs';
 
                 let adminStockBadgeHTML = '';
                 if (totalStock <= 0) {
-                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white p-2 px-3 fs-6">❌ Out of Stock (0 Pcs)</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white p-2 px-3 fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
                 } else if (totalStock <= 5) {
-                    adminStockBadgeHTML = `<span class="badge bg-danger text-white p-2 px-3 fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${totalStock === 1 ? 'Pc' : 'Pcs'} Left)</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-danger text-white p-2 px-3 fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${unitLabel} Left)</span>`;
                 } else if (totalStock < 20) {
-                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark p-2 px-3 fs-6">Total Current Stock: ${totalStock} Pcs</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
                 } else {
-                    adminStockBadgeHTML = `<span class="badge bg-success text-white p-2 px-3 fs-6">Total Current Stock: ${totalStock} Pcs</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-success text-white p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
                 }
 
                 html += `
@@ -4388,6 +4398,7 @@ function addToCart(id, data, customQty = 1) {
                 id: p.id,
                 itemName: p.itemName,
                 serialNumber: p.serialNumber,
+                unit: p.unit || 'Pcs',
                 quantity: p.totalAvailableStock,
                 availableStock: p.totalAvailableStock,
                 currentStock: p.totalAvailableStock,
@@ -4402,7 +4413,7 @@ function addToCart(id, data, customQty = 1) {
             } else if (inventoryData && inventoryData[id]) {
                 data = inventoryData[id];
             } else {
-                data = { id, itemName: 'Stationery Item', serialNumber: id, quantity: 0 };
+                data = { id, itemName: 'Stationery Item', serialNumber: id, unit: 'Pcs', quantity: 0 };
             }
         }
     }
@@ -4419,7 +4430,8 @@ function addToCart(id, data, customQty = 1) {
     const targetQty = currentCartQty + customQty;
 
     if (targetQty > totalStock) {
-        showToast(`Only ${totalStock} Pcs currently available in total stock.`, 'warning');
+        const uLabel = data.unit || 'Pcs';
+        showToast(`Only ${totalStock} ${uLabel} currently available in total stock.`, 'warning');
         return;
     }
 
@@ -4431,6 +4443,7 @@ function addToCart(id, data, customQty = 1) {
             id: id || data.id,
             itemName: data.itemName || data.name || 'Stationery Item',
             serialNumber: data.serialNumber || data.sn || 'N/A',
+            unit: data.unit || 'Pcs',
             quantity: totalStock,
             imageUrl: data.imageUrl || data.image || '',
             requestQuantity: customQty
@@ -4688,8 +4701,13 @@ function renderTeacherOrderHistory() {
 
     pageItems.forEach(([id, order]) => {
         const dateStr = new Date(order.timestamp).toLocaleDateString();
+        const isCancelled = order.status === "Cancelled";
         const isApproved = order.status.includes("Approved") || order.status.includes("Ready") || order.status.includes("Completed") || order.status === "Done";
-        const statusBadge = isApproved ? 'bg-success' : 'bg-warning text-dark';
+        const isCancellable = !isCancelled && !isApproved && order.stockDeducted !== true;
+
+        let statusBadge = 'bg-warning text-dark';
+        if (isCancelled) statusBadge = 'bg-danger text-white';
+        else if (isApproved) statusBadge = 'bg-success text-white';
 
         const locationDisplay = (order.pickupLocation && order.pickupLocation !== "Awaiting Admin Details")
             ? `<div class="bg-light-success text-success border border-success rounded p-1 small fw-bold" style="font-size:11px;">
@@ -4705,9 +4723,12 @@ function renderTeacherOrderHistory() {
             </td>
             <td><span class="badge ${statusBadge}">${order.status}</span></td>
             <td>${locationDisplay}</td>
-            <td><button class="view-details-btn">View Voucher</button></td>`;
+            <td>
+                <button class="view-details-btn me-1">View Voucher</button>
+                ${isCancellable ? `<button class="btn btn-sm btn-outline-danger font-bold ms-1" onclick="window.cancelTeacherOrder('${escapeHtml(id)}')"><i class="bi bi-x-circle me-1"></i>Cancel</button>` : ''}
+            </td>`;
 
-        tr.querySelector('button').onclick = () => window.viewOrderReceipt(id);
+        tr.querySelector('.view-details-btn').onclick = () => window.viewOrderReceipt(id);
         list.appendChild(tr);
 
         const card = document.createElement('div'); card.className = 'order-mobile-card';
@@ -4723,7 +4744,10 @@ function renderTeacherOrderHistory() {
                     <p><strong>Location:</strong> ${order.pickupLocation || 'Pending'}</p>
                 </div>
             </div>
-            <button class="primary-btn blue omc-view-btn">View Receipt</button>`;
+            <div class="d-flex gap-2 mt-2">
+                <button class="primary-btn blue omc-view-btn flex-grow-1">View Receipt</button>
+                ${isCancellable ? `<button class="btn btn-outline-danger btn-sm font-bold px-3" onclick="window.cancelTeacherOrder('${escapeHtml(id)}')">Cancel</button>` : ''}
+            </div>`;
         const cardItemsWrap = card.querySelector('.omc-items');
         (order.items || []).slice(0, 3).forEach(it => {
             const img = document.createElement('img');
@@ -4742,6 +4766,46 @@ function renderTeacherOrderHistory() {
 
     renderPaginationControls('teacher-orders-pagination', teacherOrdersState, renderTeacherOrderHistory);
 }
+
+window.cancelTeacherOrder = async function(orderId) {
+    if (!orderId) return;
+
+    if (!confirm(`Are you sure you want to cancel Order #${orderId}?`)) {
+        return;
+    }
+
+    try {
+        const orderRef = ref(db, `orders/${orderId}`);
+        const snap = await get(orderRef);
+        if (!snap.exists()) {
+            showToast("Order not found!", "error");
+            return;
+        }
+
+        const orderData = snap.val();
+        if (orderData.status === 'Done' || orderData.status === 'Handover Complete / Done' || orderData.status.includes('Completed') || orderData.stockDeducted === true) {
+            alert("This order has already been completed and delivered. It cannot be cancelled.");
+            return;
+        }
+
+        await update(orderRef, {
+            status: 'Cancelled',
+            cancelledAt: new Date().toISOString(),
+            cancelledBy: sessionStorage.getItem('userName') || 'Teacher'
+        });
+
+        await logActivity("Order Cancelled", `Order #${orderId} was cancelled by teacher.`);
+
+        showToast(`Order #${orderId} cancelled successfully!`, "success");
+
+        if (typeof fetchOrders === 'function') fetchOrders();
+        if (typeof renderTeacherOrderHistory === 'function') renderTeacherOrderHistory();
+
+    } catch (err) {
+        console.error("Failed to cancel order:", err);
+        showToast("Error cancelling order: " + err.message, "error");
+    }
+};
 
 async function viewOrderDetails(id) {
     const snap = await get(ref(db, `orders/${id}`)); const order = snap.val();
@@ -5318,6 +5382,7 @@ function getFlatInventoryList() {
                     manufacturer: b.brandName || b.brand || b.manufacturer || catData.brand || 'Standard',
                     serialNumber: b.serialNumber || b.batchNo || catData.serialNumber || 'N/A',
                     batchNo: b.serialNumber || b.batchNo || catData.serialNumber || 'N/A',
+                    unit: catData.unit || b.unit || 'Pcs',
                     receivedDate: b.receivedDate || b.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
                     date: b.receivedDate || b.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
                     currentStock: curStock,
@@ -5341,6 +5406,7 @@ function getFlatInventoryList() {
                 manufacturer: catData.brand || catData.brandName || catData.manufacturer || 'Standard',
                 serialNumber: catData.serialNumber || catData.batchNo || 'N/A',
                 batchNo: catData.serialNumber || catData.batchNo || 'N/A',
+                unit: catData.unit || 'Pcs',
                 receivedDate: catData.receivedDate || catData.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
                 date: catData.receivedDate || catData.date || (catData.createdAt ? catData.createdAt.split('T')[0] : 'N/A'),
                 currentStock: curStock,
@@ -5704,12 +5770,16 @@ async function saveInventoryItem(e) {
         const finalImageUrl = driveUrl || studioPhotoBase64;
 
         const itemId = serialNumber.replace(/[.#$[\]]/g, "_");
+        const unitVal = document.getElementById('itemUnit') ? document.getElementById('itemUnit').value : 'Pcs';
+        const colorVal = document.getElementById('inv-color') ? document.getElementById('inv-color').value.trim() : '';
 
         const initialBatchId = 'BATCH-' + Date.now().toString().slice(-6);
         const initialBatch = {
             batchNo: initialBatchId,
             brandName: 'Standard',
             serialNumber: serialNumber,
+            unit: unitVal,
+            color: colorVal,
             initialQty: currentQty,
             currentStock: currentQty,
             quantity: currentQty,
@@ -5724,6 +5794,8 @@ async function saveInventoryItem(e) {
             itemName,
             category: itemCategory,
             description: itemDescription,
+            unit: unitVal,
+            color: colorVal,
             quantity: currentQty,
             availableStock: currentQty,
             currentStock: currentQty,
