@@ -2111,75 +2111,101 @@ body.modal-open {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
 }
 
-/* Animated School Student Character Login Entrance v1.8.73 */
-.login-page-wrapper {
+/* 3D Student Walking & Dragging Login Entrance v1.8.76 */
+.login-wrapper {
+    min-height: 100vh;
     width: 100%;
-    min-height: 80vh;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
     overflow: hidden;
-    padding: 20px 0;
+    padding: 20px;
 }
 
-/* Initial Entrance Animation: Pulling Login Card from side */
-.slide-in-assembly {
+/* Combined Assembly: Student pulls the card from offscreen */
+.walk-and-drag-assembly {
     display: flex;
+    flex-direction: row;
     align-items: flex-end;
     justify-content: center;
-    gap: -15px;
-    animation: pullCardFromSide 1.2s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    gap: 0px;
+    /* 3D Walk & Drag Entrance Animation */
+    animation: tiktok3dWalkAndDrag 3.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    will-change: transform, opacity;
 }
 
-@keyframes pullCardFromSide {
+@keyframes tiktok3dWalkAndDrag {
     0% {
-        transform: translateX(100vw); /* Start off-screen right */
+        transform: translateX(-100vw) rotate(-2deg);
         opacity: 0;
     }
-    70% {
-        transform: translateX(-10px); /* Slightly over-pulls for realistic weight effect */
-        opacity: 1;
-    }
+    15% { opacity: 1; }
+    35% { transform: translateX(-50vw) translateY(-8px) rotate(1deg); } /* Step 1 */
+    55% { transform: translateX(-20vw) translateY(0px) rotate(-1deg); }  /* Step 2 */
+    75% { transform: translateX(-5vw) translateY(-4px) rotate(0.5deg); } /* Step 3 */
+    90% { transform: translateX(2vw) translateY(0px); }
     100% {
-        transform: translateX(0); /* Settle in place */
+        transform: translateX(0) rotate(0deg);
         opacity: 1;
     }
 }
 
-.student-character-box {
+/* 3D Student Container Scaling (Matching Login Card Height) */
+.student-3d-container {
+    width: 240px;
+    height: 480px; /* Full Card Height Scale */
+    margin-right: -40px; /* Natural Grip Overlap on Card Edge */
     z-index: 2;
-    margin-right: -25px; /* Overlap character hand with login card edge */
-    margin-bottom: -10px;
-    transition: all 0.3s ease;
+    flex-shrink: 0;
+    animation: walkingGait 0.45s infinite alternate ease-in-out;
 }
 
-.login-card-container {
-    width: 380px;
+@keyframes walkingGait {
+    from { transform: translateY(0px) rotate(-0.8deg); }
+    to { transform: translateY(-6px) rotate(0.8deg); }
+}
+
+.student-3d-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.login-card-box {
+    width: 420px;
     max-width: 90vw;
-    background: #ffffff;
-    border-radius: 16px !important;
+    min-height: 480px; /* Matching height with student */
     z-index: 1;
+    background: #ffffff;
+    border-radius: 24px !important;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4) !important;
 }
 
-/* Mobile Responsive Adjustments */
-@media (max-width: 576px) {
-    .slide-in-assembly {
-        flex-direction: column;
-        align-items: center;
-        gap: -20px;
-    }
-
-    .student-character-box {
-        margin-right: 0;
-        margin-bottom: -30px; /* Position above login card on mobile */
-    }
-
-    .student-character-box dotlottie-player {
-        width: 130px !important;
-        height: 130px !important;
-    }
-
-    .login-card-container {
+/* RESPONSIVE LAYOUT FOR MOBILE DEVICES */
+@media (max-width: 768px) {
+    .walk-and-drag-assembly {
+        flex-direction: row !important; /* Keep side-by-side like video */
+        align-items: flex-end !important;
         width: 100%;
+    }
+
+    .student-3d-container {
+        width: 140px !important;
+        height: 340px !important; /* Scaled down proportionally for mobile */
+        margin-right: -30px !important;
+    }
+
+    .login-card-box {
+        width: 280px !important;
+        min-height: 340px !important;
+        padding: 15px !important;
+    }
+
+    .login-card-box input, .login-card-box button {
+        font-size: 0.9rem !important;
     }
 }

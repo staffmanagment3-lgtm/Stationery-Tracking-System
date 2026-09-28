@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.73";
+const APP_VERSION = "1.8.76";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -2652,30 +2652,13 @@ window.submitCartOrder = function() {
 
 // ==================== MAIN LIFECYCLE ====================
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("App Initialized v1.8.73");
+    console.log("App Initialized v1.8.76");
     window.initStationeryRain();
     window.updateFcmUIStatus();
     window.loadCartFromStorage();
     seedDefaultCategoriesIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
-
-    const lottiePlayer = document.getElementById('studentCharacterLottie');
-    if (lottiePlayer) {
-        setTimeout(() => {
-            console.log("Login Card Entrance Complete - Student resting on card");
-        }, 1200);
-
-        const passwordInput = document.getElementById('login-password');
-        if (passwordInput) {
-            passwordInput.addEventListener('focus', () => {
-                if (typeof lottiePlayer.setSpeed === 'function') lottiePlayer.setSpeed(1.2);
-            });
-            passwordInput.addEventListener('blur', () => {
-                if (typeof lottiePlayer.setSpeed === 'function') lottiePlayer.setSpeed(1);
-            });
-        }
-    }
 
     const loginForm = document.getElementById('login-form');
     if (loginForm) {

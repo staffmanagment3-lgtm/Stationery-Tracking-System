@@ -4,17 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#1565C0">
-    <link rel="manifest" href="./manifest.json?v=1.8.73">
+    <link rel="manifest" href="./manifest.json?v=1.8.76">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.8.73">
+    <link rel="stylesheet" href="style.css?v=1.8.76">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/index.js"></script>
-    <script src="https://unpkg.com/@dotlottie/player-component@latest/dist/dotlottie-player.mjs" type="module"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -105,23 +104,91 @@
     <!-- Login View -->
     <section id="login-view" class="view active">
         <div id="stationery-rain-container" class="stationery-rain-container" aria-hidden="true"></div>
-        <div id="loginPageContainer" class="login-page-wrapper">
-            <div id="interactiveLoginAssembly" class="slide-in-assembly">
-                <!-- Animated Student Character Container -->
-                <div class="student-character-box">
-                    <dotlottie-player
-                        id="studentCharacterLottie"
-                        src="https://assets2.lottiefiles.com/packages/lf20_student_pull_login.json"
-                        background="transparent"
-                        speed="1"
-                        style="width: 180px; height: 180px;"
-                        loop
-                        autoplay>
-                    </dotlottie-player>
+        <div id="loginPageWrapper" class="login-wrapper">
+            <div id="interactiveAssembly" class="walk-and-drag-assembly">
+
+                <!-- 3D Walking & Dragging School Student Character (Left Side) -->
+                <div class="student-3d-container" id="studentCharacter">
+                    <svg class="student-3d-svg" viewBox="0 0 260 520" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="shirt3d" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#ffffff" />
+                                <stop offset="70%" stop-color="#e2e8f0" />
+                                <stop offset="100%" stop-color="#cbd5e1" />
+                            </linearGradient>
+                            <linearGradient id="pant3d" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#1e3a8a" />
+                                <stop offset="100%" stop-color="#0f172a" />
+                            </linearGradient>
+                            <linearGradient id="skin3d" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#fed7aa" />
+                                <stop offset="100%" stop-color="#f97316" stop-opacity="0.8" />
+                            </linearGradient>
+                            <filter id="shadow3d" x="-20%" y="-20%" width="140%" height="140%">
+                                <feDropShadow dx="3" dy="10" stdDeviation="8" flood-color="#000000" flood-opacity="0.45"/>
+                            </filter>
+                        </defs>
+
+                        <!-- Realistic Ground Shadow -->
+                        <ellipse cx="130" cy="500" rx="90" ry="14" fill="rgba(0,0,0,0.4)" />
+
+                        <!-- Main 3D Student Body Group -->
+                        <g filter="url(#shadow3d)">
+                            <!-- Backpack (Behind Student) -->
+                            <rect x="50" y="140" width="45" height="120" rx="15" fill="#0f172a" />
+                            <path d="M 60 160 L 60 230" stroke="#2563eb" stroke-width="6" stroke-linecap="round" />
+
+                            <!-- 3D Shoes -->
+                            <path class="left-foot" d="M 70 470 Q 50 475 45 490 L 105 490 Q 110 475 95 470 Z" fill="#020617" />
+                            <path class="right-foot" d="M 155 470 Q 145 475 140 490 L 195 490 Q 200 475 185 470 Z" fill="#0f172a" />
+
+                            <!-- Trousers with Walking Gait Curves -->
+                            <path d="M 68 270 L 108 270 L 102 475 L 64 475 Z" fill="url(#pant3d)" />
+                            <path d="M 148 270 L 188 270 L 192 475 L 152 475 Z" fill="url(#pant3d)" />
+
+                            <!-- Belt & Buckle -->
+                            <rect x="68" y="258" width="120" height="15" rx="3" fill="#0f172a" />
+                            <rect x="118" y="255" width="20" height="21" rx="3" fill="#fbbf24" stroke="#d97706" stroke-width="2" />
+
+                            <!-- 3D School Uniform Shirt -->
+                            <path d="M 58 115 Q 128 100 198 115 L 188 260 L 68 260 Z" fill="url(#shirt3d)" stroke="#94a3b8" stroke-width="1.5" />
+
+                            <!-- Tie & Collar -->
+                            <polygon points="128,130 116,155 128,235 140,155" fill="#2563eb" />
+                            <polygon points="120,122 136,122 132,132 124,132" fill="#1d4ed8" />
+                            <path d="M 98 115 L 128 130 L 110 140 Z" fill="#f8fafc" />
+                            <path d="M 158 115 L 128 130 L 146 140 Z" fill="#cbd5e1" />
+
+                            <!-- Dragging Right Arm (Pulling the Card Rope/Edge) -->
+                            <path class="dragging-arm" d="M 190 125 Q 240 160 245 220 L 225 222 Q 215 170 178 140 Z" fill="url(#shirt3d)" />
+                            <!-- Hand gripping Login Card edge -->
+                            <circle cx="240" cy="225" r="14" fill="url(#skin3d)" />
+
+                            <!-- Left Arm (Natural Swing) -->
+                            <path class="swinging-arm" d="M 65 125 Q 35 170 42 230 L 58 225 Q 50 175 78 140 Z" fill="url(#shirt3d)" />
+                            <circle cx="48" cy="232" r="12" fill="url(#skin3d)" />
+
+                            <!-- Neck & Head -->
+                            <rect x="115" y="98" width="26" height="22" fill="url(#skin3d)" rx="5" />
+                            <path d="M 92 56 C 92 28, 164 28, 164 56 C 164 88, 92 88, 92 56 Z" fill="url(#skin3d)" />
+
+                            <!-- 3D Eyes & Friendly Expression -->
+                            <ellipse cx="116" cy="62" rx="5" ry="6" fill="#020617" />
+                            <ellipse cx="142" cy="62" rx="5" ry="6" fill="#020617" />
+                            <circle cx="118" cy="60" r="2" fill="#ffffff" />
+                            <circle cx="144" cy="60" r="2" fill="#ffffff" />
+                            <path d="M 116 78 Q 129 88 142 78" stroke="#dc2626" stroke-width="3.5" fill="none" stroke-linecap="round" />
+
+                            <!-- Student Cap -->
+                            <path d="M 88 48 Q 128 18 168 48 Z" fill="#1d4ed8" />
+                            <path d="M 78 48 Q 128 38 178 48 Q 150 60 78 48 Z" fill="#1e40af" />
+                            <circle cx="128" cy="22" r="6" fill="#fbbf24" />
+                        </g>
+                    </svg>
                 </div>
 
-                <!-- Login Container -->
-                <div class="login-container login-card-container shadow-lg border-0 rounded-4">
+                <!-- Existing Login Card (Right Side) -->
+                <div class="login-container login-card-box shadow-lg border-0 rounded-4">
                     <img src="school.png" alt="School Logo" class="login-logo" onerror="this.style.display='none'">
                     <h2>School Stationery Tracker</h2>
                     <form id="login-form">
@@ -147,6 +214,7 @@
                     </div>
                     <p id="login-error" class="error-message"></p>
                 </div>
+
             </div>
         </div>
     </section>
@@ -1168,6 +1236,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.8.73"></script>
+<script type="module" src="app.js?v=1.8.76"></script>
 </body>
 </html>
