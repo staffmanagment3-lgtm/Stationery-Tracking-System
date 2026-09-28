@@ -1997,35 +1997,105 @@ body.modal-open {
     box-sizing: border-box !important;
 }
 
-/* Edge-to-Edge Responsive Image Fill v1.8.68 */
+/* Product Card & Modal No-Crop Image Box Styling v1.8.69 */
 .cart-item-img {
     width: 70px !important;
     height: 70px !important;
-    object-fit: cover !important; /* Fill frame cleanly without distortion */
+    object-fit: contain !important;
+    background-color: #ffffff !important;
     border-radius: 8px !important;
-    border: 1px solid #dee2e6 !important;
+    border: 1px solid #f0f0f0 !important;
+    padding: 2px !important;
+    box-sizing: border-box !important;
 }
 
-.product-card-img-container {
+.product-card-img-container, .cart-item-img-container, .restock-img-container {
     width: 100% !important;
-    height: 200px !important; /* Fixed proportional height */
+    height: 200px !important;
+    background-color: #ffffff !important; /* Clean white frame */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
     overflow: hidden !important;
-    background-color: #f8f9fa;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    border-radius: 8px !important;
+    border: 1px solid #f0f0f0 !important;
 }
 
-.product-card-img {
+.product-card-img, .restock-img {
     width: 100% !important;
     height: 100% !important;
-    object-fit: cover !important; /* Fill entire card image header edge-to-edge */
+    max-height: 200px !important;
+    object-fit: contain !important; /* NEVER CUT EDGES - SHOW FULL ORIGINAL PHOTO */
+    padding: 6px !important;
+    box-sizing: border-box !important;
     transition: transform 0.3s ease;
+}
+
+.inventory-batch-thumb {
+    width: 44px !important;
+    height: 44px !important;
+    object-fit: contain !important;
+    background-color: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    padding: 2px !important;
 }
 
 @media (max-width: 576px) {
     .product-card-img-container {
         height: 160px !important;
     }
+    .product-card-img {
+        max-height: 160px !important;
+    }
+}
+
+/* Mobile Responsive Inventory Card Styling v1.8.70 */
+.inventory-card-mobile {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+    padding: 14px !important;
+    margin-bottom: 16px !important;
+    overflow: visible !important;
+}
+
+.inventory-card-row {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    padding: 6px 0 !important;
+    border-bottom: 1px dashed #edf2f7 !important;
+    font-size: 0.88rem !important;
+}
+
+.inventory-card-row:last-child {
+    border-bottom: none !important;
+}
+
+/* Action buttons container for mobile & batch rows */
+.card-actions-wrapper {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    width: 100% !important;
+    margin-top: 8px !important;
+}
+
+.card-actions-wrapper .btn {
+    flex: 1 1 auto !important;
+    min-width: 90px !important;
+    padding: 6px 10px !important;
+    font-size: 0.82rem !important;
+    text-align: center !important;
+    border-radius: 6px !important;
+}
+
+/* Stock Badges Pill Styling */
+.stock-pill-badge {
+    border-radius: 20px !important;
+    padding: 6px 14px !important;
+    font-weight: 700 !important;
 }
 }

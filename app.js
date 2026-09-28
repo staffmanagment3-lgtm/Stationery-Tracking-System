@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.68";
+const APP_VERSION = "1.8.70";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -759,12 +759,40 @@ window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
 
 window.generateStudioProductPhoto = async function(base64OrFile) {
     try {
-        console.log("🤖 Processing AI Background Removal for Studio Look...");
-        const blob = await imglyRemoveBackground(base64OrFile);
-        const transparentUrl = URL.createObjectURL(blob);
+        console.log("🤖 Processing AI Background Removal for Pure White Studio Look...");
+
+        let blob;
+        if (typeof base64OrFile === 'string') {
+            if (base64OrFile.startsWith('data:')) {
+                const res = await fetch(base64OrFile);
+                blob = await res.blob();
+            } else {
+                blob = new Blob([base64OrFile]);
+            }
+        } else {
+            blob = base64OrFile;
+        }
+
+        let transparentUrl = null;
+        let removeBgFn = window.imglyRemoveBackground;
+        if (typeof removeBgFn !== 'function' && window['@imgly/background-removal']) {
+            removeBgFn = window['@imgly/background-removal'].removeBackground || window['@imgly/background-removal'].default;
+        }
+
+        if (typeof removeBgFn === 'function') {
+            try {
+                const bgBlob = await removeBgFn(blob);
+                transparentUrl = URL.createObjectURL(bgBlob);
+            } catch (bgErr) {
+                console.warn("imglyRemoveBackground execution error:", bgErr);
+            }
+        }
+
+        const sourceUrl = transparentUrl || (typeof base64OrFile === 'string' ? base64OrFile : URL.createObjectURL(blob));
+
         return new Promise((resolve) => {
             const img = new Image();
-            img.src = transparentUrl;
+            img.src = sourceUrl;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = 800;
@@ -772,23 +800,29 @@ window.generateStudioProductPhoto = async function(base64OrFile) {
                 const ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                const padding = 80;
+                const padding = 60;
                 const maxDim = 800 - (padding * 2);
-                const scale = Math.min(maxDim / img.width, maxDim / img.height);
-                const x = (canvas.width - img.width * scale) / 2;
-                const y = (canvas.height - img.height * scale) / 2;
+                const scale = Math.min(maxDim / (img.width || 800), maxDim / (img.height || 800));
+                const x = (canvas.width - (img.width || 800) * scale) / 2;
+                const y = (canvas.height - (img.height || 800) * scale) / 2;
                 ctx.imageSmoothingEnabled = true;
                 ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
-                URL.revokeObjectURL(transparentUrl);
-                resolve(canvas.toDataURL('image/jpeg', 0.85));
+                ctx.drawImage(img, x, y, (img.width || 800) * scale, (img.height || 800) * scale);
+                if (transparentUrl) URL.revokeObjectURL(transparentUrl);
+                resolve(canvas.toDataURL('image/jpeg', 0.90));
+            };
+            img.onerror = () => {
+                if (transparentUrl) URL.revokeObjectURL(transparentUrl);
+                resolve(typeof base64OrFile === 'string' ? base64OrFile : URL.createObjectURL(blob));
             };
         });
     } catch (err) {
-        console.warn("AI Processing Warning, falling back to compressed photo:", err);
+        console.warn("AI Processing Warning, falling back to original photo:", err);
         return typeof base64OrFile === 'string' ? base64OrFile : await window.compressAndScaleImage(base64OrFile);
     }
 };
+
+window.processAndCleanImage = window.generateStudioProductPhoto;
 
 // ==================== UTILITIES ====================
 function escapeHtml(text) {
@@ -3934,13 +3968,13 @@ function renderMasterInventory() {
 
                 let adminStockBadgeHTML = '';
                 if (totalStock <= 0) {
-                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white p-2 px-3 fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white stock-pill-badge fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
                 } else if (totalStock <= 5) {
-                    adminStockBadgeHTML = `<span class="badge bg-danger text-white p-2 px-3 fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${unitLabel} Left)</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-danger text-white stock-pill-badge fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${unitLabel} Left)</span>`;
                 } else if (totalStock < 20) {
-                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark stock-pill-badge fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
                 } else {
-                    adminStockBadgeHTML = `<span class="badge bg-success text-white p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
+                    adminStockBadgeHTML = `<span class="badge bg-success text-white stock-pill-badge fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
                 }
 
                 html += `
@@ -3948,12 +3982,12 @@ function renderMasterInventory() {
                         <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
                             <div>
                                 <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-box-seam text-primary me-2"></i>${escapeHtml(productName)}</h5>
-                                <small class="text-muted">SN: <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | Category: <strong>${escapeHtml(categoryName)}</strong></small>
+                                <small class="text-muted"><span class="text-secondary fw-semibold">SERIAL NO:</span> <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | <span class="text-secondary fw-semibold">CATEGORY:</span> <strong>${escapeHtml(categoryName)}</strong></small>
                             </div>
                             <div class="d-flex align-items-center gap-2">
                                 ${adminStockBadgeHTML}
-                                <button class="btn btn-sm btn-success fw-bold ms-2" onclick="window.openRestockModal('${escapeHtml(catId)}')">
-                                    <i class="bi bi-plus-circle me-1"></i> + Add Stock
+                                <button class="btn btn-sm btn-success fw-bold ms-2 d-inline-flex align-items-center gap-1" onclick="window.openRestockModal('${escapeHtml(catId)}')">
+                                    ➕ <span>Add Stock</span>
                                 </button>
                             </div>
                         </div>
@@ -3981,20 +4015,35 @@ function renderMasterInventory() {
 
                         html += `
                             <tr>
-                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
-                                <td data-label="Brand / Manufacturer"><span class="fw-bold text-dark">${escapeHtml(brand)}</span></td>
-                                <td data-label="Serial / Batch No."><code>${escapeHtml(bSerial)}</code></td>
-                                <td data-label="Received Date">${escapeHtml(receivedDate)}</td>
-                                <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock}</span></td>
-                                <td data-label="Initial Qty" class="text-center text-muted">${initialQty}</td>
+                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${imageUrl}" style="width: 44px; height: 44px; object-fit: contain; background: #ffffff;" loading="lazy"></td>
+                                <td data-label="Brand / Manufacturer"><span class="text-secondary small fw-semibold d-md-none">BRAND: </span><span class="fw-bold text-dark">${escapeHtml(brand)}</span></td>
+                                <td data-label="Serial / Batch No."><span class="text-secondary small fw-semibold d-md-none">SERIAL NO: </span><code>${escapeHtml(bSerial)}</code></td>
+                                <td data-label="Received Date"><span class="text-secondary small fw-semibold d-md-none">RECEIVED: </span>${escapeHtml(receivedDate)}</td>
+                                <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock} ${unitLabel}</span></td>
+                                <td data-label="Initial Qty" class="text-center text-muted">${initialQty} ${unitLabel}</td>
                                 <td data-label="Status">${getStatusBadge(cStock)}</td>
                                 <td data-label="Actions" class="text-end">`;
                         if (!isLegacy && batchId) {
                             html += `
-                                    <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Edit</button>
-                                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Delete</button>`;
+                                    <div class="card-actions-wrapper d-inline-flex flex-wrap gap-1 justify-content-end">
+                                        <button class="btn btn-sm btn-success fw-bold d-inline-flex align-items-center gap-1 py-1 px-2" onclick="window.openRestockModal('${escapeHtml(bCatId)}')">
+                                            ➕ <span>Add Stock</span>
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-primary fw-semibold py-1 px-2" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">
+                                            ✏️ Edit
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger fw-semibold py-1 px-2" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">
+                                            🗑️ Delete
+                                        </button>
+                                    </div>`;
                         } else {
-                            html += `<span class="text-muted small">Legacy Record</span>`;
+                            html += `
+                                    <div class="card-actions-wrapper d-inline-flex flex-wrap gap-1 justify-content-end">
+                                        <button class="btn btn-sm btn-success fw-bold d-inline-flex align-items-center gap-1 py-1 px-2" onclick="window.openRestockModal('${escapeHtml(bCatId)}')">
+                                            ➕ <span>Add Stock</span>
+                                        </button>
+                                        <span class="text-muted small align-self-center">Legacy Record</span>
+                                    </div>`;
                         }
                         html += `</td></tr>`;
                     });
