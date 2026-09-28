@@ -5,7 +5,26 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.68";
+const APP_VERSION = "1.8.79";
+
+// Global Full-Screen Loader Helpers
+window.showGlobalLoader = function(message = "Processing, please wait...") {
+    const loader = document.getElementById('globalLoader');
+    const textEl = document.getElementById('globalLoaderText');
+    if (textEl) textEl.textContent = message;
+    if (loader) {
+        loader.classList.remove('d-none');
+        loader.style.display = 'flex';
+    }
+};
+
+window.hideGlobalLoader = function() {
+    const loader = document.getElementById('globalLoader');
+    if (loader) {
+        loader.classList.add('d-none');
+        loader.style.display = 'none';
+    }
+};
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -1838,6 +1857,7 @@ window.submitHandoverWithSignature = async function(event) {
         const adminName = sessionStorage.getItem('userName') ||
                          (currentUser && currentUser.name) || 'Admin';
 
+        window.showGlobalLoader("Processing Handover & Updating Stock...");
         showToast("Processing handover and updating stock...", "info");
 
         // Optional signature upload (non-blocking on failure)
@@ -1904,6 +1924,7 @@ window.submitHandoverWithSignature = async function(event) {
         alert("Transaction failed: " + err.message);
     } finally {
         window._handoverInProgress = false;
+        window.hideGlobalLoader();
         if (completeBtn) {
             completeBtn.disabled = false;
             completeBtn.textContent = "Complete Handover & Close Order";
@@ -4527,6 +4548,8 @@ window.submitFinalOrderWithSignature = async function() {
     const orderId = 'ORD-' + Date.now();
     const signatureDataUrl = teacherRequestPad.getDataUrl();
 
+    window.showGlobalLoader("Submitting Order & Syncing Data...");
+
     try {
         let driveSignatureUrl = signatureDataUrl;
         try {
@@ -4543,6 +4566,7 @@ window.submitFinalOrderWithSignature = async function() {
             serial: item.serialNumber || item.serial || item.sn || 'N/A',
             serialNumber: item.serialNumber || item.serial || item.sn || 'N/A',
             requestQuantity: Number(item.requestQuantity || 1),
+            unit: item.unit || 'Pcs',
             imageUrl: item.imageUrl || item.image || ''
         }));
 
@@ -4554,6 +4578,10 @@ window.submitFinalOrderWithSignature = async function() {
             items,
             status: 'Pending Approval',
             teacherRequestSignature: driveSignatureUrl,
+            teacherSign: driveSignatureUrl,
+            signatureUrl: driveSignatureUrl,
+            receiverSignature: driveSignatureUrl,
+            signature: driveSignatureUrl,
             pickupLocation: "Awaiting Admin Details",
             requestedAt: new Date().toISOString(),
             stockDeducted: false
@@ -4586,6 +4614,8 @@ window.submitFinalOrderWithSignature = async function() {
     } catch (e) {
         console.error("Order Submission Error:", e);
         showToast("Error submitting order request", 'error');
+    } finally {
+        window.hideGlobalLoader();
     }
 };
 
@@ -4620,6 +4650,9 @@ function fetchAdminOrders() {
                 const card = document.createElement('div');
                 const isPending = order.status === 'Pending Approval';
                 card.className = `request-card ${isPending ? 'pending' : 'approved'}`;
+
+                const teacherSigSrc = order.teacherRequestSignature || order.teacherSign || order.signatureUrl || order.receiverSignature || order.signature || (order.signatures ? order.signatures.teacher : null);
+
                 card.innerHTML = `
                     <div class="request-header">
                         <h4>${escapeHtml(order.teacherName)}</h4>
@@ -4629,12 +4662,12 @@ function fetchAdminOrders() {
                         ADEK: ${order.teacherUid} | Items: ${order.items?.length || 0}
                     </div>
                     <div class="request-items" style="display:flex;gap:10px;padding:10px 0;"></div>
-                    ${order.teacherRequestSignature ? `
-                        <div class="mb-2 text-center border rounded p-1 bg-light">
-                            <small class="d-block text-muted">Teacher's Order Signature</small>
-                            <img src="${order.teacherRequestSignature}" style="max-height:60px; max-width:100%;">
+                    ${teacherSigSrc ? `
+                        <div class="mb-2 text-center border rounded p-1.5 bg-light">
+                            <small class="d-block text-muted fw-bold mb-1">Teacher's Order Signature</small>
+                            <img src="${teacherSigSrc}" class="admin-signature-img" style="max-height:70px; max-width:100%; object-fit:contain;" onerror="this.onerror=null; this.parentElement.innerHTML='<small class=\\'text-muted\\'>Signature Preview Unavailable</small>';">
                         </div>
-                    ` : ''}
+                    ` : '<div class="mb-2 text-center border rounded p-1 bg-light"><small class="text-muted">No Teacher Signature Provided</small></div>'}
                     <div class="request-actions">
                         ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>` : ''}
                         ${order.status.includes('Approved') ? `

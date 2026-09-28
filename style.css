@@ -2028,4 +2028,66 @@ body.modal-open {
         height: 160px !important;
     }
 }
+
+/* Global Loader, Signature Image & Mobile Add Stock Styles v1.8.79 */
+.global-loader-overlay {
+    position: fixed !important;
+    inset: 0 !important;
+    background: rgba(15, 23, 42, 0.75) !important;
+    backdrop-filter: blur(4px) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    z-index: 10000 !important;
+    transition: opacity 0.3s ease;
+}
+
+.global-loader-box {
+    min-width: 260px;
+    max-width: 90vw;
+}
+
+.admin-signature-img {
+    max-height: 70px;
+    max-width: 100%;
+    object-fit: contain;
+    background: #ffffff;
+    border-radius: 6px;
+    padding: 4px;
+    border: 1px solid #e2e8f0;
+}
+
+@media (max-width: 768px) {
+    .card-header.d-flex {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 10px !important;
+    }
+    .card-header .ms-auto,
+    .card-header .d-flex.align-items-center {
+        width: 100% !important;
+        justify-content: space-between !important;
+        flex-wrap: wrap !important;
+    }
+    .add-stock-btn-mobile {
+        flex: 1 1 auto !important;
+        justify-content: center !important;
+        font-size: 0.85rem !important;
+        padding: 6px 12px !important;
+    }
+    .card-actions-wrapper {
+        display: flex !important;
+        width: 100% !important;
+        justify-content: flex-start !important;
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+        margin-top: 6px !important;
+    }
+    .card-actions-wrapper .btn {
+        flex: 1 1 auto !important;
+        min-width: 80px !important;
+        text-align: center !important;
+        font-size: 0.8rem !important;
+        padding: 5px 8px !important;
+    }
 }
