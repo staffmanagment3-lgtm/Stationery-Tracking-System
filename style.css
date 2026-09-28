@@ -2111,7 +2111,7 @@ body.modal-open {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
 }
 
-/* 3D Student Walking & Dragging Login Entrance v1.8.76 */
+/* 3D Student Walking & Dragging Login Entrance v2.0.0 */
 .login-wrapper {
     min-height: 100vh;
     width: 100%;
@@ -2121,61 +2121,71 @@ body.modal-open {
     background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
     overflow: hidden;
     padding: 20px;
+    box-sizing: border-box;
 }
 
-/* Combined Assembly: Student pulls the card from offscreen */
+/* Combined Assembly: Student pulls card onto screen */
 .walk-and-drag-assembly {
     display: flex;
     flex-direction: row;
     align-items: flex-end;
     justify-content: center;
     gap: 0px;
-    /* 3D Walk & Drag Entrance Animation */
-    animation: tiktok3dWalkAndDrag 3.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: studentWalkAndDrag 3.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     will-change: transform, opacity;
+    transform-origin: center bottom;
 }
 
-@keyframes tiktok3dWalkAndDrag {
+/* 3.2s Entrance Animation Keyframes */
+@keyframes studentWalkAndDrag {
     0% {
-        transform: translateX(-100vw) rotate(-2deg);
+        transform: translateX(-120vw) rotate(-2deg);
         opacity: 0;
     }
-    15% { opacity: 1; }
-    35% { transform: translateX(-50vw) translateY(-8px) rotate(1deg); } /* Step 1 */
-    55% { transform: translateX(-20vw) translateY(0px) rotate(-1deg); }  /* Step 2 */
-    75% { transform: translateX(-5vw) translateY(-4px) rotate(0.5deg); } /* Step 3 */
-    90% { transform: translateX(2vw) translateY(0px); }
+    12% { opacity: 1; }
+    30% { transform: translateX(-65vw) translateY(-10px) rotate(1.2deg); }
+    50% { transform: translateX(-35vw) translateY(0px) rotate(-1deg); }
+    68% { transform: translateX(-15vw) translateY(-6px) rotate(0.8deg); }
+    82% { transform: translateX(-4vw) translateY(0px) rotate(-0.4deg); }
+    93% { transform: translateX(1.5vw) translateY(-2px) rotate(0.2deg); }
     100% {
         transform: translateX(0) rotate(0deg);
         opacity: 1;
     }
 }
 
-/* 3D Student Container Scaling (Matching Login Card Height) */
+/* 3D Student Container Scaling (Matches Login Card Height) */
 .student-3d-container {
     width: 240px;
-    height: 480px; /* Full Card Height Scale */
-    margin-right: -40px; /* Natural Grip Overlap on Card Edge */
+    height: 480px;
+    margin-right: -42px;
     z-index: 2;
     flex-shrink: 0;
-    animation: walkingGait 0.45s infinite alternate ease-in-out;
+    animation: naturalWalkingGait 0.48s infinite alternate ease-in-out;
+    transform-origin: bottom center;
 }
 
-@keyframes walkingGait {
-    from { transform: translateY(0px) rotate(-0.8deg); }
-    to { transform: translateY(-6px) rotate(0.8deg); }
+/* Natural Human Walking Gait (Bob + Sway) */
+@keyframes naturalWalkingGait {
+    0% { transform: translateY(0px) rotate(-1deg); }
+    25% { transform: translateY(-4px) rotate(0.6deg); }
+    50% { transform: translateY(-7px) rotate(1deg); }
+    75% { transform: translateY(-4px) rotate(0.3deg); }
+    100% { transform: translateY(0px) rotate(-1deg); }
 }
 
 .student-3d-svg {
     width: 100%;
     height: 100%;
     overflow: visible;
+    filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.3));
 }
 
+/* Login Card Box Styling */
 .login-card-box {
     width: 420px;
     max-width: 90vw;
-    min-height: 480px; /* Matching height with student */
+    min-height: 480px;
     z-index: 1;
     background: #ffffff;
     border-radius: 24px !important;
@@ -2183,20 +2193,25 @@ body.modal-open {
     flex-direction: column;
     justify-content: center;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4) !important;
+    transition: box-shadow 0.3s ease;
+}
+
+.login-card-box:hover {
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5) !important;
 }
 
 /* RESPONSIVE LAYOUT FOR MOBILE DEVICES */
 @media (max-width: 768px) {
     .walk-and-drag-assembly {
-        flex-direction: row !important; /* Keep side-by-side like video */
+        flex-direction: row !important;
         align-items: flex-end !important;
         width: 100%;
     }
 
     .student-3d-container {
-        width: 140px !important;
-        height: 340px !important; /* Scaled down proportionally for mobile */
-        margin-right: -30px !important;
+        width: 150px !important;
+        height: 340px !important;
+        margin-right: -32px !important;
     }
 
     .login-card-box {
@@ -2205,7 +2220,81 @@ body.modal-open {
         padding: 15px !important;
     }
 
-    .login-card-box input, .login-card-box button {
+    .login-card-box input,
+    .login-card-box button {
         font-size: 0.9rem !important;
+    }
+
+    .login-card-box h2 {
+        font-size: 1.1rem !important;
+    }
+
+    .login-card-box p {
+        font-size: 0.8rem !important;
+    }
+
+    @keyframes studentWalkAndDrag {
+        0% {
+            transform: translateX(-140vw) rotate(-3deg);
+            opacity: 0;
+        }
+        12% { opacity: 1; }
+        30% { transform: translateX(-70vw) translateY(-8px) rotate(1.5deg); }
+        50% { transform: translateX(-35vw) translateY(0px) rotate(-1.2deg); }
+        68% { transform: translateX(-14vw) translateY(-4px) rotate(0.8deg); }
+        82% { transform: translateX(-3vw) translateY(0px) rotate(-0.3deg); }
+        93% { transform: translateX(1vw) translateY(-1px) rotate(0.1deg); }
+        100% {
+            transform: translateX(0) rotate(0deg);
+            opacity: 1;
+        }
+    }
+
+    .student-3d-container {
+        animation: naturalWalkingGaitMobile 0.48s infinite alternate ease-in-out;
+    }
+
+    @keyframes naturalWalkingGaitMobile {
+        0% { transform: translateY(0px) rotate(-0.8deg); }
+        50% { transform: translateY(-5px) rotate(0.8deg); }
+        100% { transform: translateY(0px) rotate(-0.8deg); }
+    }
+}
+
+/* SMALL MOBILE DEVICES */
+@media (max-width: 480px) {
+    .student-3d-container {
+        width: 120px !important;
+        height: 280px !important;
+        margin-right: -25px !important;
+    }
+
+    .login-card-box {
+        width: 240px !important;
+        min-height: 300px !important;
+        padding: 12px !important;
+    }
+
+    .login-card-box h2 {
+        font-size: 0.95rem !important;
+    }
+
+    .login-card-box input,
+    .login-card-box button {
+        font-size: 0.8rem !important;
+        padding: 0.5rem 0.75rem !important;
+    }
+}
+
+/* ACCESSIBILITY: REDUCED MOTION */
+@media (prefers-reduced-motion: reduce) {
+    .walk-and-drag-assembly {
+        animation: none !important;
+        transform: translateX(0) !important;
+        opacity: 1 !important;
+    }
+
+    .student-3d-container {
+        animation: none !important;
     }
 }

@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#1565C0">
-    <link rel="manifest" href="./manifest.json?v=1.8.76">
+    <link rel="manifest" href="./manifest.json?v=2.0.0">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.8.76">
+    <link rel="stylesheet" href="style.css?v=2.0.0">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
@@ -111,78 +111,170 @@
                 <div class="student-3d-container" id="studentCharacter">
                     <svg class="student-3d-svg" viewBox="0 0 260 520" xmlns="http://www.w3.org/2000/svg">
                         <defs>
+                            <!-- 3D Gradient Definitions -->
                             <linearGradient id="shirt3d" x1="0%" y1="0%" x2="100%" y2="100%">
                                 <stop offset="0%" stop-color="#ffffff" />
-                                <stop offset="70%" stop-color="#e2e8f0" />
-                                <stop offset="100%" stop-color="#cbd5e1" />
+                                <stop offset="65%" stop-color="#e8edf5" />
+                                <stop offset="100%" stop-color="#d0d9e8" />
+                            </linearGradient>
+                            <linearGradient id="shirtShadow" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="rgba(0,0,0,0.08)" />
+                                <stop offset="30%" stop-color="rgba(0,0,0,0)" />
+                                <stop offset="70%" stop-color="rgba(0,0,0,0)" />
+                                <stop offset="100%" stop-color="rgba(0,0,0,0.12)" />
                             </linearGradient>
                             <linearGradient id="pant3d" x1="0%" y1="0%" x2="100%" y2="100%">
                                 <stop offset="0%" stop-color="#1e3a8a" />
+                                <stop offset="50%" stop-color="#1e2d6e" />
                                 <stop offset="100%" stop-color="#0f172a" />
                             </linearGradient>
                             <linearGradient id="skin3d" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#fed7aa" />
-                                <stop offset="100%" stop-color="#f97316" stop-opacity="0.8" />
+                                <stop offset="0%" stop-color="#fde3c8" />
+                                <stop offset="45%" stop-color="#f5c9a8" />
+                                <stop offset="100%" stop-color="#e8ad85" />
                             </linearGradient>
-                            <filter id="shadow3d" x="-20%" y="-20%" width="140%" height="140%">
-                                <feDropShadow dx="3" dy="10" stdDeviation="8" flood-color="#000000" flood-opacity="0.45"/>
+                            <linearGradient id="skinFace" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#fde3c8" />
+                                <stop offset="50%" stop-color="#f7d2b5" />
+                                <stop offset="100%" stop-color="#eec19e" />
+                            </linearGradient>
+                            <linearGradient id="tieGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#3b82f6" />
+                                <stop offset="50%" stop-color="#2563eb" />
+                                <stop offset="100%" stop-color="#1d4ed8" />
+                            </linearGradient>
+                            <linearGradient id="capGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#2563eb" />
+                                <stop offset="50%" stop-color="#1d4ed8" />
+                                <stop offset="100%" stop-color="#1e3a8a" />
+                            </linearGradient>
+                            <linearGradient id="backpackGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#1e293b" />
+                                <stop offset="50%" stop-color="#0f172a" />
+                                <stop offset="100%" stop-color="#020617" />
+                            </linearGradient>
+                            <linearGradient id="shoeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#1e293b" />
+                                <stop offset="100%" stop-color="#020617" />
+                            </linearGradient>
+                            <filter id="shadow3d" x="-30%" y="-30%" width="160%" height="160%">
+                                <feDropShadow dx="3" dy="10" stdDeviation="10" flood-color="#000000" flood-opacity="0.5"/>
+                            </filter>
+                            <filter id="innerShadow" x="-10%" y="-10%" width="120%" height="120%">
+                                <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur"/>
+                                <feOffset dx="1" dy="2" result="offsetBlur"/>
+                                <feComposite in="SourceGraphic" in2="offsetBlur" operator="over"/>
                             </filter>
                         </defs>
 
                         <!-- Realistic Ground Shadow -->
-                        <ellipse cx="130" cy="500" rx="90" ry="14" fill="rgba(0,0,0,0.4)" />
+                        <ellipse cx="130" cy="498" rx="95" ry="12" fill="rgba(0,0,0,0.45)" />
+                        <ellipse cx="130" cy="498" rx="60" ry="8" fill="rgba(0,0,0,0.25)" />
 
                         <!-- Main 3D Student Body Group -->
                         <g filter="url(#shadow3d)">
-                            <!-- Backpack (Behind Student) -->
-                            <rect x="50" y="140" width="45" height="120" rx="15" fill="#0f172a" />
-                            <path d="M 60 160 L 60 230" stroke="#2563eb" stroke-width="6" stroke-linecap="round" />
 
-                            <!-- 3D Shoes -->
-                            <path class="left-foot" d="M 70 470 Q 50 475 45 490 L 105 490 Q 110 475 95 470 Z" fill="#020617" />
-                            <path class="right-foot" d="M 155 470 Q 145 475 140 490 L 195 490 Q 200 475 185 470 Z" fill="#0f172a" />
+                            <!-- ===== BACKPACK (Behind Student) ===== -->
+                            <rect x="45" y="135" width="50" height="125" rx="14" fill="url(#backpackGrad)" />
+                            <rect x="52" y="145" width="36" height="105" rx="10" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-opacity="0.6" />
+                            <path d="M 58 165 L 58 235" stroke="#2563eb" stroke-width="5" stroke-linecap="round" stroke-opacity="0.7" />
+                            <path d="M 82 165 L 82 235" stroke="#2563eb" stroke-width="5" stroke-linecap="round" stroke-opacity="0.7" />
+                            <!-- Backpack side pocket -->
+                            <rect x="42" y="190" width="12" height="35" rx="5" fill="#1e293b" />
 
-                            <!-- Trousers with Walking Gait Curves -->
-                            <path d="M 68 270 L 108 270 L 102 475 L 64 475 Z" fill="url(#pant3d)" />
-                            <path d="M 148 270 L 188 270 L 192 475 L 152 475 Z" fill="url(#pant3d)" />
+                            <!-- ===== 3D SHOES ===== -->
+                            <!-- Left Shoe -->
+                            <path class="left-foot" d="M 68 468 Q 48 474 43 490 L 103 490 Q 108 474 93 468 Z" fill="url(#shoeGrad)" />
+                            <path d="M 45 488 L 100 488" stroke="#334155" stroke-width="2" stroke-linecap="round" />
+                            <!-- Right Shoe -->
+                            <path class="right-foot" d="M 153 468 Q 143 474 138 490 L 193 490 Q 198 474 183 468 Z" fill="url(#shoeGrad)" />
+                            <path d="M 140 488 L 190 488" stroke="#334155" stroke-width="2" stroke-linecap="round" />
 
-                            <!-- Belt & Buckle -->
-                            <rect x="68" y="258" width="120" height="15" rx="3" fill="#0f172a" />
-                            <rect x="118" y="255" width="20" height="21" rx="3" fill="#fbbf24" stroke="#d97706" stroke-width="2" />
+                            <!-- ===== TROUSERS WITH NATURAL GAIT CURVES ===== -->
+                            <!-- Left Leg -->
+                            <path d="M 66 268 L 106 268 L 100 473 L 62 473 Z" fill="url(#pant3d)" />
+                            <path d="M 70 275 L 100 275" stroke="rgba(255,255,255,0.06)" stroke-width="2" />
+                            <!-- Right Leg -->
+                            <path d="M 146 268 L 186 268 L 190 473 L 150 473 Z" fill="url(#pant3d)" />
+                            <path d="M 150 275 L 182 275" stroke="rgba(255,255,255,0.06)" stroke-width="2" />
 
-                            <!-- 3D School Uniform Shirt -->
-                            <path d="M 58 115 Q 128 100 198 115 L 188 260 L 68 260 Z" fill="url(#shirt3d)" stroke="#94a3b8" stroke-width="1.5" />
+                            <!-- ===== BELT & BUCKLE ===== -->
+                            <rect x="66" y="256" width="122" height="16" rx="3" fill="#0f172a" />
+                            <rect x="116" y="253" width="22" height="22" rx="3" fill="#fbbf24" stroke="#d97706" stroke-width="2.5" />
+                            <rect x="122" y="259" width="10" height="10" rx="2" fill="#f59e0b" />
 
-                            <!-- Tie & Collar -->
-                            <polygon points="128,130 116,155 128,235 140,155" fill="#2563eb" />
-                            <polygon points="120,122 136,122 132,132 124,132" fill="#1d4ed8" />
-                            <path d="M 98 115 L 128 130 L 110 140 Z" fill="#f8fafc" />
-                            <path d="M 158 115 L 128 130 L 146 140 Z" fill="#cbd5e1" />
+                            <!-- ===== 3D SCHOOL UNIFORM SHIRT ===== -->
+                            <path d="M 56 112 Q 128 96 200 112 L 190 258 L 66 258 Z" fill="url(#shirt3d)" stroke="#94a3b8" stroke-width="1.2" />
+                            <!-- Shirt shadow overlay -->
+                            <path d="M 56 112 Q 128 96 200 112 L 190 258 L 66 258 Z" fill="url(#shirtShadow)" />
+                            <!-- Shirt collar area highlight -->
+                            <path d="M 100 115 L 128 128 L 156 115" stroke="rgba(255,255,255,0.5)" stroke-width="2" fill="none" />
 
-                            <!-- Dragging Right Arm (Pulling the Card Rope/Edge) -->
-                            <path class="dragging-arm" d="M 190 125 Q 240 160 245 220 L 225 222 Q 215 170 178 140 Z" fill="url(#shirt3d)" />
+                            <!-- ===== TIE & COLLAR ===== -->
+                            <!-- Tie -->
+                            <polygon points="128,128 115,155 128,238 141,155" fill="url(#tieGrad)" />
+                            <polygon points="128,128 122,142 128,160 134,142" fill="#3b82f6" opacity="0.5" />
+                            <!-- Tie knot -->
+                            <polygon points="120,120 136,120 132,131 124,131" fill="#1d4ed8" />
+                            <!-- Collar left -->
+                            <path d="M 96 112 L 128 128 L 108 140 Z" fill="#f8fafc" stroke="#cbd5e1" stroke-width="0.8" />
+                            <!-- Collar right -->
+                            <path d="M 160 112 L 128 128 L 148 140 Z" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="0.8" />
+
+                            <!-- ===== DRAGGING RIGHT ARM (Pulling the Card Edge) ===== -->
+                            <path class="dragging-arm" d="M 192 122 Q 242 158 248 220 L 228 223 Q 218 168 180 138 Z" fill="url(#shirt3d)" stroke="#94a3b8" stroke-width="0.8" />
+                            <!-- Shirt sleeve cuff -->
+                            <ellipse cx="238" cy="218" rx="10" ry="8" fill="#e2e8f0" transform="rotate(-15 238 218)" />
                             <!-- Hand gripping Login Card edge -->
-                            <circle cx="240" cy="225" r="14" fill="url(#skin3d)" />
+                            <circle cx="244" cy="224" r="14" fill="url(#skin3d)" />
+                            <!-- Fingers suggestion -->
+                            <path d="M 252 216 Q 258 220 256 226" stroke="#d4a574" stroke-width="2" fill="none" stroke-linecap="round" />
+                            <path d="M 250 220 Q 256 223 254 228" stroke="#d4a574" stroke-width="2" fill="none" stroke-linecap="round" />
 
-                            <!-- Left Arm (Natural Swing) -->
-                            <path class="swinging-arm" d="M 65 125 Q 35 170 42 230 L 58 225 Q 50 175 78 140 Z" fill="url(#shirt3d)" />
-                            <circle cx="48" cy="232" r="12" fill="url(#skin3d)" />
+                            <!-- ===== LEFT ARM (Natural Swing) ===== -->
+                            <path class="swinging-arm" d="M 64 122 Q 32 168 40 228 L 56 223 Q 48 172 76 138 Z" fill="url(#shirt3d)" stroke="#94a3b8" stroke-width="0.8" />
+                            <!-- Sleeve cuff -->
+                            <ellipse cx="48" cy="226" rx="9" ry="7" fill="#e2e8f0" transform="rotate(10 48 226)" />
+                            <circle cx="46" cy="230" r="12" fill="url(#skin3d)" />
 
-                            <!-- Neck & Head -->
-                            <rect x="115" y="98" width="26" height="22" fill="url(#skin3d)" rx="5" />
-                            <path d="M 92 56 C 92 28, 164 28, 164 56 C 164 88, 92 88, 92 56 Z" fill="url(#skin3d)" />
+                            <!-- ===== NECK & HEAD ===== -->
+                            <rect x="114" y="96" width="28" height="22" rx="6" fill="url(#skin3d)" />
+                            <!-- Head shape (natural, slightly rounded) -->
+                            <path d="M 90 55 C 90 26, 166 26, 166 55 C 166 86, 90 86, 90 55 Z" fill="url(#skinFace)" />
+                            <!-- Ear left -->
+                            <ellipse cx="90" cy="58" rx="6" ry="9" fill="#eec19e" />
+                            <!-- Ear right -->
+                            <ellipse cx="166" cy="58" rx="6" ry="9" fill="#eec19e" />
 
-                            <!-- 3D Eyes & Friendly Expression -->
-                            <ellipse cx="116" cy="62" rx="5" ry="6" fill="#020617" />
-                            <ellipse cx="142" cy="62" rx="5" ry="6" fill="#020617" />
-                            <circle cx="118" cy="60" r="2" fill="#ffffff" />
-                            <circle cx="144" cy="60" r="2" fill="#ffffff" />
-                            <path d="M 116 78 Q 129 88 142 78" stroke="#dc2626" stroke-width="3.5" fill="none" stroke-linecap="round" />
+                            <!-- ===== NATURAL FACIAL FEATURES ===== -->
+                            <!-- Eyebrows -->
+                            <path d="M 106 48 Q 114 44 122 48" stroke="#3d2b1f" stroke-width="3" fill="none" stroke-linecap="round" />
+                            <path d="M 134 48 Q 142 44 150 48" stroke="#3d2b1f" stroke-width="3" fill="none" stroke-linecap="round" />
+                            <!-- Eyes (natural, friendly) -->
+                            <ellipse cx="114" cy="60" rx="5.5" ry="6.5" fill="#1e293b" />
+                            <ellipse cx="142" cy="60" rx="5.5" ry="6.5" fill="#1e293b" />
+                            <!-- Eye highlights -->
+                            <circle cx="116" cy="57" r="2.2" fill="#ffffff" />
+                            <circle cx="144" cy="57" r="2.2" fill="#ffffff" />
+                            <!-- Nose (subtle) -->
+                            <path d="M 128 63 Q 126 72 128 75" stroke="#d4a574" stroke-width="2" fill="none" stroke-linecap="round" />
+                            <!-- Friendly smile -->
+                            <path d="M 114 80 Q 128 90 142 80" stroke="#c0392b" stroke-width="3.5" fill="none" stroke-linecap="round" />
+                            <!-- Cheek blush -->
+                            <ellipse cx="102" cy="74" rx="8" ry="5" fill="#f4a4a4" opacity="0.35" />
+                            <ellipse cx="154" cy="74" rx="8" ry="5" fill="#f4a4a4" opacity="0.35" />
 
-                            <!-- Student Cap -->
-                            <path d="M 88 48 Q 128 18 168 48 Z" fill="#1d4ed8" />
-                            <path d="M 78 48 Q 128 38 178 48 Q 150 60 78 48 Z" fill="#1e40af" />
-                            <circle cx="128" cy="22" r="6" fill="#fbbf24" />
+                            <!-- ===== STUDENT CAP ===== -->
+                            <!-- Cap dome -->
+                            <path d="M 86 46 Q 128 14 170 46 Z" fill="url(#capGrad)" />
+                            <!-- Cap brim -->
+                            <path d="M 76 46 Q 128 36 180 46 Q 152 58 76 46 Z" fill="#1e40af" />
+                            <!-- Cap band -->
+                            <rect x="84" y="42" width="88" height="5" rx="2" fill="#1d4ed8" opacity="0.6" />
+                            <!-- Cap button on top -->
+                            <circle cx="128" cy="20" r="7" fill="#fbbf24" stroke="#d97706" stroke-width="1.5" />
+                            <!-- Cap front emblem -->
+                            <circle cx="128" cy="38" r="5" fill="#fbbf24" stroke="#d97706" stroke-width="1" />
                         </g>
                     </svg>
                 </div>
@@ -1236,6 +1328,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.8.76"></script>
+<script type="module" src="app.js?v=2.0.0"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.76";
+const APP_VERSION = "2.0.0";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -2652,13 +2652,21 @@ window.submitCartOrder = function() {
 
 // ==================== MAIN LIFECYCLE ====================
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("App Initialized v1.8.76");
+    console.log("App Initialized v2.0.0");
     window.initStationeryRain();
     window.updateFcmUIStatus();
     window.loadCartFromStorage();
     seedDefaultCategoriesIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
+
+    const assembly = document.getElementById('interactiveAssembly');
+    if (assembly) {
+        setTimeout(() => {
+            console.log("Entrance animation completed. Assembly locked in center.");
+            assembly.classList.add('animation-complete');
+        }, 3200);
+    }
 
     const loginForm = document.getElementById('login-form');
     if (loginForm) {
