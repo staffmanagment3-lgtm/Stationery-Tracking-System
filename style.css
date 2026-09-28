@@ -2098,4 +2098,88 @@ body.modal-open {
     padding: 6px 14px !important;
     font-weight: 700 !important;
 }
+
+/* Teacher Dashboard Filter Bar & Focus Styling v1.8.72 */
+.teacher-filter-bar {
+    border-radius: 12px !important;
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+}
+
+#teacherSearchInput:focus, #teacherCategoryFilter:focus {
+    border-color: #2563eb !important;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+}
+
+/* Animated School Student Character Login Entrance v1.8.73 */
+.login-page-wrapper {
+    width: 100%;
+    min-height: 80vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 20px 0;
+}
+
+/* Initial Entrance Animation: Pulling Login Card from side */
+.slide-in-assembly {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: -15px;
+    animation: pullCardFromSide 1.2s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes pullCardFromSide {
+    0% {
+        transform: translateX(100vw); /* Start off-screen right */
+        opacity: 0;
+    }
+    70% {
+        transform: translateX(-10px); /* Slightly over-pulls for realistic weight effect */
+        opacity: 1;
+    }
+    100% {
+        transform: translateX(0); /* Settle in place */
+        opacity: 1;
+    }
+}
+
+.student-character-box {
+    z-index: 2;
+    margin-right: -25px; /* Overlap character hand with login card edge */
+    margin-bottom: -10px;
+    transition: all 0.3s ease;
+}
+
+.login-card-container {
+    width: 380px;
+    max-width: 90vw;
+    background: #ffffff;
+    border-radius: 16px !important;
+    z-index: 1;
+}
+
+/* Mobile Responsive Adjustments */
+@media (max-width: 576px) {
+    .slide-in-assembly {
+        flex-direction: column;
+        align-items: center;
+        gap: -20px;
+    }
+
+    .student-character-box {
+        margin-right: 0;
+        margin-bottom: -30px; /* Position above login card on mobile */
+    }
+
+    .student-character-box dotlottie-player {
+        width: 130px !important;
+        height: 130px !important;
+    }
+
+    .login-card-container {
+        width: 100%;
+    }
 }

@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.70";
+const APP_VERSION = "1.8.73";
 
 // Complete 27 Category List
 const ALL_STATIONERY_CATEGORIES = [
@@ -2265,11 +2265,7 @@ window.safeShowView = function(viewIdToShow) {
 };
 
 window.addEventListener('error', function(e) {
-    console.error("Global JS Error caught:", e.error);
-    const userView = $('user-view-container');
-    if (userView && (userView.classList.contains('d-none') || userView.style.display === 'none')) {
-        window.safeShowView('user-view-container');
-    }
+    console.error("Global JS Error caught:", e.error || e.message);
 });
 
 // ==================== CATEGORIES ====================
@@ -2656,13 +2652,30 @@ window.submitCartOrder = function() {
 
 // ==================== MAIN LIFECYCLE ====================
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("App Initialized");
+    console.log("App Initialized v1.8.73");
     window.initStationeryRain();
     window.updateFcmUIStatus();
     window.loadCartFromStorage();
     seedDefaultCategoriesIfEmpty();
     initDriveConnector();
     listenAndPopulateCategories();
+
+    const lottiePlayer = document.getElementById('studentCharacterLottie');
+    if (lottiePlayer) {
+        setTimeout(() => {
+            console.log("Login Card Entrance Complete - Student resting on card");
+        }, 1200);
+
+        const passwordInput = document.getElementById('login-password');
+        if (passwordInput) {
+            passwordInput.addEventListener('focus', () => {
+                if (typeof lottiePlayer.setSpeed === 'function') lottiePlayer.setSpeed(1.2);
+            });
+            passwordInput.addEventListener('blur', () => {
+                if (typeof lottiePlayer.setSpeed === 'function') lottiePlayer.setSpeed(1);
+            });
+        }
+    }
 
     const loginForm = document.getElementById('login-form');
     if (loginForm) {
@@ -3085,6 +3098,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function listenForNewOrders() {
     addListener(ref(db, 'orders'), (snapshot) => {
         const data = snapshot.val() || {};
+        window.masterOrdersList = Object.values(data);
         const pendingCount = Object.values(data).filter(o => o.status === 'Pending Approval').length;
         const badge = $('notif-badge');
         if (badge) {
@@ -3101,6 +3115,14 @@ function listenForNewOrders() {
                 }
             }
         });
+
+        // CRITICAL FIX: Only update UI belonging to CURRENT ACTIVE SCREEN
+        const activeRole = (window.currentActiveRole || sessionStorage.getItem('activeRole') || '').toLowerCase();
+        if (activeRole === 'admin' || activeRole === 'developer' || activeRole === 'super_admin') {
+            if (typeof fetchAdminOrders === 'function') fetchAdminOrders();
+        } else if (activeRole === 'teacher') {
+            if (typeof renderTeacherOrderHistory === 'function') renderTeacherOrderHistory();
+        }
     });
 }
 
@@ -3146,6 +3168,11 @@ function renderNotificationList() {
 
 // ==================== ROLE / DASHBOARD ====================
 window.renderDashboardForRole = function(userRole, adecNumber) {
+    const roleUpper = String(userRole).toUpperCase();
+    const roleLower = String(userRole).toLowerCase();
+    window.currentActiveRole = roleLower;
+    sessionStorage.setItem('activeRole', roleLower);
+
     document.querySelectorAll('.view, .dashboard-view').forEach(container => {
         container.classList.remove('active');
         container.classList.add('d-none');
@@ -3161,7 +3188,6 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
         sidebar.classList.remove('open');
     }
 
-    const roleUpper = String(userRole).toUpperCase();
     if ($('admin-menu')) $('admin-menu').style.display = (roleUpper === 'ADMIN' || roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') ? 'flex' : 'none';
     if ($('teacher-menu')) $('teacher-menu').style.display = roleUpper === 'TEACHER' ? 'flex' : 'none';
 
@@ -3462,24 +3488,89 @@ function getItemTotalAvailableStock(item) {
 }
 window.getItemTotalAvailableStock = getItemTotalAvailableStock;
 
-function renderTeacherCatalog() {
+function populateTeacherCategoryDropdown() {
+    const categorySelect = document.getElementById('teacherCategoryFilter');
+    if (!categorySelect) return;
+
     const rawInventory = (window.masterInventoryList && window.masterInventoryList.length > 0)
         ? window.masterInventoryList
         : getFlatInventoryList();
-    const groupedCatalog = {};
 
-    const term = (catalogState.searchTerm || '').toLowerCase().trim();
+    const categoriesSet = new Set();
+    rawInventory.forEach(item => {
+        if (item && item.category && item.category.trim()) {
+            categoriesSet.add(item.category.trim());
+        }
+    });
+
+    if (Array.isArray(ALL_STATIONERY_CATEGORIES)) {
+        ALL_STATIONERY_CATEGORIES.forEach(cat => {
+            if (cat && cat.trim()) categoriesSet.add(cat.trim());
+        });
+    }
+
+    const categories = Array.from(categoriesSet).sort();
+    const currentSelection = categorySelect.value || 'ALL';
+
+    let optionsHTML = '<option value="ALL">📁 All Categories</option>';
+    categories.forEach(cat => {
+        optionsHTML += `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`;
+    });
+
+    categorySelect.innerHTML = optionsHTML;
+    categorySelect.value = currentSelection;
+}
+window.populateTeacherCategoryDropdown = populateTeacherCategoryDropdown;
+
+function filterTeacherCatalog() {
+    renderTeacherCatalog();
+}
+window.filterTeacherCatalog = filterTeacherCatalog;
+
+function resetTeacherFilters() {
+    const searchInput = document.getElementById('teacherSearchInput') || document.getElementById('stationery-search');
+    const categorySelect = document.getElementById('teacherCategoryFilter');
+    if (searchInput) searchInput.value = '';
+    if (categorySelect) categorySelect.value = 'ALL';
+    catalogState.searchTerm = '';
+    renderTeacherCatalog();
+}
+window.resetTeacherFilters = resetTeacherFilters;
+
+function renderTeacherCatalog() {
+    populateTeacherCategoryDropdown();
+
+    const rawInventory = (window.masterInventoryList && window.masterInventoryList.length > 0)
+        ? window.masterInventoryList
+        : getFlatInventoryList();
+
+    const searchInput = document.getElementById('teacherSearchInput') || document.getElementById('stationery-search');
+    const categorySelect = document.getElementById('teacherCategoryFilter');
+
+    const searchKeyword = (searchInput?.value || catalogState.searchTerm || '').toLowerCase().trim();
+    const selectedCategory = (categorySelect?.value || 'ALL').trim();
+
+    const groupedCatalog = {};
 
     rawInventory.forEach(item => {
         const sn = (item.serialNumber || item.batchNo || '').toString().trim();
         const itemName = item.itemName || item.name || '';
         const category = item.category || 'General';
+        const brand = item.brand || item.manufacturer || 'Standard';
 
-        if (term) {
-            const matches = itemName.toLowerCase().includes(term) ||
-                            category.toLowerCase().includes(term) ||
-                            (item.brand || '').toLowerCase().includes(term) ||
-                            sn.toLowerCase().includes(term);
+        // Category Filter match
+        if (selectedCategory !== 'ALL') {
+            if (category.toLowerCase() !== selectedCategory.toLowerCase()) {
+                return;
+            }
+        }
+
+        // Search Keyword match
+        if (searchKeyword) {
+            const matches = itemName.toLowerCase().includes(searchKeyword) ||
+                            category.toLowerCase().includes(searchKeyword) ||
+                            brand.toLowerCase().includes(searchKeyword) ||
+                            sn.toLowerCase().includes(searchKeyword);
             if (!matches) return;
         }
 
@@ -3503,7 +3594,7 @@ function renderTeacherCatalog() {
                 category: category,
                 serialNumber: sn || 'N/A',
                 imageUrl: item.imageUrl || item.photo || item.image || FALLBACK_IMG,
-                brand: item.brand || item.manufacturer || 'Standard',
+                brand: brand || 'Standard',
                 unit: item.unit || 'Pcs',
                 color: item.color || '',
                 totalAvailableStock: Math.max(0, itemStock),
@@ -3528,7 +3619,13 @@ function renderTeacherCatalog() {
 
     const products = Object.values(groupedCatalog);
     if (products.length === 0) {
-        catalogContainer.innerHTML = '<div class="col-12 text-center text-muted p-5 bg-light rounded border w-100"><p class="mb-0">No stationery items found.</p></div>';
+        catalogContainer.innerHTML = `
+            <div class="col-12 text-center py-5 bg-light rounded border w-100 my-3">
+                <div class="fs-1">📦</div>
+                <h6 class="fw-bold text-muted mt-2">No matching items found</h6>
+                <p class="small text-secondary mb-3">Try changing the category filter or search keywords.</p>
+                <button class="btn btn-sm btn-primary fw-bold px-3 py-2" onclick="window.resetTeacherFilters()">Show All Items</button>
+            </div>`;
         return;
     }
 
@@ -3566,6 +3663,7 @@ function renderTeacherCatalog() {
             </div>`;
         catalogContainer.insertAdjacentHTML('beforeend', cardHTML);
     });
+}
 }
 window.renderTeacherCatalog = renderTeacherCatalog;
 
