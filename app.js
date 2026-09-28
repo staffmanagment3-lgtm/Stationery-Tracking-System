@@ -2459,22 +2459,22 @@ window.renderCartModalItems = function() {
     let html = '<ul class="list-group list-group-flush">';
     cart.forEach((item, index) => {
         const unitLabel = item.unit || 'Pcs';
-        html += `<li class="list-group-item d-flex justify-content-between align-items-center py-3">
+        html += `<li class="list-group-item d-flex justify-content-between align-items-center py-3 flex-wrap gap-2">
             <div class="d-flex align-items-center gap-3">
-                <img src="${item.imageUrl || item.image || FALLBACK_IMG}" style="width: 50px; height: 50px; object-fit: contain;" class="rounded border">
+                <img src="${item.imageUrl || item.image || FALLBACK_IMG}" class="cart-item-img" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">
                 <div>
-                    <h6 class="mb-0 fw-bold">${item.itemName || 'Stationery Item'}</h6>
-                    <small class="text-muted">SN: ${item.serialNumber || 'N/A'}</small>
+                    <h6 class="mb-0 fw-bold text-dark">${escapeHtml(item.itemName || 'Stationery Item')}</h6>
+                    <small class="text-muted">SN: ${escapeHtml(item.serialNumber || 'N/A')}</small>
                 </div>
             </div>
-            <div class="d-flex align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2 ms-auto">
                 <div class="qty-counter-container">
                     <button class="btn btn-outline-secondary btn-sm fw-bold" style="width: 32px; height: 32px; padding: 0;" onclick="window.updateCartQty(${index}, -1)">-</button>
-                    <input type="text" class="qty-counter-input" value="${item.requestQuantity || 1}" readonly>
+                    <input type="text" class="cart-qty-input qty-counter-input" value="${item.requestQuantity || 1}" readonly>
                     <button class="btn btn-outline-secondary btn-sm fw-bold" style="width: 32px; height: 32px; padding: 0;" onclick="window.updateCartQty(${index}, 1)">+</button>
                 </div>
-                <span class="fw-bold small text-muted me-2">${unitLabel}</span>
-                <button class="btn btn-outline-danger btn-sm" onclick="window.removeFromCart(${index})">🗑️</button>
+                <span class="fw-bold small text-muted me-2">${escapeHtml(unitLabel)}</span>
+                <button class="btn btn-outline-danger btn-sm" onclick="window.removeFromCart(${index})" title="Remove item">🗑️</button>
             </div>
         </li>`;
     });
@@ -2482,6 +2482,49 @@ window.renderCartModalItems = function() {
 
     container.innerHTML = html;
 };
+
+function makeModalDraggable(modalHeaderId, modalDialogId) {
+    const header = document.getElementById(modalHeaderId);
+    const dialog = document.querySelector(modalDialogId);
+    if (!header || !dialog) return;
+
+    let isDragging = false, startX, startY, initialLeft, initialTop;
+
+    header.onmousedown = function(e) {
+        if (window.innerWidth < 768) return; // Disable drag on small touch screens
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+
+        const rect = dialog.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        dialog.style.position = 'fixed';
+        dialog.style.margin = '0';
+        dialog.style.left = initialLeft + 'px';
+        dialog.style.top = initialTop + 'px';
+
+        document.onmousemove = function(e) {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            dialog.style.left = (initialLeft + dx) + 'px';
+            dialog.style.top = (initialTop + dy) + 'px';
+        };
+
+        document.onmouseup = function() {
+            isDragging = false;
+            document.onmousemove = null;
+            document.onmouseup = null;
+        };
+    };
+}
+window.makeModalDraggable = makeModalDraggable;
+
+document.getElementById('cartModal')?.addEventListener('shown.bs.modal', function () {
+    makeModalDraggable('cartModalHeader', '#cartModal .modal-dialog');
+});
 
 window.openCartModal = function(e) {
     if (e) {
@@ -3470,7 +3513,9 @@ function renderTeacherCatalog() {
         const cardHTML = `
             <div class="col-md-4 mb-3">
                 <div class="card h-100 shadow-sm border-0" style="border-radius: 12px; overflow: hidden; background: #fff; border: 1px solid #e2e8f0;">
-                    <img src="${product.imageUrl || FALLBACK_IMG}" class="card-img-top p-2" style="height: 180px; object-fit: contain; background: #f8f9fa;" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">
+                    <div class="product-card-img-container">
+                        <img src="${product.imageUrl || FALLBACK_IMG}" class="product-card-img" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">
+                    </div>
                     <div class="card-body d-flex flex-column p-3">
                         <div class="d-flex flex-wrap gap-1 mb-1">
                             <span class="badge bg-secondary align-self-start" style="font-size: 0.75rem;">${escapeHtml(product.category)}</span>

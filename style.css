@@ -1964,3 +1964,68 @@ body.modal-open {
     -webkit-appearance: none;
     margin: 0;
 }
+
+/* Draggable Modal Header Cursor & Responsive Cart Sizing v1.8.68 */
+.cursor-move {
+    cursor: move !important;
+    user-select: none;
+}
+
+@media (min-width: 992px) {
+    #cartModal .modal-dialog {
+        max-width: 700px !important; /* Larger display on PC */
+    }
+}
+
+@media (max-width: 576px) {
+    #cartModal .modal-dialog {
+        margin: 10px;
+        max-width: 100% !important;
+    }
+}
+
+/* Expanded Quantity Input Field v1.8.68 */
+.cart-qty-input {
+    width: 65px !important;
+    min-width: 60px !important;
+    text-align: center !important;
+    font-weight: bold !important;
+    font-size: 1.05rem !important;
+    padding: 4px 6px !important;
+    border: 1px solid #ced4da !important;
+    border-radius: 4px !important;
+    box-sizing: border-box !important;
+}
+
+/* Edge-to-Edge Responsive Image Fill v1.8.68 */
+.cart-item-img {
+    width: 70px !important;
+    height: 70px !important;
+    object-fit: cover !important; /* Fill frame cleanly without distortion */
+    border-radius: 8px !important;
+    border: 1px solid #dee2e6 !important;
+}
+
+.product-card-img-container {
+    width: 100% !important;
+    height: 200px !important; /* Fixed proportional height */
+    overflow: hidden !important;
+    background-color: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.product-card-img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important; /* Fill entire card image header edge-to-edge */
+    transition: transform 0.3s ease;
+}
+
+@media (max-width: 576px) {
+    .product-card-img-container {
+        height: 160px !important;
+    }
+}
+}
