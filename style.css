@@ -187,6 +187,48 @@ body {
     width: 100%;
     max-width: 420px;
     text-align: center;
+    animation: loginCardFadeIn 0.6s ease-out;
+}
+
+@keyframes loginCardFadeIn {
+    0% { opacity: 0; transform: translateY(18px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ==================== Login Security/UX Enhancements (v1.8.87) ==================== */
+.password-field-wrapper {
+    position: relative;
+}
+.input-group .password-field-wrapper input {
+    padding-right: 42px !important;
+}
+.password-toggle-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #7f8c8d;
+    cursor: pointer;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+}
+.password-toggle-btn:hover { color: #1565C0; }
+
+.forgot-password-link {
+    font-size: 0.8rem;
+    color: #1565C0;
+    text-decoration: none;
+}
+.forgot-password-link:hover { text-decoration: underline; }
+
+.login-lockout-message {
+    color: #c0392b;
+    font-weight: 600;
 }
 .login-logo {
   display: block;
@@ -1806,18 +1848,6 @@ body.modal-open {
     }
 
     .batch-inventory-table td:last-child {
-
-    .user-profile-badge .text-muted {
-        font-size: 9px !important;
-    }
-
-    .cart-btn-main, #cart-btn, .header-actions .btn-danger {
-        height: 32px !important;
-        min-height: 32px !important;
-        font-size: 0.75rem !important;
-        padding: 2px 8px !important;
-    }
-}
         border-bottom: none !important;
     }
 

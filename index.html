@@ -113,7 +113,15 @@
                 </div>
                 <div class="input-group">
                     <label for="login-password">Password</label>
-                    <input type="password" id="login-password" placeholder="أدخل كلمة المرور/Enter Password" required autocomplete="current-password">
+                    <div class="password-field-wrapper">
+                        <input type="password" id="login-password" placeholder="أدخل كلمة المرور/Enter Password" required autocomplete="current-password">
+                        <button type="button" id="toggle-password-visibility" class="password-toggle-btn" tabindex="-1" aria-label="Show password">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                    <div class="text-end mt-1">
+                        <a href="#" id="forgot-password-link" class="forgot-password-link" data-bs-toggle="modal" data-bs-target="#forgotPasswordModal">Forgot Password? / نسيت كلمة المرور؟</a>
+                    </div>
                 </div>
                 <button type="button" id="login-btn" onclick="window.handleUserLogin(event)" class="primary-btn">
                     Login to Dashboard
@@ -773,6 +781,26 @@
                     <div class="d-grid gap-2 mt-4">
                         <button type="button" id="enable-biometric-btn" class="btn btn-primary fw-bold py-2">Yes, Enable Now</button>
                         <button type="button" class="btn btn-light" data-bs-dismiss="modal">Maybe Later</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Forgot Password Info Modal (v1.8.87 - Login Security Enhancement) -->
+    <div class="modal fade" id="forgotPasswordModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header text-white" style="background-color: #1565C0;">
+                    <h5 class="modal-title fw-bold">🔑 Forgot Password?</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4 text-center">
+                    <i class="bi bi-shield-lock" style="font-size: 3rem; color: #1565C0;"></i>
+                    <p class="mt-3 mb-1 fw-bold">Please contact your School Administrator to reset your password.</p>
+                    <p class="text-muted" dir="rtl">يرجى التواصل مع مسؤول المدرسة لإعادة تعيين كلمة المرور.</p>
+                    <div class="d-grid gap-2 mt-4">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close / إغلاق</button>
                     </div>
                 </div>
             </div>

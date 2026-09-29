@@ -7,6 +7,77 @@ import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/fireb
 // Define Current App Version
 const APP_VERSION = "1.8.86";
 
+// ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
+// Locks the login form for a short cooldown after repeated failed attempts.
+// Purely additive — does not touch any existing auth/session/drive logic.
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 2 * 60 * 1000; // 2 minutes
+
+window.checkLoginLockout = function() {
+    const lockUntil = parseInt(localStorage.getItem('login_lock_until') || '0', 10);
+    const remainingMs = lockUntil - Date.now();
+    if (remainingMs > 0) {
+        return Math.ceil(remainingMs / 1000);
+    }
+    if (lockUntil) {
+        localStorage.removeItem('login_lock_until');
+        localStorage.removeItem('login_failed_attempts');
+    }
+    return 0;
+};
+
+window.registerFailedLoginAttempt = function() {
+    const attempts = (parseInt(localStorage.getItem('login_failed_attempts') || '0', 10)) + 1;
+    if (attempts >= LOGIN_MAX_ATTEMPTS) {
+        localStorage.setItem('login_lock_until', String(Date.now() + LOGIN_LOCKOUT_MS));
+        localStorage.setItem('login_failed_attempts', '0');
+        return LOGIN_LOCKOUT_MS / 1000;
+    }
+    localStorage.setItem('login_failed_attempts', String(attempts));
+    return 0;
+};
+
+window.clearLoginAttempts = function() {
+    localStorage.removeItem('login_failed_attempts');
+    localStorage.removeItem('login_lock_until');
+};
+
+// ==================== IDLE SESSION TIMEOUT (v1.8.87) ====================
+// Auto-logs out an inactive user after a period of no interaction, for security.
+// Purely additive — reuses existing session-clearing keys, does not alter login/drive logic.
+const IDLE_SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+let idleSessionTimer = null;
+
+window.startIdleSessionTimer = function() {
+    clearTimeout(idleSessionTimer);
+    idleSessionTimer = setTimeout(window.silentIdleLogout, IDLE_SESSION_TIMEOUT_MS);
+};
+
+window.silentIdleLogout = function() {
+    if (typeof currentUser === 'undefined' || !currentUser) return;
+    console.log("Session expired due to inactivity.");
+    try {
+        localStorage.removeItem('stationery_user_adec');
+        localStorage.removeItem('currentUserPass');
+        localStorage.removeItem('currentUserRole');
+        localStorage.removeItem('currentUserName');
+        localStorage.removeItem('teacherStationeryCart');
+        sessionStorage.removeItem('isAdminAuthenticated');
+        sessionStorage.clear();
+        if (typeof cleanupListeners === 'function') cleanupListeners();
+    } catch (e) { console.warn("Idle logout cleanup warning:", e); }
+    alert("⏱️ Session expired due to inactivity. Please login again.\n⏱️ انتهت الجلسة بسبب عدم النشاط. الرجاء تسجيل الدخول مرة أخرى.");
+    window.location.reload();
+};
+
+['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach(function(evt) {
+    document.addEventListener(evt, function() {
+        if (typeof currentUser !== 'undefined' && currentUser) {
+            window.startIdleSessionTimer();
+        }
+    }, { passive: true });
+});
+
 // Global Full-Screen Loader Helpers
 window.showGlobalLoader = function(message = "Processing, please wait...") {
     const loader = document.getElementById('globalLoader');
@@ -2243,13 +2314,24 @@ window.handleUserLogin = async function(event) {
     const passNumber = passInput.value.trim().toUpperCase();
     const password = passwordInput.value.trim();
 
+    const lockedSecondsRemaining = window.checkLoginLockout();
+    if (lockedSecondsRemaining > 0) {
+        if (loginError) {
+            loginError.classList.add('login-lockout-message');
+            loginError.textContent = `🔒 Too many failed attempts. Try again in ${lockedSecondsRemaining}s. / حاولت كثيرًا، حاول مرة أخرى بعد ${lockedSecondsRemaining} ثانية.`;
+        }
+        return;
+    }
+
     if (!passNumber || !password) {
-        alert("Please enter credentials.");
+        alert("⚠️ Please enter credentials.\n⚠️ يرجى إدخال بيانات الدخول.");
         return;
     }
 
     if (passNumber === "ASIF" && password === "Asif8013@#$") {
         console.log("Bypass Login Successful for Admin: Asif");
+        window.clearLoginAttempts();
+        localStorage.setItem('last_used_adec', 'Asif');
         sessionStorage.setItem('isAdminAuthenticated', 'true');
         currentUser = { role: 'ADMIN', name: 'Asif', uid: 'Asif', adecPassNumber: 'Asif' };
         localStorage.setItem('stationery_user_adec', 'Asif');
@@ -2268,7 +2350,7 @@ window.handleUserLogin = async function(event) {
 
     if (loginBtn) {
         loginBtn.disabled = true;
-        loginBtn.textContent = "Authenticating...";
+        loginBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Authenticating...';
     }
 
     try {
@@ -2297,6 +2379,8 @@ window.handleUserLogin = async function(event) {
 
             if (savedPassword === inputPassword) {
                 console.log("✅ On-Demand Login Successful for:", matchedKey);
+                window.clearLoginAttempts();
+                localStorage.setItem('last_used_adec', matchedKey);
                 localStorage.setItem('stationery_user_adec', matchedKey);
 
                 const role = userData.role || 'TEACHER';
@@ -2327,10 +2411,20 @@ window.handleUserLogin = async function(event) {
                     }
                 }
             } else {
-                alert("⚠️ Incorrect Password. Please try again.");
+                const lockSecs = window.registerFailedLoginAttempt();
+                if (lockSecs > 0) {
+                    alert(`🔒 Too many failed attempts. Login locked for ${Math.ceil(lockSecs/60)} minute(s).\n🔒 محاولات فاشلة كثيرة. تم قفل الدخول لمدة ${Math.ceil(lockSecs/60)} دقيقة.`);
+                } else {
+                    alert("⚠️ Incorrect Password. Please try again.\n⚠️ كلمة المرور غير صحيحة. يرجى المحاولة مرة أخرى.");
+                }
             }
         } else {
-            alert("⚠️ ADEK Pass Number not found. Please check your credentials or contact administrator.");
+            const lockSecs = window.registerFailedLoginAttempt();
+            if (lockSecs > 0) {
+                alert(`🔒 Too many failed attempts. Login locked for ${Math.ceil(lockSecs/60)} minute(s).\n🔒 محاولات فاشلة كثيرة. تم قفل الدخول لمدة ${Math.ceil(lockSecs/60)} دقيقة.`);
+            } else {
+                alert("⚠️ ADEK Pass Number not found. Please check your credentials or contact administrator.\n⚠️ رقم البطاقة غير موجود. يرجى التحقق من البيانات أو الاتصال بالمسؤول.");
+            }
         }
     } catch (error) {
         console.error("Login Error:", error);
@@ -2803,6 +2897,36 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.handleUserLogin(e);
             }
         });
+    }
+
+    // Password show/hide toggle (v1.8.87 - Login UX Enhancement)
+    const pwToggleBtn = $('toggle-password-visibility');
+    if (pwToggleBtn) {
+        pwToggleBtn.addEventListener('click', () => {
+            const pwInput = $('login-password');
+            if (!pwInput) return;
+            const isHidden = pwInput.type === 'password';
+            pwInput.type = isHidden ? 'text' : 'password';
+            pwToggleBtn.innerHTML = isHidden ? '<i class="bi bi-eye-slash"></i>' : '<i class="bi bi-eye"></i>';
+            pwToggleBtn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+        });
+    }
+
+    // Remember last-used ADEK Pass Number for faster re-login (v1.8.87)
+    const passNumberInput = $('login-pass-number');
+    const lastUsedAdec = localStorage.getItem('last_used_adec');
+    if (passNumberInput && lastUsedAdec && !passNumberInput.value) {
+        passNumberInput.value = lastUsedAdec;
+    }
+
+    // Show remaining lockout time on load, if currently locked out
+    const initialLockSecs = window.checkLoginLockout ? window.checkLoginLockout() : 0;
+    if (initialLockSecs > 0) {
+        const loginErrorEl = $('login-error');
+        if (loginErrorEl) {
+            loginErrorEl.classList.add('login-lockout-message');
+            loginErrorEl.textContent = `🔒 Too many failed attempts. Try again in ${initialLockSecs}s. / حاولت كثيرًا، حاول مرة أخرى بعد ${initialLockSecs} ثانية.`;
+        }
     }
 
     window.addEventListener('resize', () => {
@@ -3285,6 +3409,9 @@ function renderNotificationList() {
 
 // ==================== ROLE / DASHBOARD ====================
 window.renderDashboardForRole = function(userRole, adecNumber) {
+    if (typeof window.startIdleSessionTimer === 'function') {
+        window.startIdleSessionTimer();
+    }
     document.querySelectorAll('.view, .dashboard-view').forEach(container => {
         container.classList.remove('active');
         container.classList.add('d-none');
