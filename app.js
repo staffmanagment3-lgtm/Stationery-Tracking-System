@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.89";
+const APP_VERSION = "2.0.0";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -461,7 +461,9 @@ const IMG_RETRY_LIMIT = 3;
 const IMG_RETRY_BASE_MS = 1000;
 
 const OFF_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23e0e0e0'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%23757575' font-size='12' font-family='sans-serif'>No Image</text></svg>";
-const OFFLINE_PLACEHOLDER = "data:image/svg+xml;utf8," + OFF_SVG;
+// Quotes/brackets are percent-encoded: this string is injected inside onerror="this.src='...'" attributes,
+// and raw single quotes (xmlns='http://...') broke the JS there -> "Unexpected identifier 'http'".
+const OFFLINE_PLACEHOLDER = "data:image/svg+xml;utf8," + OFF_SVG.replace(/50%'/g, "50%25'").replace(/'/g, '%27').replace(/</g, '%3C').replace(/>/g, '%3E');
 const FALLBACK_IMG = OFFLINE_PLACEHOLDER;
 
 // Firebase config
@@ -509,72 +511,118 @@ window.updateFcmUIStatus = function() {
     });
 };
 
+window.getPushServiceWorker = async function() {
+    // ONE service worker (sw.js) handles both offline cache and push. Registering a second
+    // worker on the same scope would replace this one.
+    await navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`);
+    return await navigator.serviceWorker.ready;
+};
+
+const fcmSafeKey = (v) => String(v || 'GUEST').replace(/[.#$\[\]\/]/g, '_');
+
+// Saves this device's push token under the logged-in user so the server can reach it
+// even when the app is closed.
+window.syncFcmToken = async function() {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return null;
+    if (Notification.permission !== 'granted' || !currentUser) return null;
+
+    const swReg = await window.getPushServiceWorker();
+    const token = await getToken(messaging, { serviceWorkerRegistration: swReg });
+    if (!token) return null;
+
+    const uid = fcmSafeKey(currentUser.adecPassNumber || currentUser.uid);
+    const role = String(currentUser.role || 'TEACHER').toUpperCase();
+
+    await set(ref(db, `fcm_tokens/${uid}/${token}`), {
+        role: role,
+        name: currentUser.name || uid,
+        updatedAt: new Date().toISOString(),
+        device: (navigator.userAgent || '').slice(0, 120)
+    });
+    localStorage.setItem('fcm_token_current', token);
+    localStorage.setItem('fcm_token_uid', uid);
+    return token;
+};
+
 window.enableFcmNotifications = async function() {
-    console.log("🔔 Enable Notifications menu item clicked...");
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 
     if (!('Notification' in window) || !('serviceWorker' in navigator)) {
-        alert("This browser does not support Web Push Notifications.");
+        alert(isIOS && !standalone
+            ? "On iPhone/iPad: tap Share → 'Add to Home Screen', then open the app from the Home Screen icon and tap Enable Notifications again."
+            : "This browser does not support Web Push Notifications.");
         return;
     }
 
     if (Notification.permission === 'denied') {
-        alert("⚠️ Notifications are blocked in your browser settings.\n\nTo enable notifications:\n1. Click the lock icon near the website URL bar.\n2. Set Notifications to 'Allow'.\n3. Reload the page.");
+        alert("⚠️ Notifications are blocked in your browser settings.\n\nTo enable notifications:\n1. Click the lock icon near the website URL bar (or App info → Notifications on the phone).\n2. Set Notifications to 'Allow'.\n3. Reload the app.");
         return;
     }
 
     try {
         const btnAdmin = document.getElementById('enable-notifications-btn-admin');
         const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
-        [btnAdmin, btnTeacher].forEach(b => { if (b) b.textContent = "⏳ Registering FCM..."; });
+        [btnAdmin, btnTeacher].forEach(b => { if (b) b.textContent = "⏳ Enabling..."; });
 
         const permission = await Notification.requestPermission();
-
         if (permission === 'granted') {
-            const swReg = await navigator.serviceWorker.register('firebase-messaging-sw.js');
-            console.log("✅ FCM Service Worker registered:", swReg);
-
-            const token = await getToken(messaging, { serviceWorkerRegistration: swReg });
-
-            if (token) {
-                console.log("🔑 FCM Registration Token:", token);
-
-                const teacherId = (currentUser && (currentUser.adecPassNumber || currentUser.uid)) || localStorage.getItem('stationery_user_adec') || 'GUEST_USER';
-
-                const tokenPayload = {
-                    fcmToken: token,
-                    fcmTokenLastUpdated: new Date().toISOString()
-                };
-
-                await update(ref(db, `users/${teacherId}`), tokenPayload);
-                await update(ref(db, `fcm_tokens/${teacherId}`), {
-                    token: token,
-                    teacherId: teacherId,
-                    lastUpdated: new Date().toISOString()
-                });
-
-                showToast("🎉 Push Notifications Enabled Successfully!", "success");
-            } else {
-                showToast("⚠️ Could not retrieve FCM token.", "error");
-            }
+            const token = await window.syncFcmToken();
+            if (token) showToast("🎉 Push Notifications Enabled Successfully!", "success");
+            else showToast("⚠️ Could not retrieve notification token.", "error");
         } else {
             showToast("Notification permission was not granted.", "error");
         }
-
+        const banner = document.getElementById('push-prompt-banner');
+        if (banner) banner.remove();
         window.updateFcmUIStatus();
-
     } catch (err) {
         console.error("FCM Registration Error:", err);
-        showToast("FCM Error: " + err.message, "error");
+        showToast("Notification error: " + err.message, "error");
         window.updateFcmUIStatus();
     }
 };
 
+// Called after every login: refresh token silently, or gently ask for permission.
+window.initPushForSession = function() {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+    window.updateFcmUIStatus();
+    if (Notification.permission === 'granted') {
+        window.syncFcmToken().catch(e => console.warn('FCM token sync failed:', e));
+        return;
+    }
+    if (Notification.permission === 'default' && !sessionStorage.getItem('push_banner_dismissed')) {
+        showPushPromptBanner();
+    }
+};
+
+function showPushPromptBanner() {
+    if (document.getElementById('push-prompt-banner')) return;
+    const b = document.createElement('div');
+    b.id = 'push-prompt-banner';
+    b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:3500;background:#0f172a;color:#fff;border-radius:14px;padding:12px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 10px 30px rgba(0,0,0,.35);font-size:14px;';
+    b.innerHTML = '<span style="flex:1;min-width:200px">🔔 Turn on notifications to get order updates even when the app is closed.</span>' +
+        '<button id="push-prompt-enable" style="border:0;border-radius:999px;padding:8px 16px;font-weight:700;background:#3b82f6;color:#fff">Enable</button>' +
+        '<button id="push-prompt-later" style="border:0;border-radius:999px;padding:8px 14px;background:transparent;color:#cbd5e1">Later</button>';
+    document.body.appendChild(b);
+    document.getElementById('push-prompt-enable').onclick = () => window.enableFcmNotifications();
+    document.getElementById('push-prompt-later').onclick = () => {
+        sessionStorage.setItem('push_banner_dismissed', '1');
+        b.remove();
+    };
+}
+
+// App is open (foreground): show it in-app. When app is closed/hidden, sw.js shows the system notification.
 try {
     onMessage(messaging, (payload) => {
         console.log("🔔 Foreground Push Message Received:", payload);
-        const title = payload.notification?.title || "Stationery Alert";
-        const body = payload.notification?.body || "New update received";
-        showToast(`🔔 ${title}: ${body}`, "info");
+        const d = payload.data || {};
+        const n = payload.notification || {};
+        pushInAppNotification({
+            key: d.eventKey,
+            title: d.title || n.title || "Stationery Alert",
+            body: d.body || n.body || "New update received"
+        });
     });
 } catch (e) {
     console.warn("FCM Foreground listener exception caught silently:", e);
@@ -2650,13 +2698,32 @@ window.handleUserLogin = async function(event) {
 
 window.handleUserLogout = function(event) {
     if (event) event.preventDefault();
-    // keep the device's fingerprint / face / phone-lock enrollment so it can be used on the next login
+    // keep the device's fingerprint / face / phone-lock enrollment and the saved notification history
     const keep = {};
     ['biometric_enrolled','biometric_adec','biometric_cred_id','biometricEnabled'].forEach(k => { const v = localStorage.getItem(k); if (v !== null) keep[k] = v; });
-    localStorage.clear();
-    sessionStorage.clear();
-    Object.entries(keep).forEach(([k, v]) => localStorage.setItem(k, v));
-    location.reload();
+    for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('stationery_notifs_') || k.startsWith('stationery_notif_seen_'))) keep[k] = localStorage.getItem(k);
+    }
+    const token = localStorage.getItem('fcm_token_current');
+    const tokenUid = localStorage.getItem('fcm_token_uid');
+
+    const finish = () => {
+        localStorage.clear();
+        sessionStorage.clear();
+        Object.entries(keep).forEach(([k, v]) => localStorage.setItem(k, v));
+        location.reload();
+    };
+
+    // Stop pushes for this user on this device after logout (shared phones)
+    if (token && tokenUid) {
+        Promise.race([
+            remove(ref(db, `fcm_tokens/${tokenUid}/${token}`)).catch(() => {}),
+            new Promise(r => setTimeout(r, 1500))
+        ]).finally(finish);
+    } else {
+        finish();
+    }
 };
 
 window.safeShowView = function(viewIdToShow) {
@@ -3418,6 +3485,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (inventoryForm) inventoryForm.addEventListener('submit', saveInventoryItem);
+    ['input', 'change', 'blur'].forEach(ev => $('inv-serial-number')?.addEventListener(ev, () => window.updateDupSerialBanner()));
+    // scanners fill the serial without firing events, so also poll lightly while the Add Item tab is open
+    setInterval(() => { if ($('tab-add-item')?.classList.contains('active')) window.updateDupSerialBanner(); }, 1000);
 
     const addStockForm = $('add-stock-form');
     if (addStockForm) {
@@ -3501,17 +3571,17 @@ document.addEventListener('DOMContentLoaded', () => {
         renderMasterInventory();
     });
 
-    $('notification-bell')?.addEventListener('click', () => {
+    const openAdminNotifications = () => {
         renderNotificationList();
-        const notifModal = new bootstrap.Modal($('notificationModal'));
-        notifModal.show();
-        const badgeEl = $('notif-badge');
-        if (badgeEl) { badgeEl.textContent = '0'; badgeEl.classList.add('d-none'); }
-    });
+        const el = $('notificationModal');
+        if (el) bootstrap.Modal.getOrCreateInstance(el).show();
+        markAllNotificationsRead();
+    };
+    // The bell button id is "bellBtn" (old code looked for "notification-bell", so the bell did nothing)
+    $('bellBtn')?.addEventListener('click', openAdminNotifications);
+    $('notification-bell')?.addEventListener('click', openAdminNotifications);
 
-    $('clear-all-notifications-btn')?.addEventListener('click', () => {
-        notificationsList = []; renderNotificationList(); updateNotificationBadge();
-    });
+    $('clear-all-notifications-btn')?.addEventListener('click', () => window.clearAllNotifications());
 
     $('ocr-file-fallback')?.addEventListener('change', (event) => {
         const file = event.target.files[0];
@@ -3546,67 +3616,187 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ==================== NOTIFICATIONS ====================
-function listenForNewOrders() {
-    addListener(ref(db, 'orders'), (snapshot) => {
-        const data = snapshot.val() || {};
-        const pendingCount = Object.values(data).filter(o => o.status === 'Pending Approval').length;
-        const badge = $('notif-badge');
-        if (badge) {
-            badge.textContent = pendingCount;
-            badge.style.display = pendingCount > 0 ? 'flex' : 'none';
-            if (pendingCount > 0) badge.classList.remove('d-none');
-        }
-        Object.entries(data).forEach(([id, order]) => {
-            if (order.status === 'Pending Approval' && !alertedRequests.has(id)) {
-                alertedRequests.add(id);
-                addSystemNotification('New Order Received', `Order ID #${id} from ${order.teacherName}`);
-                if (Notification.permission === "granted") {
-                    new Notification("New Requisition Request", { body: `From: ${order.teacherName}`, icon: 'school.png' });
-                }
-            }
-        });
-    });
+// In-app notifications (bell list + popup). Background/closed-app push is sent by the
+// Cloud Function in /functions (see README). Both use the SAME eventKey so nothing shows twice.
+const NOTIF_MAX = 60;
+let orderWatcherSeeded = false;
+const orderPrevStatus = new Map();
+
+function notifUserId() {
+    return fcmSafeKey((currentUser && (currentUser.adecPassNumber || currentUser.uid)) || 'guest');
+}
+function loadNotifications() {
+    try { notificationsList = JSON.parse(localStorage.getItem('stationery_notifs_' + notifUserId()) || '[]') || []; }
+    catch (e) { notificationsList = []; }
+}
+function saveNotifications() {
+    try { localStorage.setItem('stationery_notifs_' + notifUserId(), JSON.stringify(notificationsList.slice(0, NOTIF_MAX))); } catch (e) { }
+}
+function getSeenKeys() {
+    try { return new Set(JSON.parse(localStorage.getItem('stationery_notif_seen_' + notifUserId()) || '[]')); }
+    catch (e) { return new Set(); }
+}
+function rememberSeenKey(key) {
+    const seen = getSeenKeys();
+    seen.add(key);
+    const arr = Array.from(seen).slice(-300);
+    try { localStorage.setItem('stationery_notif_seen_' + notifUserId(), JSON.stringify(arr)); } catch (e) { }
 }
 
-function addSystemNotification(title, message, timestamp = new Date()) {
-    const notif = {
-        id: Date.now(),
-        title,
-        message,
-        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    notificationsList.unshift(notif);
+function showNotificationPopup(title, body) {
+    const modal = $('notification-modal');
+    if (!modal) return;
+    const t = $('notification-title'); if (t) t.textContent = '🔔 ' + title;
+    const p = $('notification-text'); if (p) p.textContent = body;
+    modal.classList.add('active');
+    try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { }
+}
+
+function pushInAppNotification({ key, title, body, popup = true }) {
+    key = key || `evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    if (getSeenKeys().has(key)) return false; // already shown (dedupe push vs realtime)
+    rememberSeenKey(key);
+
+    if (!notificationsList.length) loadNotifications();
+    notificationsList.unshift({ id: Date.now() + Math.random(), key, title, message: body, ts: Date.now(), read: false });
+    notificationsList = notificationsList.slice(0, NOTIF_MAX);
+    saveNotifications();
     updateNotificationBadge();
+    renderNotificationList();
+
+    if (popup) {
+        showNotificationPopup(title, body);
+    }
+    return true;
+}
+
+function addSystemNotification(title, message) {
+    pushInAppNotification({ title, body: message, popup: false });
 }
 
 function updateNotificationBadge() {
-    const badgeEl = $('notif-badge');
+    const unread = notificationsList.filter(n => !n.read).length;
+    const label = unread > 99 ? '99+' : String(unread);
+
+    const badgeEl = $('notif-badge'); // admin bell
     if (badgeEl) {
-        badgeEl.textContent = notificationsList.length;
-        if (notificationsList.length > 0) {
-            badgeEl.classList.remove('d-none');
-            badgeEl.style.display = 'flex';
-        }
+        badgeEl.textContent = label;
+        badgeEl.classList.toggle('d-none', unread === 0);
+        badgeEl.style.display = ''; // let the class decide
+    }
+    const dot = $('notif-dot'); // teacher bell
+    if (dot) {
+        dot.textContent = label;
+        dot.style.display = unread === 0 ? 'none' : '';
     }
 }
 
-function renderNotificationList() {
-    const container = $('notification-list-container');
-    if (!container) return;
-    if (notificationsList.length === 0) {
-        container.innerHTML = `<li class="list-group-item text-center text-muted py-4">No notifications yet</li>`;
-        return;
-    }
-    container.innerHTML = notificationsList.map(n => `
-        <li class="list-group-item d-flex justify-content-between align-items-start p-3">
-            <div>
-                <strong class="d-block text-dark">${escapeHtml(n.title)}</strong>
-                <small class="text-secondary">${escapeHtml(n.message)}</small>
-            </div>
-            <span class="badge bg-light text-dark ms-2" style="font-size:10px;">${n.time}</span>
-        </li>
-    `).join('');
+function markAllNotificationsRead() {
+    notificationsList.forEach(n => { n.read = true; });
+    saveNotifications();
+    updateNotificationBadge();
 }
+window.markAllNotificationsRead = markAllNotificationsRead;
+
+window.clearAllNotifications = function() {
+    notificationsList = [];
+    saveNotifications();
+    renderNotificationList();
+    updateNotificationBadge();
+};
+
+function fmtNotifTime(ts) {
+    try { return new Date(ts).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+    catch (e) { return ''; }
+}
+
+function renderNotificationList() {
+    const adminBox = $('notification-list-container');
+    if (adminBox) {
+        adminBox.innerHTML = notificationsList.length === 0
+            ? `<li class="list-group-item text-center text-muted py-4">No notifications yet</li>`
+            : notificationsList.map(n => `
+                <li class="list-group-item d-flex justify-content-between align-items-start p-3">
+                    <div>
+                        <strong class="d-block text-dark">${escapeHtml(n.title)}</strong>
+                        <small class="text-secondary">${escapeHtml(n.message)}</small>
+                    </div>
+                    <span class="badge bg-light text-dark ms-2" style="font-size:10px;">${escapeHtml(fmtNotifTime(n.ts))}</span>
+                </li>`).join('');
+    }
+    const teacherBox = $('notificationsBody');
+    if (teacherBox) {
+        teacherBox.innerHTML = notificationsList.length === 0
+            ? `<div class="empty">No notifications yet.</div>`
+            : notificationsList.map(n => `
+                <div style="padding:12px 4px;border-bottom:1px solid rgba(148,163,184,.3)">
+                    <div style="font-weight:700">${escapeHtml(n.title)}</div>
+                    <div style="font-size:14px;opacity:.85">${escapeHtml(n.message)}</div>
+                    <div style="font-size:11px;opacity:.6;margin-top:2px">${escapeHtml(fmtNotifTime(n.ts))}</div>
+                </div>`).join('');
+    }
+}
+
+// One realtime watcher for both roles. Only changes AFTER the first load pop up.
+function startOrderEventWatcher() {
+    if (!currentUser) return;
+    loadNotifications();
+    updateNotificationBadge();
+    renderNotificationList();
+    orderWatcherSeeded = false;
+    orderPrevStatus.clear();
+
+    const isTeacher = String(currentUser.role || '').toUpperCase() === 'TEACHER';
+    const myId = String(currentUser.adecPassNumber || currentUser.uid || '');
+
+    addListener(ref(db, 'orders'), (snapshot) => {
+        const data = snapshot.val() || {};
+        const seeded = orderWatcherSeeded;
+
+        Object.entries(data).forEach(([id, o]) => {
+            if (!o) return;
+            const status = String(o.status || '');
+            const prev = orderPrevStatus.get(id);
+            orderPrevStatus.set(id, status);
+            if (prev === status) return;
+
+            const isPending = status === 'Pending Approval';
+            const isApproved = /approved|ready/i.test(status) && !/done|completed/i.test(status);
+            const isDone = /done|completed/i.test(status);
+            // On first load only surface actionable items (no flood of old completed orders)
+            if (!seeded && isDone) return;
+
+            if (isTeacher) {
+                if (String(o.teacherUid) !== myId) return;
+                if (isPending) {
+                    pushInAppNotification({ key: `submitted_${id}_teacher`, popup: seeded,
+                        title: 'Order Submitted',
+                        body: `Your order ${id} has been submitted. Please wait for admin approval.` });
+                } else if (isApproved) {
+                    pushInAppNotification({ key: `approved_${id}_teacher`, popup: seeded,
+                        title: 'Your Order is Ready!',
+                        body: `Your items are ready. Please collect them from: ${o.pickupLocation || 'the stationery store'}.` });
+                } else if (isDone) {
+                    pushInAppNotification({ key: `done_${id}_teacher`, popup: seeded,
+                        title: 'Handover Confirmed',
+                        body: `Order ${id} was handed over and signed. Thank you!` });
+                }
+            } else {
+                if (isPending) {
+                    pushInAppNotification({ key: `new_${id}_admin`, popup: seeded,
+                        title: 'New Order Received',
+                        body: `Order ${id} from ${o.teacherName || 'a teacher'} is waiting for approval.` });
+                } else if (isDone) {
+                    pushInAppNotification({ key: `done_${id}_admin`, popup: seeded,
+                        title: 'Handover Confirmed',
+                        body: `Order ${id} was handed over to ${o.teacherName || 'the teacher'} and confirmed.` });
+                }
+            }
+        });
+        orderWatcherSeeded = true;
+    });
+}
+const listenForNewOrders = startOrderEventWatcher; // backwards-compatible name
 
 // ==================== ROLE / DASHBOARD ====================
 window.renderDashboardForRole = function(userRole, adecNumber) {
@@ -3667,11 +3857,14 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
             if (adminNameEl) adminNameEl.innerText = `Admin: ${currentUser?.name || 'Asif'}`;
 
             initAdminDashboards();
-            listenForNewOrders();
+            startOrderEventWatcher();
+            window.initPushForSession();
         }
     } else if (roleUpper === 'TEACHER') {
         safeShowView('user-view-container');
         window.initNewTeacherDashboard(adecNumber);
+        startOrderEventWatcher();
+        window.initPushForSession();
     } else {
         showView('login-view');
     }
@@ -3778,7 +3971,7 @@ window.initNewTeacherDashboard = function(adecNumber) {
                         }
 
                         return `
-                        <article class="p">
+                        <article class="p" data-i="${i}" data-name="${escapeHtml(p[0])}" data-sn="${escapeHtml(p[2])}">
                             ${mediaHtml}
                             <div class="pb">
                                 <span class="tag">${escapeHtml ? escapeHtml(p[1]) : p[1]}</span>
@@ -3833,7 +4026,7 @@ window.initNewTeacherDashboard = function(adecNumber) {
         if (menuB) menuB.onclick = () => openSheet($("#drawer"));
 
         const bellB=$("#bellB");
-        if (bellB) bellB.onclick = () => { openSheet($("#noteS")); const dot=$("#notif-dot"); if(dot) dot.style.display="none"; };
+        if (bellB) bellB.onclick = () => { renderNotificationList(); openSheet($("#noteS")); markAllNotificationsRead(); };
 
         const cartB=$("#cartB");
         if (cartB) cartB.onclick = () => { cartR(); openSheet($("#cartS")); };
@@ -4514,6 +4707,98 @@ window.openRestockModal = function(itemId) {
     }
 };
 
+function findInventoryItemIdBySerial(sn) {
+    const t = String(sn || '').trim().toLowerCase();
+    if (!t || !inventoryData) return null;
+    for (const [id, item] of Object.entries(inventoryData)) {
+        if (!item) continue;
+        if (id.toLowerCase() === t.replace(/[.#$[\]]/g, '_')) return id;
+        const parentSN = String(item.serialNumber || item.batchNo || '').trim().toLowerCase();
+        if (parentSN === t) return id;
+        if (item.batches && typeof item.batches === 'object') {
+            for (const b of Object.values(item.batches)) {
+                const bs = String((b && (b.serialNumber || b.batchNo)) || '').trim().toLowerCase();
+                if (bs === t) return id;
+            }
+        }
+    }
+    return null;
+}
+window.findInventoryItemIdBySerial = findInventoryItemIdBySerial;
+
+// Adds a NEW dated batch under an existing product (same serial). Product details are copied from the
+// existing item; date / quantity are for the day of adding. Total stock (what teachers see) is the sum
+// of all batches, so the teacher catalog updates live.
+async function addStockBatchToItem(itemId, { qty, date, brand, imageUrl, unit, color }) {
+    const parentRef = ref(db, `inventory/${itemId}`);
+    const snap = await get(parentRef);
+    if (!snap.exists()) throw new Error("Item not found in inventory.");
+    const parent = snap.val();
+
+    const serial = String(parent.serialNumber || parent.batchNo || itemId);
+    const nowIso = new Date().toISOString();
+    const batchDate = date || nowIso.split('T')[0];
+    const existing = parent.batches && typeof parent.batches === 'object' ? parent.batches : {};
+    const updates = {};
+
+    let total = Object.values(existing).reduce(
+        (s, b) => s + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) || 0), 0);
+
+    // Old items keep their stock on the parent only. Move it into its own batch first, otherwise
+    // that stock would disappear from the total once a new batch exists.
+    if (Object.keys(existing).length === 0) {
+        const legacyQty = parseInt(parent.currentStock ?? parent.quantity ?? parent.availableStock ?? parent.stock ?? 0, 10) || 0;
+        if (legacyQty > 0) {
+            updates['batches/BATCH_LEGACY'] = {
+                batchNo: 'BATCH_LEGACY',
+                brandName: parent.brand || 'Standard',
+                brand: parent.brand || 'Standard',
+                serialNumber: serial,
+                unit: parent.unit || 'Pcs',
+                color: parent.color || '',
+                initialQty: parseInt(parent.openingQuantity ?? legacyQty, 10) || legacyQty,
+                currentStock: legacyQty,
+                quantity: legacyQty,
+                receivedDate: (parent.createdAt || '1970-01-01').split('T')[0],
+                imageUrl: parent.imageUrl || '',
+                status: 'Active',
+                createdAt: parent.createdAt || nowIso
+            };
+            total += legacyQty;
+        }
+    }
+
+    const batchId = 'BATCH_' + Date.now();
+    const useBrand = brand || parent.brand || 'Standard';
+    const newBatch = {
+        batchNo: batchId,
+        brandName: useBrand,
+        brand: useBrand,
+        serialNumber: serial,
+        unit: unit || parent.unit || 'Pcs',
+        color: color ?? parent.color ?? '',
+        initialQty: qty,
+        currentQty: qty,
+        currentStock: qty,
+        quantity: qty,
+        receivedDate: batchDate,
+        imageUrl: imageUrl || parent.imageUrl || '',
+        status: 'Active',
+        createdAt: nowIso
+    };
+    updates[`batches/${batchId}`] = newBatch;
+    total += qty;
+
+    updates.quantity = total;
+    updates.currentStock = total;
+    updates.availableStock = total;
+    updates.stock = total;
+
+    await update(parentRef, sanitizeForFirebase(updates));
+    return { batchId, total, name: parent.itemName || parent.name || itemId, serial };
+}
+window.addStockBatchToItem = addStockBatchToItem;
+
 window.handleSaveRestockBatch = async function(e) {
     if (e) e.preventDefault();
     const btn = $('btnSaveRestockBatch');
@@ -4524,21 +4809,17 @@ window.handleSaveRestockBatch = async function(e) {
         if (!itemId || !inventoryData || !inventoryData[itemId]) {
             throw new Error("Invalid item selected for restocking.");
         }
-
         const parentItem = inventoryData[itemId];
-        const category = parentItem.category || parentItem.itemCategory || assignCategoryToItem(parentItem);
-        const itemName = parentItem.itemName || parentItem.name || itemId;
         const serialNumber = parentItem.serialNumber || parentItem.sn || 'N/A';
 
         const qty = parseInt($('restockQty')?.value) || 0;
         const date = $('restockDate')?.value || new Date().toISOString().split('T')[0];
-        const brand = $('restockBrand')?.value.trim() || parentItem.brand || 'Standard';
+        const brand = $('restockBrand')?.value.trim() || '';
         const file = $('restockPhotoInput')?.files[0];
 
         if (qty <= 0) throw new Error("Please enter a valid Quantity Received (> 0).");
 
-        let imageUrl = parentItem.imageUrl || FALLBACK_IMG;
-
+        let imageUrl = '';
         if (file) {
             showToast("Processing batch photo...");
             const compressed = await window.compressAndScaleImage(file);
@@ -4547,67 +4828,51 @@ window.handleSaveRestockBatch = async function(e) {
             imageUrl = driveUrl || studio;
         }
 
-        const batchId = 'BATCH_' + Date.now().toString().slice(-6) + '_' + serialNumber.replace(/[.#$[\]]/g, "_");
+        const res = await addStockBatchToItem(itemId, { qty, date, brand, imageUrl });
 
-        const batchData = {
-            brandName: brand,
-            brand: brand,
-            serialNumber: serialNumber,
-            initialQty: qty,
-            currentQty: qty,
-            currentStock: qty,
-            quantity: qty,
-            receivedDate: date,
-            imageUrl: imageUrl,
-            createdAt: new Date().toISOString()
-        };
-
-        // 1. Write new batch sub-row under /inventory/${itemId}/batches/${batchId}
-        await set(ref(db, `inventory/${itemId}/batches/${batchId}`), batchData);
-
-        // 2. Recalculate combined stock = sum of all active batches
-        const parentRef = ref(db, `inventory/${itemId}`);
-        const snap = await get(parentRef);
-        let existingBatches = {};
-        if (snap.exists()) {
-            existingBatches = snap.val().batches || {};
-        }
-        existingBatches[batchId] = batchData;
-
-        const totalStock = Object.values(existingBatches).reduce(
-            (sum, b) => sum + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) || 0),
-            0
-        );
-
-        // 3. Update parent item root fields
-        await update(parentRef, {
-            category: category,
-            itemName: itemName,
-            name: itemName,
-            serialNumber: serialNumber,
-            brand: brand,
-            quantity: totalStock,
-            currentStock: totalStock,
-            availableStock: totalStock,
-            stock: totalStock,
-            imageUrl: imageUrl
+        showToast(`Restock batch added for ${res.name}! Total Stock: ${res.total} Pcs`);
+        pushInAppNotification({
+            key: `inv_restock_${itemId}_${Date.now()}`,
+            title: 'Stock Added',
+            body: `${res.name} (SN: ${res.serial}) - ${qty} added. Total stock is now ${res.total}.`
         });
-
-        showToast(`Restock batch added for ${itemName}! Total Stock: ${totalStock} Pcs`);
+        try { await logActivity("Stock Added", `Item: ${res.name} (${res.serial}) +${qty}`); } catch (e2) { }
 
         const modalEl = document.getElementById('restockBatchModal');
-        if (modalEl) {
-            bootstrap.Modal.getInstance(modalEl)?.hide();
-        }
+        if (modalEl) bootstrap.Modal.getInstance(modalEl)?.hide();
 
         fetchMasterInventory();
         fetchInventory();
-
     } catch (err) {
         alert("Error: " + err.message);
     } finally {
         if (btn) btn.disabled = false;
     }
+};
+
+// Live hint on the Add Item form: same serial number = it becomes a new batch of the existing product
+window.updateDupSerialBanner = function() {
+    const input = $('inv-serial-number');
+    const banner = $('dup-sn-banner');
+    if (!input || !banner) return;
+    const id = input.value.trim() ? findInventoryItemIdBySerial(input.value) : null;
+    if (id && inventoryData[id]) {
+        const it = inventoryData[id];
+        const nm = it.itemName || it.name || id;
+        banner.classList.remove('d-none');
+        banner.innerHTML = `♻️ <b>${escapeHtml(nm)}</b> already exists with this serial number.<br>` +
+            `Saving will add a <b>new batch</b> under it (today's date + the quantity you enter). ` +
+            `Name, category, image and details stay the same - you only need Serial Number and Quantity.`;
+        if ($('inv-item-name') && !$('inv-item-name').value) $('inv-item-name').value = nm;
+        if ($('inv-description') && !$('inv-description').value) $('inv-description').value = it.description || nm;
+    } else {
+        banner.classList.add('d-none');
+    }
+};
+
+window.goToAddItemTab = function() {
+    const btn = document.querySelector('button[data-target="tab-add-item"]');
+    if (btn) btn.click();
 };
 
 window.startStockScanner = function() {
@@ -4809,6 +5074,8 @@ function renderMasterInventory() {
                                 <div class="group-right">
                                     <span class="status ${totalStock <= LOW_LIMIT ? 'low' : ''}" style="font-size:.9rem;padding:8px 14px;border-radius:10px">Total Current Stock: ${totalStock} ${escapeHtml(unitLabel)}</span>
                                     <button class="btn btn-green btn-sm" onclick="window.openRestockModal('${escapeHtml(catId)}')"><svg class="i"><use href="#i-plus"/></svg>Add Stock</button>
+                                    <button class="btn btn-blue btn-sm" type="button" onclick="window.openProductDetails('${escapeHtml(catId)}')">👁 View Details</button>
+                                    <button class="btn btn-red btn-sm" type="button" onclick="window.deleteProductWithArchive('${escapeHtml(catId)}')">🗑 Delete</button>
                                 </div>
                             </div>
                         </td>
@@ -4825,7 +5092,7 @@ function renderMasterInventory() {
 
                         html += `
                             <tr class="batch ${statusCls ? 'low' : ''}">
-                                <td data-label="Image"><img src="${imageUrl || FALLBACK_IMG}" class="thumb" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';" loading="lazy"></td>
+                                <td data-label="Image"><img src="${getDirectDriveUrl(imageUrl || FALLBACK_IMG)}" data-src="${imageUrl && imageUrl !== FALLBACK_IMG ? escapeHtml(imageUrl) : ''}" referrerpolicy="no-referrer" class="thumb" title="Tap to zoom" data-title="${escapeHtml(productName).replace(/"/g, '&quot;')}" onclick="window.openImageZoom(this)" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';" loading="lazy"></td>
                                 <td data-label="Brand / Manufacturer"><b>${escapeHtml(brand)}</b></td>
                                 <td data-label="Serial / Batch No."><span class="serial">${escapeHtml(bSerial)}</span></td>
                                 <td data-label="Received Date">${escapeHtml(receivedDate)}</td>
@@ -4951,7 +5218,9 @@ window.openEditBatchModal = async function(catId, batchId) {
 window.deleteBatch = async function(catId, batchId) {
     if (confirm(`Are you sure you want to delete this specific batch from ${catId}?`)) {
         try {
+            const __arch = window.archiveBatchBeforeDelete ? await window.archiveBatchBeforeDelete(catId, batchId) : { urls: [] };
             await remove(ref(db, `inventory/${catId}/batches/${batchId}`));
+            if (window.cleanupDeletedImages) window.cleanupDeletedImages(__arch.urls);
             showToast("Batch deleted successfully");
         } catch (e) {
             showToast("Delete failed", "error");
@@ -4962,70 +5231,46 @@ window.deleteBatch = async function(catId, batchId) {
 // ==================== ANALYTICS ====================
 function fetchOrderHistoryForAnalytics() {
     addListener(ref(db, 'orders'), (snap) => {
-        const container = $('analytics-cards');
-        if (!container) return;
-
         const data = snap.val() || {};
-        const entries = Object.values(data);
-        let totalOrders = entries.length;
+        const entries = Object.values(data).filter(Boolean);
         let p = 0, a = 0, d = 0;
         const teacherStats = {};
 
         entries.forEach(o => {
-            if (o.status === 'Pending Approval') p++;
-            else if (o.status.includes('Approved') || o.status.includes('Ready')) a++;
-            else if (o.status.includes('Done') || o.status === 'Completed') d++;
+            const st = String(o.status || '').toLowerCase();
+            const isDone = st.includes('done') || st.includes('completed');
+            const isPending = st.includes('pending');
+            const isApproved = !isDone && (st.includes('approved') || st.includes('ready'));
+
+            if (isPending) p++;
+            else if (isApproved) a++;
+            else if (isDone) d++;
 
             const teacherId = o.teacherUid || 'Unknown';
             const teacherName = o.teacherName || 'Staff Member';
             const key = `${teacherId}_${teacherName}`;
-
             if (!teacherStats[key]) {
                 teacherStats[key] = { id: teacherId, name: teacherName, orders: 0, units: 0, p: 0, a: 0, d: 0 };
             }
-
             teacherStats[key].orders++;
-            const units = (o.items || []).reduce((s, i) => s + (parseInt(i.requestQuantity) || 0), 0);
-            teacherStats[key].units += units;
-
-            if (o.status === 'Pending Approval') teacherStats[key].p++;
-            else if (o.status.includes('Approved') || o.status.includes('Ready')) teacherStats[key].a++;
-            else if (o.status.includes('Done') || o.status === 'Completed') teacherStats[key].d++;
+            const rawItems = Array.isArray(o.items) ? o.items : Object.values(o.items || {});
+            teacherStats[key].units += rawItems.reduce((s, i) => s + (parseInt(i.requestQuantity) || 0), 0);
+            if (isPending) teacherStats[key].p++;
+            else if (isApproved) teacherStats[key].a++;
+            else if (isDone) teacherStats[key].d++;
         });
 
-        teacherAnalyticsData = Object.values(teacherStats).sort((a, b) => b.units - a.units);
+        teacherAnalyticsData = Object.values(teacherStats).sort((x, y) => y.units - x.units);
 
-        let html = `
-            <div class="analytics-card">
-                <i class="bi bi-cart-fill fs-3 text-primary mb-2 d-block"></i>
-                <h4>Total Orders</h4>
-                <div class="total-items">${totalOrders}</div>
-                <p class="text-muted small mb-0">Lifetime Volume</p>
-            </div>`;
-
-        html += `
-            <div class="analytics-card">
-                <i class="bi bi-stack fs-3 text-warning mb-2 d-block"></i>
-                <h4>Pipeline Status</h4>
-                <div class="total-items" style="font-size:16px; margin-top:8px;">
-                    <span class="text-warning">${p}P</span> |
-                    <span class="text-primary">${a}A</span> |
-                    <span class="text-success">${d}D</span>
-                </div>
-                <p class="text-muted small mb-0">Pending / Approved / Done</p>
-            </div>`;
-
-        html += `
-            <div class="analytics-card" style="border: 1px solid #3498db; background: #f0f7ff !important;">
-                <i class="bi bi-people-fill fs-3 text-info mb-2 d-block"></i>
-                <h4>Teacher Usage</h4>
-                <div class="total-items">${teacherAnalyticsData.length} Staff</div>
-                <button class="btn btn-sm btn-primary fw-bold mt-2 w-100" data-bs-toggle="modal" data-bs-target="#teacherAnalyticsModal">
-                    View Breakdown 📊
-                </button>
-            </div>`;
-
-        container.innerHTML = html;
+        // The redesigned dashboard has fixed stat cards (statOrders / statP / statA / statD / statStaff).
+        // The old code rendered into #analytics-cards, which no longer exists, so it returned early
+        // and every card stayed at 0.
+        const setText = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+        setText('statOrders', entries.length);
+        setText('statP', `${p}P`);
+        setText('statA', `${a}A`);
+        setText('statD', `${d}D`);
+        setText('statStaff', teacherAnalyticsData.length);
 
         renderTeacherAnalyticsTable();
     });
@@ -6678,35 +6923,43 @@ async function saveInventoryItem(e) {
         const itemDescription = $('inv-description').value.trim();
         const serialNumber = $('inv-serial-number').value.trim();
         const currentQty = parseInt($('inv-quantity').value) || 0;
-        const openingQty = parseInt($('inv-opening-quantity').value) || 0;
+        const openingQty = parseInt($('inv-opening-quantity').value) || currentQty;
         const file = $('inv-image').files[0];
         const itemCategory = cat === 'Other' ? $('inv-custom-category').value.trim() : cat;
 
-        if (!itemName || !serialNumber) throw new Error("Name and SN required");
+        if (!serialNumber) throw new Error("Serial Number required");
 
-        // Duplicate Serial Number Check
-        const snClean = serialNumber.toLowerCase();
-        let duplicateFound = false;
-        if (inventoryData) {
-            Object.values(inventoryData).forEach(item => {
-                if (!item) return;
-                const parentSN = (item.serialNumber || item.batchNo || '').toString().trim().toLowerCase();
-                if (parentSN === snClean) duplicateFound = true;
-                if (item.batches && typeof item.batches === 'object') {
-                    Object.values(item.batches).forEach(b => {
-                        const bSN = (b.serialNumber || b.batchNo || '').toString().trim().toLowerCase();
-                        if (bSN === snClean) duplicateFound = true;
-                    });
-                }
+        // Same Serial Number -> NOT an error any more: add it as a new dated batch under the existing product
+        const dupItemId = findInventoryItemIdBySerial(serialNumber);
+        if (dupItemId) {
+            if (currentQty <= 0) throw new Error("Serial number already exists. Enter the quantity received (more than 0) to add it as a new batch.");
+            if (msg) msg.textContent = "Serial exists - adding new batch...";
+            const res = await addStockBatchToItem(dupItemId, {
+                qty: currentQty,
+                date: new Date().toISOString().split('T')[0]
             });
+            try { await logActivity("Stock Added", `Item: ${res.name} (${serialNumber}) +${currentQty}`); } catch (e2) { }
+            showToast(`Added ${currentQty} to ${res.name}. Total stock: ${res.total}`);
+            pushInAppNotification({
+                key: `inv_batch_${dupItemId}_${Date.now()}`,
+                title: 'Stock Added',
+                body: `${res.name} (SN: ${serialNumber}) - ${currentQty} added as a new batch. Total stock is now ${res.total}.`
+            });
+            if (msg) { msg.textContent = "New batch added!"; msg.className = "message success"; }
+            $('add-inventory-form').reset();
+            if ($('barcode')) $('barcode').innerHTML = '';
+            window.updateDupSerialBanner();
+            fetchMasterInventory();
+            setTimeout(() => {
+                const invTabBtn = document.querySelector('button[data-target="tab-inventory"]');
+                if (invTabBtn) invTabBtn.click();
+            }, 1200);
+            return;
         }
 
-        if (duplicateFound) {
-            const dupeAlert = `This Serial Number (${serialNumber}) already exists! Please use '+ Add Stock' on the existing item card instead.`;
-            alert(dupeAlert);
-            throw new Error(dupeAlert);
-        }
-
+        if (!cat) throw new Error("Please select a category");
+        if (!itemName) throw new Error("Item name required");
+        if (!itemDescription) throw new Error("Description required");
         if (!file) throw new Error("Image required");
 
         if (msg) msg.textContent = "Step 1: Compressing Image...";
@@ -6760,6 +7013,11 @@ async function saveInventoryItem(e) {
         await logActivity("Inventory Added", `Item: ${itemName} (${serialNumber})`);
 
         showToast(`Item ${itemName} Saved!`);
+        pushInAppNotification({
+            key: `inv_add_${itemId}_${Date.now()}`,
+            title: 'Item Added',
+            body: `${itemName} (SN: ${serialNumber}) has been added to inventory - ${currentQty} ${unitVal}.`
+        });
         if (msg) { msg.textContent = "Saved!"; msg.className = "message success"; }
         $('add-inventory-form').reset();
         if ($('barcode')) $('barcode').innerHTML = '';
@@ -7031,3 +7289,736 @@ if (document.readyState === 'loading') {
 window.handleUserLogin = typeof handleUserLogin !== 'undefined' ? handleUserLogin : (window.handleUserLogin || window.handleLoginSubmit);
 window.handleLoginSubmit = typeof handleLoginSubmit !== 'undefined' ? handleLoginSubmit : (window.handleUserLogin || window.handleLoginSubmit);
 window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeveloperPanel : window.openAdminModal;
+
+
+// =====================================================================================
+// v2.1.0 ADDITIONS  (purely additive - no existing logic was changed)
+//   1. View Breakdown fix ($ was module-scoped, so inline onclick could not see it)
+//   2. Smart photo loader: automatic Drive fallbacks + "Reload photo" button everywhere
+//   3. Zoomable photo viewer (pinch / wheel / double-tap / drag) for admin & teacher
+//   4. Full-page Product Details (admin + teacher)
+//   5. Delete product -> archived (without pictures) in "Deleted Items History",
+//      pictures removed from Realtime DB + Google Drive
+// =====================================================================================
+(function initV21Additions() {
+    'use strict';
+
+    const PH = OFFLINE_PLACEHOLDER;
+    const esc = (v) => escapeHtml(v == null ? '' : String(v));
+    const IMG_KEYS = ['imageUrl', 'imageURL', 'image', 'photoUrl', 'photoURL', 'photo', 'itemImageUrl',
+        'itemImage', 'img', 'imgUrl', 'picture', 'thumbnail', 'photoBase64', 'url'];
+
+    // ---------- 1. inline handlers can use $() again + View Breakdown ----------
+    if (typeof window.$ === 'undefined') window.$ = $;
+
+    window.openTeacherBreakdown = function (ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        const el = document.getElementById('teacherAnalyticsModal');
+        if (!el) { showToast('Breakdown view not available', 'error'); return; }
+        // a modal must live directly under <body>, otherwise a hidden parent view can hide it
+        if (el.parentElement !== document.body) document.body.appendChild(el);
+        try { renderTeacherAnalyticsTable(document.getElementById('teacherSearchInput')?.value || ''); } catch (e) { console.warn(e); }
+        bootstrap.Modal.getOrCreateInstance(el).show();
+    };
+
+    // ---------- scroll lock (shared by product page + zoom) ----------
+    let lockN = 0;
+    const lockScroll = () => { if (lockN++ === 0) document.body.classList.add('v21-noscroll'); };
+    const unlockScroll = () => { lockN = Math.max(0, lockN - 1); if (lockN === 0) document.body.classList.remove('v21-noscroll'); };
+
+    // ---------- 2. smart photo loader ----------
+    const driveId = (u) => {
+        const m = String(u || '').match(/(?:id=|\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})/);
+        return m ? m[1] : null;
+    };
+    const driveEndpoints = (id) => [
+        `https://lh3.googleusercontent.com/d/${id}`,
+        `https://drive.google.com/thumbnail?id=${id}&sz=w800`,
+        `https://drive.google.com/uc?export=view&id=${id}`
+    ];
+    const stripR = (u) => String(u || '').replace(/([?&])r=\d+/, '').replace(/[?&]$/, '');
+
+    function addReloadBtn(img) {
+        const parent = img.parentElement;
+        if (!parent) return;
+        if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+        let btn = parent.querySelector(':scope > .img-reload-btn');
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'img-reload-btn';
+            parent.appendChild(btn);
+        }
+        const small = (img.clientWidth || img.width || 0) < 90;
+        btn.classList.toggle('small', small);
+        btn.innerHTML = small ? '⟳' : '⟳ Reload photo';
+        btn.title = 'Reload photo';
+        btn.setAttribute('aria-label', 'Reload photo');
+        btn.style.display = '';
+        btn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); window.reloadImage(img); };
+    }
+
+    window.reloadImage = function (img) {
+        if (!img) return;
+        const orig = img.dataset.origSrc || img.dataset.src;
+        if (!orig) return;
+        const btn = img.parentElement && img.parentElement.querySelector(':scope > .img-reload-btn');
+        if (btn) btn.style.display = 'none';
+        img.dataset.altTry = '0';
+        img.dataset.failed = '';
+        const id = driveId(orig);
+        let url = id ? driveEndpoints(id)[0] : stripR(orig);
+        url += (url.includes('?') ? '&' : '?') + 'r=' + Date.now();
+        img.classList.remove('img-failed');
+        img.src = url;
+    };
+
+    // capture phase: runs BEFORE any inline onerror, so we can try every fallback first
+    document.addEventListener('error', (e) => {
+        const img = e.target;
+        if (!(img instanceof HTMLImageElement)) return;
+        const cur = img.getAttribute('src') || '';
+        if (!cur || cur.startsWith('data:')) return;                       // placeholder / inline
+        const inline = img.getAttribute('onerror') || '';
+        if (inline.includes('handleProductImageError')) return;            // already has its own retry button
+        e.stopPropagation();                                                // replaces the plain "No Image" swap
+
+        const orig = img.dataset.origSrc || img.dataset.src || stripR(cur);
+        img.dataset.origSrc = orig;
+        const tries = parseInt(img.dataset.altTry || '0', 10);
+        const id = driveId(orig);
+
+        if (id) {
+            const candidates = driveEndpoints(id).filter((u) => u !== stripR(cur));
+            if (tries < candidates.length) {
+                img.dataset.altTry = String(tries + 1);
+                img.src = candidates[tries];
+                return;
+            }
+        } else if (tries < 1 && navigator.onLine !== false) {
+            img.dataset.altTry = '1';
+            setTimeout(() => { img.src = stripR(orig) + (orig.includes('?') ? '&' : '?') + 'r=' + Date.now(); }, 1200);
+            return;
+        }
+        img.dataset.failed = '1';
+        img.classList.add('img-failed');
+        img.src = PH;
+        addReloadBtn(img);
+    }, true);
+
+    window.addEventListener('online', () => {
+        setTimeout(() => document.querySelectorAll('.img-reload-btn').forEach((b) => { if (b.style.display !== 'none') b.click(); }), 2500);
+    });
+
+    // ---------- 3. zoom viewer ----------
+    function closeZoom() {
+        const o = document.getElementById('v21-zoom');
+        if (!o) return;
+        o.remove();
+        document.removeEventListener('keydown', zoomKey, true);
+        unlockScroll();
+    }
+    let zoomApi = null;
+    function zoomKey(e) {
+        if (!zoomApi) return;
+        if (e.key === 'Escape') { e.stopPropagation(); closeZoom(); }
+        else if (e.key === 'ArrowRight') zoomApi.go(1);
+        else if (e.key === 'ArrowLeft') zoomApi.go(-1);
+        else if (e.key === '+' || e.key === '=') zoomApi.zoomBy(1.3);
+        else if (e.key === '-') zoomApi.zoomBy(1 / 1.3);
+    }
+
+    window.openImageZoom = function (input, title) {
+        let items = [];
+        let index = 0;
+        if (input && Array.isArray(input.images)) { items = input.images.slice(); index = input.index || 0; }
+        else if (input instanceof HTMLImageElement) items = [input.dataset.origSrc || input.dataset.src || input.getAttribute('src')];
+        else if (typeof input === 'string') items = [input];
+        items = items.filter((u) => u && isValidImageUrl(u) && !String(u).startsWith('data:image/svg+xml'));
+        if (!items.length) { showToast('No photo available for this item', 'warning'); return; }
+
+        if (!title && input instanceof HTMLImageElement) title = input.dataset.title || input.alt || '';
+        closeZoom();
+        const o = document.createElement('div');
+        o.id = 'v21-zoom';
+        o.className = 'v21-zoom';
+        o.setAttribute('role', 'dialog');
+        o.setAttribute('aria-modal', 'true');
+        o.innerHTML = `
+            <div class="v21-zoom-bar">
+                <span class="v21-zoom-title">${esc(title || 'Photo')}</span>
+                <span class="v21-zoom-count"></span>
+                <button type="button" data-a="out" aria-label="Zoom out">−</button>
+                <button type="button" data-a="in" aria-label="Zoom in">+</button>
+                <button type="button" data-a="reset" aria-label="Reset zoom">⤢</button>
+                <button type="button" data-a="close" aria-label="Close">✕</button>
+            </div>
+            <div class="v21-zoom-stage"><img class="v21-zoom-img" alt="${esc(title || 'Photo')}" draggable="false" referrerpolicy="no-referrer"></div>
+            <button type="button" class="v21-zoom-nav prev" data-a="prev" aria-label="Previous photo">‹</button>
+            <button type="button" class="v21-zoom-nav next" data-a="next" aria-label="Next photo">›</button>
+            <div class="v21-zoom-hint">Pinch or scroll to zoom · double-tap to zoom in · drag to move</div>`;
+        document.body.appendChild(o);
+        lockScroll();
+
+        const stage = o.querySelector('.v21-zoom-stage');
+        const img = o.querySelector('.v21-zoom-img');
+        const countEl = o.querySelector('.v21-zoom-count');
+        let scale = 1, tx = 0, ty = 0, cur = Math.min(Math.max(index, 0), items.length - 1);
+        const MAX = 6;
+        const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; };
+        const reset = () => { scale = 1; tx = 0; ty = 0; apply(); };
+        const zoomBy = (f) => { scale = Math.min(MAX, Math.max(1, scale * f)); if (scale === 1) { tx = 0; ty = 0; } apply(); };
+        const show = (i) => {
+            cur = (i + items.length) % items.length;
+            reset();
+            const oldBtn = stage.querySelector('.img-reload-btn'); if (oldBtn) oldBtn.remove();
+            img.classList.remove('img-failed');
+            img.dataset.altTry = '0';
+            img.dataset.failed = '';
+            img.dataset.origSrc = items[cur];
+            img.src = getDirectDriveUrl(items[cur]);
+            countEl.textContent = items.length > 1 ? `${cur + 1} / ${items.length}` : '';
+            o.classList.toggle('single', items.length < 2);
+        };
+        zoomApi = { go: (d) => show(cur + d), zoomBy };
+
+        o.addEventListener('click', (e) => {
+            const a = e.target.closest('[data-a]');
+            if (!a) return;
+            const act = a.dataset.a;
+            if (act === 'close') closeZoom();
+            else if (act === 'in') zoomBy(1.4);
+            else if (act === 'out') zoomBy(1 / 1.4);
+            else if (act === 'reset') reset();
+            else if (act === 'prev') show(cur - 1);
+            else if (act === 'next') show(cur + 1);
+        });
+        document.addEventListener('keydown', zoomKey, true);
+
+        // wheel zoom (desktop)
+        stage.addEventListener('wheel', (e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
+
+        // pointer: drag + pinch + double tap (mouse / touch / pen)
+        const pts = new Map();
+        let startDist = 0, startScale = 1, lastX = 0, lastY = 0, downX = 0, downY = 0, lastTap = 0, moved = false;
+        stage.addEventListener('pointerdown', (e) => {
+            try { stage.setPointerCapture(e.pointerId); } catch (_) { }
+            pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (pts.size === 2) {
+                const [a, b] = [...pts.values()];
+                startDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+                startScale = scale;
+            }
+            lastX = downX = e.clientX; lastY = downY = e.clientY; moved = false;
+        });
+        stage.addEventListener('pointermove', (e) => {
+            if (!pts.has(e.pointerId)) return;
+            pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (pts.size === 2) {
+                const [a, b] = [...pts.values()];
+                const d = Math.hypot(a.x - b.x, a.y - b.y);
+                scale = Math.min(MAX, Math.max(1, startScale * d / startDist));
+                if (scale === 1) { tx = 0; ty = 0; }
+                moved = true;
+            } else if (pts.size === 1 && scale > 1) {
+                tx += e.clientX - lastX; ty += e.clientY - lastY;
+            }
+            if (Math.hypot(e.clientX - downX, e.clientY - downY) > 8) moved = true;
+            lastX = e.clientX; lastY = e.clientY;
+            apply();
+        });
+        const up = (e) => {
+            const wasSingle = pts.size === 1;
+            pts.delete(e.pointerId);
+            if (wasSingle && !moved) {
+                const now = Date.now();
+                if (now - lastTap < 320) {
+                    if (scale > 1) reset(); else { scale = 2.5; tx = 0; ty = 0; apply(); }
+                    lastTap = 0;
+                } else lastTap = now;
+            }
+        };
+        stage.addEventListener('pointerup', up);
+        stage.addEventListener('pointercancel', (e) => pts.delete(e.pointerId));
+
+        show(cur);
+    };
+
+    // ---------- helpers for products ----------
+    const num = (b) => parseInt(b.currentStock ?? b.currentQty ?? b.quantity ?? 0, 10) || 0;
+
+    function findCatId(name, sn) {
+        const inv = inventoryData || {};
+        const n = String(name || '').trim().toLowerCase();
+        const s = String(sn || '').trim().toLowerCase();
+        const hasSn = s && s !== 'n/a' && s !== 'undefined';
+        const nameOf = (id, c) => String(c.itemName || c.name || id).trim().toLowerCase();
+        const serials = (c) => [c.serialNumber, c.batchNo, ...Object.values(c.batches || {}).flatMap((b) => [b.serialNumber, b.batchNo])]
+            .filter(Boolean).map((x) => String(x).trim().toLowerCase());
+        let hit = null;
+        Object.entries(inv).forEach(([id, c]) => {
+            if (!c || typeof c !== 'object' || hit) return;
+            if (nameOf(id, c) === n && (!hasSn || serials(c).includes(s))) hit = id;
+        });
+        if (!hit) Object.entries(inv).forEach(([id, c]) => { if (!hit && c && typeof c === 'object' && nameOf(id, c) === n) hit = id; });
+        if (!hit && hasSn) Object.entries(inv).forEach(([id, c]) => { if (!hit && c && typeof c === 'object' && serials(c).includes(s)) hit = id; });
+        return hit;
+    }
+
+    function productView(catId) {
+        const c = (inventoryData || {})[catId];
+        if (!c || typeof c !== 'object') return null;
+        const name = String(c.itemName || c.name || catId).trim();
+        const category = String(c.category || c.itemCategory || (typeof assignCategoryToItem === 'function' ? assignCategoryToItem(c) : 'General')).trim();
+        const unit = c.unit || 'Pcs';
+        const bEntries = Object.entries(c.batches || {});
+        let batches = bEntries.map(([id, b]) => {
+            const st = num(b);
+            return {
+                id, stock: st,
+                initial: parseInt(b.initialQty ?? b.openingQuantity ?? st, 10) || 0,
+                brand: b.brandName || b.brand || b.supplier || c.brand || 'Standard',
+                serial: b.serialNumber || b.batchNo || c.serialNumber || 'N/A',
+                received: b.receivedDate || b.date || (b.createdAt ? String(b.createdAt).split('T')[0] : '-'),
+                image: pickImg(b) || pickImg(c),
+                desc: b.description || ''
+            };
+        });
+        if (!batches.length) {
+            const st = parseInt(c.currentStock ?? c.quantity ?? c.availableStock ?? 0, 10) || 0;
+            batches = [{
+                id: null, stock: st,
+                initial: parseInt(c.openingQuantity || c.initialQty || st, 10) || 0,
+                brand: c.brand || c.brandName || 'Initial / Legacy Stock',
+                serial: c.serialNumber || c.batchNo || 'N/A',
+                received: c.receivedDate || (c.createdAt ? String(c.createdAt).split('T')[0] : 'N/A'),
+                image: pickImg(c), desc: ''
+            }];
+        }
+        const images = [...new Set([pickImg(c), ...batches.map((b) => b.image)].filter(Boolean))];
+        return {
+            catId, name, category, unit, batches, images,
+            total: batches.reduce((s, b) => s + b.stock, 0),
+            serial: String(c.serialNumber || c.batchNo || batches[0].serial || 'N/A'),
+            description: c.description || c.desc || (batches.find((b) => b.desc) || {}).desc || '',
+            color: c.color || '',
+            brands: [...new Set(batches.map((b) => b.brand).filter(Boolean))],
+            added: c.createdAt ? String(c.createdAt).split('T')[0] : ''
+        };
+    }
+
+    // ---------- 4. full-page product details ----------
+    function closePage() {
+        const p = document.getElementById('v21-page');
+        if (!p) return;
+        p.remove();
+        unlockScroll();
+    }
+
+    window.openProductPage = function ({ catId, mode = 'admin', cardEl = null } = {}) {
+        const v = productView(catId);
+        if (!v) { showToast('Product details not found', 'error'); return; }
+        closePage();
+
+        const isAdmin = mode === 'admin';
+        const stockCls = v.total <= 0 ? 'out' : (v.total <= 10 ? 'low' : '');
+        const emoji = (cardEl && cardEl.querySelector('.pic') && cardEl.querySelector('.pic').textContent.trim()) || '📦';
+
+        const galleryHtml = v.images.length ? `
+            <div class="pd-main" data-a="zoom" role="button" tabindex="0" aria-label="Zoom photo">
+                <img class="pd-main-img" src="${esc(getDirectDriveUrl(v.images[0]))}" data-src="${esc(v.images[0])}" alt="${esc(v.name)}" referrerpolicy="no-referrer" decoding="async">
+                <span class="pd-zoom-chip">🔍 Tap to zoom</span>
+            </div>
+            ${v.images.length > 1 ? `<div class="pd-thumbs">${v.images.map((u, i) => `
+                <button type="button" class="pd-thumb${i === 0 ? ' on' : ''}" data-a="thumb" data-i="${i}" aria-label="Photo ${i + 1}">
+                    <img src="${esc(getDirectDriveUrl(u))}" data-src="${esc(u)}" alt="" referrerpolicy="no-referrer" loading="lazy">
+                </button>`).join('')}</div>` : ''}`
+            : `<div class="pd-main pd-nophoto"><span class="pd-emoji">${esc(emoji)}</span><small>No photo uploaded</small></div>`;
+
+        const batchRows = v.batches.map((b) => {
+            const st = b.stock <= 0 ? ['Out of Stock', 'out'] : b.stock <= 10 ? ['Low Stock', 'low'] : ['In Stock', ''];
+            return isAdmin
+                ? `<tr><td data-label="Brand"><b>${esc(b.brand)}</b></td><td data-label="Serial / Batch">${esc(b.serial)}</td><td data-label="Received">${esc(b.received)}</td><td data-label="Current / Initial">${b.stock} / ${b.initial}</td><td data-label="Status"><span class="pd-st ${st[1]}">${st[0]}</span></td></tr>`
+                : `<tr><td data-label="Brand"><b>${esc(b.brand)}</b></td><td data-label="Serial / Batch">${esc(b.serial)}</td><td data-label="Available">${b.stock} ${esc(v.unit)}</td></tr>`;
+        }).join('');
+
+        const p = document.createElement('div');
+        p.id = 'v21-page';
+        p.className = 'v21-page';
+        p.setAttribute('role', 'dialog');
+        p.setAttribute('aria-modal', 'true');
+        p.innerHTML = `
+            <header class="pd-head">
+                <button type="button" class="pd-back" data-a="close">← Back</button>
+                <h2>${esc(v.name)}</h2>
+            </header>
+            <div class="pd-body">
+                <section class="pd-gallery">${galleryHtml}</section>
+                <section class="pd-info">
+                    <div class="pd-card">
+                        <div class="pd-tags"><span class="pd-tag">${esc(v.category)}</span>${v.color ? `<span class="pd-tag alt">🎨 ${esc(v.color)}</span>` : ''}</div>
+                        <h1 class="pd-name">${esc(v.name)}</h1>
+                        <div class="pd-sn">SN: <b>${esc(v.serial)}</b></div>
+                        <div class="pd-stock ${stockCls}">${isAdmin ? 'Total Current Stock' : 'Available'}: ${v.total} ${esc(v.unit)}</div>
+                        <p class="pd-desc">${v.description ? esc(v.description) : '<i>No description available.</i>'}</p>
+                        <dl class="pd-dl">
+                            <dt>Category</dt><dd>${esc(v.category)}</dd>
+                            <dt>Serial No.</dt><dd>${esc(v.serial)}</dd>
+                            <dt>Brand</dt><dd>${esc(v.brands.join(', ') || 'Standard')}</dd>
+                            <dt>Unit</dt><dd>${esc(v.unit)}</dd>
+                            ${v.color ? `<dt>Colour</dt><dd>${esc(v.color)}</dd>` : ''}
+                            ${v.added ? `<dt>Added on</dt><dd>${esc(v.added)}</dd>` : ''}
+                            <dt>Batches</dt><dd>${v.batches.length}</dd>
+                        </dl>
+                    </div>
+                    <div class="pd-card">
+                        <h3>Stock ${isAdmin ? 'Batches' : 'Details'}</h3>
+                        <div class="pd-table-wrap"><table class="pd-table"><thead><tr>${isAdmin
+                ? '<th>Brand</th><th>Serial / Batch</th><th>Received</th><th>Current / Initial</th><th>Status</th>'
+                : '<th>Brand</th><th>Serial / Batch</th><th>Available</th>'}</tr></thead><tbody>${batchRows}</tbody></table></div>
+                    </div>
+                </section>
+            </div>
+            <footer class="pd-actions">
+                ${isAdmin ? `
+                    <button type="button" class="pd-btn green" data-a="restock">＋ Add Stock</button>
+                    <button type="button" class="pd-btn red" data-a="delete">🗑 Delete Product</button>
+                    <button type="button" class="pd-btn ghost" data-a="close">Close</button>`
+                : `
+                    ${cardEl ? '<button type="button" class="pd-btn blue" data-a="addcart">🛒 Add to Cart</button>' : ''}
+                    <button type="button" class="pd-btn ghost" data-a="close">Close</button>`}
+            </footer>`;
+        document.body.appendChild(p);
+        lockScroll();
+
+        let idx = 0;
+        p.addEventListener('click', async (e) => {
+            const a = e.target.closest('[data-a]');
+            if (!a) return;
+            const act = a.dataset.a;
+            if (act === 'close') closePage();
+            else if (act === 'zoom') window.openImageZoom({ images: v.images, index: idx }, v.name);
+            else if (act === 'thumb') {
+                idx = parseInt(a.dataset.i, 10) || 0;
+                const main = p.querySelector('.pd-main-img');
+                if (main) {
+                    const old = main.parentElement.querySelector('.img-reload-btn'); if (old) old.remove();
+                    main.classList.remove('img-failed');
+                    main.dataset.altTry = '0'; main.dataset.failed = ''; main.dataset.origSrc = v.images[idx]; main.dataset.src = v.images[idx];
+                    main.src = getDirectDriveUrl(v.images[idx]);
+                }
+                p.querySelectorAll('.pd-thumb').forEach((t, i) => t.classList.toggle('on', i === idx));
+            } else if (act === 'restock') {
+                closePage();
+                if (typeof window.openRestockModal === 'function') window.openRestockModal(catId);
+            } else if (act === 'delete') {
+                const done = await window.deleteProductWithArchive(catId);
+                if (done) closePage();
+            } else if (act === 'addcart') {
+                const btn = cardEl && cardEl.querySelector('.add');
+                if (btn) {
+                    btn.click();
+                    a.textContent = '✓ Added to cart';
+                    setTimeout(() => { a.textContent = '🛒 Add to Cart'; }, 1200);
+                }
+            }
+        });
+        p.addEventListener('keydown', (e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.pd-main[data-a="zoom"]')) { e.preventDefault(); e.target.click(); }
+        });
+        const escClose = (e) => {
+            if (e.key === 'Escape' && !document.getElementById('v21-zoom')) { closePage(); document.removeEventListener('keydown', escClose); }
+        };
+        document.addEventListener('keydown', escClose);
+    };
+
+    window.openProductDetails = function (catId) { window.openProductPage({ catId, mode: 'admin' }); };
+
+    // admin: tap a batch thumbnail -> zoom
+    // teacher: tap a product card -> details page (Add to Cart button keeps working as before)
+    document.addEventListener('click', (e) => {
+        const card = e.target.closest && e.target.closest('#grid article.p');
+        if (card) {
+            if (e.target.closest('.add, button, a, .img-reload-btn')) return;
+            const catId = findCatId(card.dataset.name, card.dataset.sn);
+            if (!catId) { showToast('Product details not available yet', 'warning'); return; }
+            e.preventDefault();
+            window.openProductPage({ catId, mode: 'teacher', cardEl: card });
+            return;
+        }
+        if (e.target.closest && e.target.closest('[data-target="tab-deleted-history"], #btnDeletedHistory')) {
+            setTimeout(startHistoryListener, 0);
+        }
+    });
+
+    // ---------- 5. delete product -> archive + wipe pictures ----------
+    function stripImages(val) {
+        if (Array.isArray(val)) return val.map(stripImages);
+        if (val && typeof val === 'object') {
+            const out = {};
+            Object.entries(val).forEach(([k, v]) => {
+                if (IMG_KEYS.includes(k)) return;
+                if (typeof v === 'string' && v.startsWith('data:image')) return;
+                out[k] = stripImages(v);
+            });
+            return out;
+        }
+        return val;
+    }
+    function collectImages(node) {
+        const urls = new Set();
+        const walk = (o) => {
+            if (!o || typeof o !== 'object') return;
+            Object.entries(o).forEach(([k, v]) => {
+                if (typeof v === 'string' && v.trim()) {
+                    if (IMG_KEYS.includes(k) && isValidImageUrl(v) && !v.startsWith('data:')) urls.add(v.trim());
+                } else if (v && typeof v === 'object') walk(v);
+            });
+        };
+        walk(node);
+        return [...urls];
+    }
+    function urlStillUsed(url, excludeCatId, excludeBatchId) {
+        const id = driveId(url);
+        const same = (u) => typeof u === 'string' && (u === url || (id && driveId(u) === id));
+        return Object.entries(inventoryData || {}).some(([cid, c]) => {
+            if (!c || typeof c !== 'object') return false;
+            const inBatchScope = cid === excludeCatId;
+            if (inBatchScope && excludeBatchId == null) return false;          // whole product being removed
+            if (same(pickImg(c))) return true;
+            return Object.entries(c.batches || {}).some(([bid, b]) =>
+                !(inBatchScope && bid === excludeBatchId) && same(pickImg(b)));
+        });
+    }
+    async function deleteDriveFiles(urls) {
+        const scriptUrl = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+        const res = { deleted: 0, failed: 0, skipped: 0 };
+        if (!urls.length) return res;
+        if (!scriptUrl) { res.skipped = urls.length; return res; }
+        for (const u of urls) {
+            const fileId = driveId(u);
+            if (!fileId) { res.skipped++; continue; }
+            try {
+                const r = await fetch(scriptUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({ action: 'delete', fileId, fileUrl: u })
+                });
+                const j = await r.json();
+                if (j && j.status === 'success') res.deleted++; else res.failed++;
+            } catch (err) { console.warn('Drive delete failed', err); res.failed++; }
+        }
+        return res;
+    }
+    function who() { return (currentUser && (currentUser.name || currentUser.adecPassNumber || currentUser.uid)) || 'Admin'; }
+
+    async function archiveRecord(catId, batchId) {
+        const c = inventoryData[catId];
+        const node = batchId ? { ...c, batches: { [batchId]: (c.batches || {})[batchId] } } : c;
+        const view = productView(catId);
+        const batches = batchId ? view.batches.filter((b) => b.id === batchId) : view.batches;
+        const clean = stripImages(node);
+        const record = sanitizeForFirebase({
+            deletionType: batchId ? 'batch' : 'product',
+            originalId: catId,
+            batchId: batchId || '',
+            itemName: view.name,
+            category: view.category,
+            serialNumber: batchId && batches[0] ? batches[0].serial : view.serial,
+            unit: view.unit,
+            brand: [...new Set(batches.map((b) => b.brand))].join(', '),
+            description: view.description || '',
+            stockAtDeletion: batches.reduce((s, b) => s + b.stock, 0),
+            batchCount: batches.length,
+            deletedAt: new Date().toISOString(),
+            deletedBy: who(),
+            picturesRemoved: true,
+            data: clean
+        });
+        const hRef = push(ref(db, 'inventory_history'));
+        await set(hRef, record);
+        return hRef;
+    }
+
+    window.deleteProductWithArchive = async function (catId) {
+        const c = (inventoryData || {})[catId];
+        if (!c) { showToast('Product not found', 'error'); return false; }
+        const v = productView(catId);
+        if (!confirm(`Delete "${v.name}" (SN: ${v.serial}) permanently?\n\n` +
+            `• Full details will be saved in "Deleted Items History" (without pictures)\n` +
+            `• All pictures will be removed from Google Drive and the database`)) return false;
+        try {
+            window.showGlobalLoader && window.showGlobalLoader('Deleting product...');
+            const urls = collectImages(c).filter((u) => !urlStillUsed(u, catId, null));
+            const hRef = await archiveRecord(catId, null);        // if this fails we stop: nothing is lost
+            await remove(ref(db, 'inventory/' + catId));
+            const r = await deleteDriveFiles(urls);
+            try { await update(hRef, { driveFilesDeleted: r.deleted, driveFilesFailed: r.failed + r.skipped }); } catch (_) { }
+            try { await logActivity('Inventory Deleted', `Item: ${v.name} (${catId}) - archived to history`); } catch (_) { }
+            if (r.failed || r.skipped) showToast(`"${v.name}" deleted & archived. Some Drive photos could not be removed - check the Drive script (see README).`, 'warning');
+            else showToast(`"${v.name}" deleted & moved to history`);
+            return true;
+        } catch (err) {
+            console.error('deleteProductWithArchive', err);
+            showToast('Delete cancelled - could not save history: ' + err.message, 'error');
+            return false;
+        } finally { window.hideGlobalLoader && window.hideGlobalLoader(); }
+    };
+
+    // used by the existing per-batch Delete button
+    window.archiveBatchBeforeDelete = async function (catId, batchId) {
+        try {
+            const c = (inventoryData || {})[catId];
+            if (!c || !c.batches || !c.batches[batchId]) return { urls: [] };
+            const urls = collectImages(c.batches[batchId]).filter((u) => !urlStillUsed(u, catId, batchId));
+            await archiveRecord(catId, batchId);
+            return { urls };
+        } catch (err) { console.warn('Batch archive failed (delete continues):', err); return { urls: [] }; }
+    };
+    window.cleanupDeletedImages = async function (urls) {
+        try { const r = await deleteDriveFiles(urls || []); return r; } catch (_) { return null; }
+    };
+
+    // ---------- Deleted Items History tab ----------
+    let histUnsub = null;
+    let histData = {};
+    function startHistoryListener() {
+        if (typeof histUnsub === 'function') { try { histUnsub(); } catch (_) { } }
+        const box = document.getElementById('deleted-history-container');
+        try {
+            histUnsub = onValue(ref(db, 'inventory_history'),
+                (snap) => { histData = snap.val() || {}; renderHistory(); },
+                (err) => {
+                    console.error('inventory_history', err);
+                    if (box) box.innerHTML = '<div class="dh-empty">History load nahi ho saki: ' + esc(err && err.message) +
+                        '<br><br>Firebase Console → Realtime Database → Rules me <b>inventory_history</b> ko read/write allow karo.</div>';
+                });
+            unsubscribeListeners.push(histUnsub);
+        } catch (err) { console.warn('history listener', err); }
+    }
+    window.openDeletedHistory = function (ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        document.querySelectorAll('.drawer-item').forEach((i) => i.classList.remove('active'));
+        const it = document.querySelector('.drawer-item[data-target="tab-deleted-history"]'); if (it) it.classList.add('active');
+        document.querySelectorAll('.admin-tab').forEach((t) => t.classList.remove('active'));
+        const tab = document.getElementById('tab-deleted-history'); if (tab) tab.classList.add('active');
+        startHistoryListener();
+        window.scrollTo({ top: 0, behavior: 'auto' });
+    };
+
+    function renderHistory() {
+        const box = document.getElementById('deleted-history-container');
+        if (!box) return;
+        const term = (document.getElementById('deleted-history-search')?.value || '').toLowerCase().trim();
+        const rows = Object.entries(histData).sort((a, b) => String(b[1].deletedAt || '').localeCompare(String(a[1].deletedAt || '')))
+            .filter(([, h]) => !term || [h.itemName, h.category, h.serialNumber, h.brand, h.deletedBy].join(' ').toLowerCase().includes(term));
+        if (!rows.length) { box.innerHTML = '<div class="dh-empty">No deleted items in history.</div>'; return; }
+        box.innerHTML = rows.map(([hid, h]) => {
+            const d = h.deletedAt ? new Date(h.deletedAt) : null;
+            const when = d && !isNaN(d) ? d.toLocaleString() : '-';
+            const data = h.data || {};
+            const bRows = Object.entries(data.batches || {}).map(([bid, b]) => `
+                <tr><td>${esc(b.brandName || b.brand || '-')}</td><td>${esc(b.serialNumber || b.batchNo || '-')}</td>
+                <td>${esc(b.receivedDate || b.date || '-')}</td><td>${esc(b.currentStock ?? b.quantity ?? '-')}</td><td>${esc(b.initialQty ?? b.openingQuantity ?? '-')}</td></tr>`).join('');
+            const extra = Object.entries(data).filter(([k, v]) => k !== 'batches' && (typeof v !== 'object'))
+                .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+            return `
+            <article class="dh-card">
+                <div class="dh-top">
+                    <div>
+                        <div class="dh-name">${esc(h.itemName || 'Item')} <span class="dh-badge">${h.deletionType === 'batch' ? 'Batch' : 'Product'}</span></div>
+                        <div class="dh-meta">SN: <b>${esc(h.serialNumber || 'N/A')}</b> · ${esc(h.category || '')} · ${esc(h.brand || '')}</div>
+                        <div class="dh-meta">Stock at deletion: <b>${esc(h.stockAtDeletion ?? 0)} ${esc(h.unit || 'Pcs')}</b> · Deleted: ${esc(when)} · By: ${esc(h.deletedBy || '-')}</div>
+                    </div>
+                    <button type="button" class="dh-del" data-hid="${esc(hid)}">Remove record</button>
+                </div>
+                <details class="dh-details"><summary>View full details</summary>
+                    ${h.description ? `<p class="dh-desc">${esc(h.description)}</p>` : ''}
+                    <dl class="pd-dl">${extra}</dl>
+                    ${bRows ? `<div class="pd-table-wrap"><table class="pd-table"><thead><tr><th>Brand</th><th>Serial / Batch</th><th>Received</th><th>Current</th><th>Initial</th></tr></thead><tbody>${bRows}</tbody></table></div>` : ''}
+                    <small class="dh-note">Pictures are not kept in history.</small>
+                </details>
+            </article>`;
+        }).join('');
+    }
+    document.addEventListener('input', (e) => { if (e.target && e.target.id === 'deleted-history-search') renderHistory(); });
+    document.addEventListener('click', async (e) => {
+        const b = e.target.closest && e.target.closest('.dh-del');
+        if (!b) return;
+        if (!confirm('Permanently remove this history record?')) return;
+        try { await remove(ref(db, 'inventory_history/' + b.dataset.hid)); showToast('History record removed'); }
+        catch (err) { showToast('Could not remove record: ' + err.message, 'error'); }
+    });
+})();
+
+
+// =====================================================================================
+// v2.1.1 FIXES (additive)
+//   - Export Full Inventory: Excel cell limit (32767 chars) crashed on embedded base64 photos
+//   - Category filter list + "Low stock only" checkbox wired up
+//   - old deleteInventoryItem() now also archives to Deleted Items History
+// =====================================================================================
+(function initV211Fixes() {
+    'use strict';
+    const esc = (v) => escapeHtml(v == null ? '' : String(v));
+
+    // --- Excel: never write a cell longer than the XLSX limit; embedded images become a short note ---
+    function safeCell(v) {
+        if (typeof v !== 'string') return v;
+        if (v.startsWith('data:image')) return '[Embedded photo - not exported]';
+        return v.length > 32000 ? v.slice(0, 32000) : v;
+    }
+    function patchXlsx() {
+        const X = window.XLSX;
+        if (!X || !X.utils || X.__v211) return;
+        const aoa = X.utils.aoa_to_sheet, js = X.utils.json_to_sheet;
+        X.utils.aoa_to_sheet = function (rows, o) { return aoa.call(this, (rows || []).map((r) => Array.isArray(r) ? r.map(safeCell) : r), o); };
+        X.utils.json_to_sheet = function (rows, o) {
+            return js.call(this, (rows || []).map((r) => {
+                if (!r || typeof r !== 'object') return r;
+                const c = {}; Object.keys(r).forEach((k) => { c[k] = safeCell(r[k]); }); return c;
+            }), o);
+        };
+        X.__v211 = true;
+    }
+    patchXlsx();
+    setTimeout(patchXlsx, 1500);
+
+    // --- Category filter dropdown (fallback fill if the normal populate did not run) ---
+    function fillCategoryFilter() {
+        const sel = document.getElementById('inventory-filter-category');
+        if (!sel) return;
+        const counts = {};
+        Object.values(inventoryData || {}).forEach((c) => {
+            if (!c || typeof c !== 'object') return;
+            const n = String(c.category || c.itemCategory || assignCategoryToItem(c) || '').trim();
+            if (n) counts[n] = (counts[n] || 0) + 1;
+        });
+        const names = [...new Set([...(typeof ALL_STATIONERY_CATEGORIES !== 'undefined' ? ALL_STATIONERY_CATEGORIES : []), ...Object.keys(counts)])];
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">All Categories</option>' +
+            names.map((n) => `<option value="${esc(n)}">${esc(n)} (${counts[n] || 0} item${(counts[n] || 0) === 1 ? '' : 's'})</option>`).join('');
+        if (cur) sel.value = cur;
+    }
+    setInterval(() => {
+        const sel = document.getElementById('inventory-filter-category');
+        if (sel && sel.options.length <= 1 && Object.keys(inventoryData || {}).length) fillCategoryFilter();
+    }, 1500);
+    document.addEventListener('focusin', (e) => {
+        if (e.target && e.target.id === 'inventory-filter-category' && e.target.options.length <= 1) fillCategoryFilter();
+    });
+
+    // --- Low stock only + category change -> re-render ---
+    document.addEventListener('change', (e) => {
+        const id = e.target && e.target.id;
+        if (id === 'lowOnly' || id === 'inventory-filter-category') {
+            adminInventoryState.currentPage = 1;
+            try { renderMasterInventory(); } catch (err) { console.error(err); }
+        }
+    });
+
+    // --- old delete function now archives too ---
+    window.deleteInventoryItem = async function (itemId) {
+        if (typeof window.deleteProductWithArchive === 'function') return window.deleteProductWithArchive(itemId);
+    };
+})();

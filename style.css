@@ -3045,3 +3045,188 @@ body:not(.teacher-mode) #admin-dashboard-container,body:not(.teacher-mode) #deve
 .ocr-send button{min-height:46px;border-radius:12px;border:1px solid #27324f;background:#1b2745;color:#eef2fb;font-weight:700;cursor:pointer}
 .ocr-send button.main{background:linear-gradient(135deg,#3b82f6,#1d4ed8);border:0}
 @media (min-width:640px){.ocr-send:not(.two){grid-template-columns:repeat(4,minmax(0,1fr))}}
+
+
+/* =====================================================================
+   v2.0.0 FIXES
+   ===================================================================== */
+
+/* (1) Buttons inside the admin dashboard were transparent because Bootstrap's
+   `.btn` (loaded after style.css) wiped the background of .btn-green/.btn-blue/.btn-red.
+   That is why "Add Stock" looked missing. Higher specificity restores them. */
+.admin-dashboard-redesign .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border: 0;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: .92rem;
+    line-height: 1.2;
+    color: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter .15s ease, transform .1s ease;
+}
+.admin-dashboard-redesign .btn.btn-sm { padding: 8px 14px; font-size: .85rem; }
+.admin-dashboard-redesign .btn:hover { filter: brightness(1.08); color: #fff; }
+.admin-dashboard-redesign .btn:active { transform: translateY(1px); }
+.admin-dashboard-redesign .btn.btn-green { background: #17804f; }
+.admin-dashboard-redesign .btn.btn-blue  { background: #0d6efd; }
+.admin-dashboard-redesign .btn.btn-red   { background: #dc3545; }
+.admin-dashboard-redesign .btn .i { width: 1.1em; height: 1.1em; }
+
+/* (5) Notification count badge - no more overlapping "0" */
+.admin-dashboard-redesign .icon-btn { overflow: visible; }
+.notif-count {
+    position: absolute;
+    top: 2px;
+    inset-inline-end: 0;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #dc3545;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 16px;
+    text-align: center;
+    border: 2px solid #fff;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+.notif-count.d-none { display: none !important; }
+@media (prefers-color-scheme: dark) {
+    .admin-dashboard-redesign .notif-count { border-color: #151d33; }
+}
+
+/* Popup for order notifications sits above everything */
+#notification-modal { z-index: 4000; }
+
+
+/* ==================== v2.1.0 ADDITIONS (photo reload, zoom, product page, history) ==================== */
+body.v21-noscroll { overflow: hidden !important; }
+
+/* --- photo reload button --- */
+.img-reload-btn {
+    position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
+    min-height: 40px; padding: 8px 16px; border: 0; border-radius: 999px;
+    background: #2563eb; color: #fff; font-weight: 700; font-size: .9rem; line-height: 1;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, .4); cursor: pointer; z-index: 20; white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+}
+.img-reload-btn.small {
+    left: auto; right: 2px; bottom: 2px; transform: none;
+    min-height: 26px; width: 26px; padding: 0; font-size: 1rem; display: inline-flex; align-items: center; justify-content: center;
+}
+.img-reload-btn:active { filter: brightness(.9); }
+
+/* --- clickable thumbnails / cards --- */
+.tbl img.thumb { cursor: zoom-in; }
+#grid article.p { cursor: pointer; }
+#grid article.p .card-img-wrapper, #grid article.p .pic { position: relative; }
+#grid article.p .card-img-wrapper::after, #grid article.p .pic::after {
+    content: "🔍"; position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 50%;
+    background: rgba(15, 26, 58, .65); color: #fff; font-size: 14px; display: grid; place-items: center; pointer-events: none;
+}
+.btn-details { background: #0284c7; color: #fff; }
+
+/* --- zoom viewer --- */
+.v21-zoom { position: fixed; inset: 0; z-index: 3000; background: rgba(6, 10, 24, .96); display: flex; flex-direction: column; touch-action: none; }
+.v21-zoom-bar {
+    display: flex; align-items: center; gap: 8px; padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+    color: #fff; position: relative; z-index: 2;
+}
+.v21-zoom-title { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v21-zoom-count { font-size: .85rem; opacity: .8; }
+.v21-zoom-bar button {
+    width: 42px; height: 42px; border-radius: 12px; border: 0; background: rgba(255, 255, 255, .14); color: #fff; font-size: 1.25rem; cursor: pointer;
+}
+.v21-zoom-bar button:hover { background: rgba(255, 255, 255, .25); }
+.v21-zoom-stage { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: grab; }
+.v21-zoom-img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; transform-origin: center center; will-change: transform; background: #fff; border-radius: 6px; }
+.v21-zoom-img.img-failed { background: #e0e0e0; width: 220px; height: 220px; }
+.v21-zoom-nav {
+    position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 60px; border: 0; border-radius: 12px;
+    background: rgba(255, 255, 255, .16); color: #fff; font-size: 2rem; cursor: pointer; z-index: 3;
+}
+.v21-zoom-nav.prev { left: 8px; } .v21-zoom-nav.next { right: 8px; }
+.v21-zoom.single .v21-zoom-nav { display: none; }
+.v21-zoom-hint { text-align: center; color: rgba(255, 255, 255, .7); font-size: .8rem; padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
+
+/* --- product details page --- */
+.v21-page { position: fixed; inset: 0; z-index: 2000; background: #f1f5fb; overflow-y: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; color: #0f1a3a; }
+.pd-head {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; color: #fff;
+    background: linear-gradient(135deg, #0a1128, #1c2b4b); padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+}
+.pd-head h2 { margin: 0; font-size: 1.05rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-back { border: 0; border-radius: 10px; background: rgba(255, 255, 255, .16); color: #fff; font-weight: 700; padding: 10px 14px; min-height: 42px; cursor: pointer; }
+.pd-body { flex: 1; width: 100%; max-width: 1080px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: 1fr; align-content: start; }
+@media (min-width: 820px) { .pd-body { grid-template-columns: minmax(300px, 5fr) 6fr; } .pd-gallery { position: sticky; top: 76px; align-self: start; } }
+.pd-main { position: relative; aspect-ratio: 4 / 3; width: 100%; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: zoom-in; }
+.pd-main-img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pd-nophoto { cursor: default; flex-direction: column; gap: 6px; color: #64748b; }
+.pd-emoji { font-size: 72px; }
+.pd-zoom-chip { position: absolute; left: 10px; bottom: 10px; background: rgba(15, 26, 58, .75); color: #fff; font-size: .78rem; padding: 6px 10px; border-radius: 999px; pointer-events: none; }
+.pd-thumbs { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; padding-bottom: 4px; }
+.pd-thumb { flex: 0 0 auto; width: 64px; height: 64px; border: 2px solid transparent; border-radius: 12px; background: #fff; padding: 2px; cursor: pointer; }
+.pd-thumb.on { border-color: #2563eb; }
+.pd-thumb img { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; }
+.pd-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+.pd-card h3 { margin: 0 0 10px; font-size: 1rem; }
+.pd-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.pd-tag { background: #e8eefc; color: #1e40af; font-size: .75rem; font-weight: 700; padding: 4px 10px; border-radius: 999px; }
+.pd-tag.alt { background: #e0f7fb; color: #0e7490; }
+.pd-name { font-size: 1.35rem; font-weight: 800; margin: 4px 0; word-break: break-word; }
+.pd-sn { color: #64748b; margin-bottom: 10px; }
+.pd-sn b { color: #dc2626; }
+.pd-stock { display: inline-block; font-weight: 800; padding: 9px 14px; border-radius: 12px; background: #dcfce7; color: #166534; margin-bottom: 12px; }
+.pd-stock.low { background: #fef3c7; color: #92400e; }
+.pd-stock.out { background: #fee2e2; color: #991b1b; }
+.pd-desc { color: #475569; margin: 0 0 12px; word-break: break-word; }
+.pd-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: .92rem; }
+.pd-dl dt { color: #64748b; font-weight: 600; }
+.pd-dl dd { margin: 0; font-weight: 600; word-break: break-word; }
+.pd-table-wrap { overflow-x: auto; }
+.pd-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.pd-table th { text-align: left; color: #64748b; font-weight: 700; padding: 8px 10px; border-bottom: 2px solid #e2e8f0; white-space: nowrap; }
+.pd-table td { padding: 9px 10px; border-bottom: 1px solid #eef2f7; }
+.pd-st { font-size: .72rem; font-weight: 800; padding: 3px 9px; border-radius: 999px; background: #dcfce7; color: #166534; white-space: nowrap; }
+.pd-st.low { background: #fef3c7; color: #92400e; } .pd-st.out { background: #fee2e2; color: #991b1b; }
+.pd-actions {
+    position: sticky; bottom: 0; z-index: 5; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom)); background: rgba(255, 255, 255, .96); border-top: 1px solid #e2e8f0; backdrop-filter: blur(8px);
+}
+.pd-btn { flex: 1 1 140px; max-width: 260px; min-height: 46px; border: 0; border-radius: 12px; font-weight: 800; color: #fff; cursor: pointer; padding: 0 16px; }
+.pd-btn.green { background: #16a34a; } .pd-btn.red { background: #dc2626; } .pd-btn.blue { background: #2563eb; }
+.pd-btn.ghost { background: #e2e8f0; color: #0f1a3a; }
+@media (max-width: 600px) {
+    .pd-table thead { display: none; }
+    .pd-table, .pd-table tbody, .pd-table tr, .pd-table td { display: block; width: 100%; }
+    .pd-table tr { border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 8px; padding: 6px 4px; }
+    .pd-table td { border: 0; display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; }
+    .pd-table td::before { content: attr(data-label); color: #64748b; font-weight: 600; }
+}
+
+/* --- deleted items history --- */
+.dh-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 16px; }
+.dh-toolbar input { flex: 1 1 240px; min-height: 44px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 0 14px; font-size: 16px; }
+.dh-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+.dh-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.dh-name { font-weight: 800; font-size: 1.05rem; }
+.dh-badge { font-size: .7rem; background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 999px; vertical-align: middle; }
+.dh-meta { color: #64748b; font-size: .88rem; margin-top: 3px; }
+.dh-del { align-self: flex-start; border: 1px solid #fecaca; background: #fff5f5; color: #b91c1c; border-radius: 10px; padding: 8px 12px; font-weight: 700; cursor: pointer; min-height: 40px; }
+.dh-details { margin-top: 10px; }
+.dh-details summary { cursor: pointer; font-weight: 700; color: #2563eb; }
+.dh-desc { color: #475569; margin: 8px 0; }
+.dh-note { color: #94a3b8; }
+.dh-empty { text-align: center; color: #64748b; padding: 40px 12px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 14px; }
+
+
+/* v2.1.1: signatures are dark ink on transparent PNG -> invisible on dark theme; give them a white pad */
+.table-sign-img, img[alt="Sign"] { background: #fff !important; border-radius: 6px; padding: 2px 4px; border: 1px solid #e2e8f0; }
