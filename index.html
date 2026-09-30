@@ -7,10 +7,10 @@
     <link rel="manifest" href="manifest.json?v=2.0.0">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=2.1.0">
+    <link rel="stylesheet" href="style.css?v=2.1.1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="login-waterdrop.css?v=2.1.0">
+    <link rel="stylesheet" href="login-waterdrop.css?v=2.1.1">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -770,8 +770,15 @@
   <div class="sh"><h2>Sign to confirm</h2><button class="ib" data-close aria-label="Close">✕</button></div>
   <div class="sb">
     <p style="margin:0 0 10px;color:var(--muted)">By signing, you confirm receiving <b id="signN">0</b> item(s).</p>
-    <canvas class="pad" id="pad"></canvas>
-    <p class="hint">Sign inside the box using your finger or mouse.</p>
+    <div class="padzoom" id="padZoom">
+      <button type="button" id="zOut" aria-label="Zoom out">−</button>
+      <span id="zoomLbl">100%</span>
+      <button type="button" id="zIn" aria-label="Zoom in">+</button>
+      <button type="button" id="zReset">Reset</button>
+      <button type="button" id="panBtn" aria-pressed="false">✋ Move</button>
+    </div>
+    <div class="padwrap" id="padWrap"><canvas class="pad" id="pad"></canvas></div>
+    <p class="hint">Sign inside the box. On phone: pinch with 2 fingers or use + / − to zoom, and ✋ Move to scroll the pad.</p>
   </div>
   <div class="sf"><button class="btn g" id="clr">Clear</button><button class="btn" id="conf" disabled>Confirm order</button></div>
 </section>
@@ -1387,15 +1394,15 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=2.1.0"></script>
+<script type="module" src="app.js?v=2.1.1"></script>
 <script>
-/* v2.1.0 stale-file guard: shows a red banner if index.html is new but app.js is an OLD copy */
+/* v2.1.1 stale-file guard: shows a red banner if index.html is new but app.js is an OLD copy */
 window.addEventListener('load', function () {
   setTimeout(function () {
     if (typeof window.openTeacherBreakdown === 'function') return;
     var d = document.createElement('div');
     d.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#dc2626;color:#fff;padding:12px 16px;font:600 14px/1.4 sans-serif;text-align:center';
-    d.textContent = '⚠ app.js purani hai (v2.1.0 nahi). Nayi app.js is folder me copy karo, phir Ctrl+Shift+R dabao.';
+    d.textContent = '⚠ app.js purani hai (v2.1.1 nahi). Nayi app.js is folder me copy karo, phir Ctrl+Shift+R dabao.';
     document.body.appendChild(d);
   }, 3500);
 });

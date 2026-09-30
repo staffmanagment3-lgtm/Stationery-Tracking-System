@@ -1737,8 +1737,15 @@ window.openTextScanner = function(targetInputId) {
 };
 
 async function initScanner() {
-    if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
-    const config = { fps: 10, qrbox: { width: 250, height: 150 }, aspectRatio: 1.0 };
+    if (!html5QrCode) html5QrCode = new Html5Qrcode("reader", { experimentalFeatures: { useBarCodeDetectorIfSupported: true }, verbose: false });
+    const config = {
+        fps: 20,
+        // wide scan box so the barcode does not have to fill the screen (no need to move the phone very close)
+        qrbox: (vw, vh) => ({ width: Math.floor(Math.min(vw * 0.92, 520)), height: Math.floor(Math.min(vh * 0.45, 220)) }),
+        disableFlip: true,
+        // HD camera: digital zoom stays sharp
+        videoConstraints: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }
+    };
 
     const modal = $('qr-scanner-modal');
     if (modal) {
@@ -1757,6 +1764,7 @@ async function initScanner() {
             showToast("Code Scanned!", "success");
             stopScanner();
         }, () => { });
+        setTimeout(setupScannerCameraControls, 400);
     } catch (err) {
         console.error("Scanner Error:", err);
         showToast("Camera error: Check permissions.", "error");
@@ -1764,7 +1772,66 @@ async function initScanner() {
     }
 }
 
+// Zoom slider (real camera zoom), continuous autofocus, tap-to-focus and torch
+function setupScannerCameraControls() {
+    const reader = document.getElementById('reader');
+    const video = reader && reader.querySelector('video');
+    const track = video && video.srcObject && video.srcObject.getVideoTracks && video.srcObject.getVideoTracks()[0];
+    if (!track) return;
+    const caps = (track.getCapabilities && track.getCapabilities()) || {};
+    const apply = (adv) => track.applyConstraints({ advanced: [adv] }).catch(() => {});
+
+    if (caps.focusMode && caps.focusMode.includes('continuous')) apply({ focusMode: 'continuous' });
+
+    let box = document.getElementById('scanner-cam-controls');
+    if (box) box.remove();
+    box = document.createElement('div');
+    box.id = 'scanner-cam-controls';
+
+    if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+        const min = caps.zoom.min, max = Math.min(caps.zoom.max, 8);
+        const step = caps.zoom.step || 0.1;
+        const range = document.createElement('input');
+        range.type = 'range'; range.min = min; range.max = max; range.step = step; range.value = min;
+        range.setAttribute('aria-label', 'Camera zoom');
+        const setZ = (v) => { v = Math.max(min, Math.min(max, v)); range.value = v; apply({ zoom: v }); };
+        const minus = document.createElement('button'); minus.type = 'button'; minus.textContent = '−';
+        const plus = document.createElement('button'); plus.type = 'button'; plus.textContent = '+';
+        minus.onclick = () => setZ(parseFloat(range.value) - Math.max(step, (max - min) / 10));
+        plus.onclick = () => setZ(parseFloat(range.value) + Math.max(step, (max - min) / 10));
+        range.oninput = () => setZ(parseFloat(range.value));
+        box.append(minus, range, plus);
+    }
+
+    if (caps.torch) {
+        let on = false;
+        const t = document.createElement('button'); t.type = 'button'; t.textContent = '🔦';
+        t.onclick = () => { on = !on; t.classList.toggle('on', on); apply({ torch: on }); };
+        box.append(t);
+    }
+
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'Barcode se 15-25 cm door rakhein aur zoom slider use karein. Focus ke liye camera par tap karein.';
+    box.append(hint);
+    reader.insertAdjacentElement('afterend', box);
+
+    // tap on the camera view = refocus
+    video.style.cursor = 'pointer';
+    video.onclick = () => {
+        if (caps.focusMode && caps.focusMode.includes('single-shot')) {
+            apply({ focusMode: 'single-shot' });
+            setTimeout(() => { if (caps.focusMode.includes('continuous')) apply({ focusMode: 'continuous' }); }, 1500);
+        } else if (caps.focusMode && caps.focusMode.includes('continuous')) {
+            apply({ focusMode: 'manual' });
+            setTimeout(() => apply({ focusMode: 'continuous' }), 300);
+        }
+    };
+}
+
 async function stopScanner() {
+    const camBox = document.getElementById('scanner-cam-controls');
+    if (camBox) camBox.remove();
     const modal = $('qr-scanner-modal');
     if (modal) {
         modal.classList.remove('active');
@@ -4081,23 +4148,73 @@ window.initNewTeacherDashboard = function(adecNumber) {
         const pad = $("#pad");
         if (pad) {
             const cx = pad.getContext("2d");
-            let draw = false, signed = false;
+            let draw = false, signed = false, padW = 300, padH = 190, zoom = 1, panMode = false;
+            const BASE_H = 190, pts = new Map();
+            let pinch = null;
+            const SC = Math.min(4, (window.devicePixelRatio || 1) * 2);   // extra resolution so zoomed strokes stay sharp
+            const zLbl = () => { const l = $("#zoomLbl"); if (l) l.textContent = Math.round(zoom * 100) + "%"; };
+            function applyZoom(z){
+                zoom = Math.max(1, Math.min(4, z));
+                pad.style.width = (zoom * 100) + "%";
+                pad.style.height = (BASE_H * zoom) + "px";
+                zLbl();
+            }
+            function setPan(on){
+                panMode = on;
+                pad.style.touchAction = on ? "pan-x pan-y" : "none";
+                const pb = $("#panBtn"); if (pb) { pb.classList.toggle("on", on); pb.setAttribute("aria-pressed", on ? "true" : "false"); }
+            }
             function fit(){
-                const r = pad.getBoundingClientRect(), d = devicePixelRatio || 1;
-                pad.width = r.width * d;
-                pad.height = r.height * d;
-                cx.scale(d, d);
-                cx.lineWidth = 2.5;
-                cx.lineCap = "round";
+                applyZoom(1); setPan(false);
+                const r = pad.getBoundingClientRect();
+                padW = r.width; padH = r.height;
+                pad.width = Math.round(r.width * SC);
+                pad.height = Math.round(r.height * SC);
+                cx.setTransform(SC, 0, 0, SC, 0, 0);
+                cx.lineCap = "round"; cx.lineJoin = "round";
                 cx.strokeStyle = "#0f1a3a";
             }
-            const pt = e => { const r = pad.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-            pad.onpointerdown = e => { draw = true; pad.setPointerCapture(e.pointerId); cx.beginPath(); cx.moveTo(...pt(e)); };
-            pad.onpointermove = e => { if (!draw) return; cx.lineTo(...pt(e)); cx.stroke(); signed = true; const conf = $("#conf"); if(conf) conf.disabled = false; };
-            pad.onpointerup = () => draw = false;
+            // pointer -> canvas coordinates (works at any zoom level)
+            const pos = e => { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * padW / r.width, (e.clientY - r.top) * padH / r.height, padW / r.width]; };
+            pad.onpointerdown = e => {
+                pts.set(e.pointerId, e);
+                if (pts.size === 2) {                       // two fingers = pinch zoom
+                    draw = false;
+                    const [p1, p2] = [...pts.values()];
+                    pinch = { d: Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY) || 1, z: zoom };
+                    return;
+                }
+                if (panMode) return;
+                draw = true;
+                pad.setPointerCapture(e.pointerId);
+                const [x, y, k] = pos(e);
+                cx.lineWidth = 2.5 * k;                     // stroke keeps the same look on screen, finer when zoomed in
+                cx.beginPath(); cx.moveTo(x, y);
+            };
+            pad.onpointermove = e => {
+                if (pts.has(e.pointerId)) pts.set(e.pointerId, e);
+                if (pinch && pts.size === 2) {
+                    const [p1, p2] = [...pts.values()];
+                    applyZoom(pinch.z * Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY) / pinch.d);
+                    return;
+                }
+                if (!draw) return;
+                const [x, y] = pos(e);
+                cx.lineTo(x, y); cx.stroke();
+                signed = true;
+                const conf = $("#conf"); if (conf) conf.disabled = false;
+            };
+            const padUp = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; draw = false; };
+            pad.onpointerup = padUp;
+            pad.onpointercancel = padUp;
+            const zIn = $("#zIn"), zOut = $("#zOut"), zRes = $("#zReset"), pBtn = $("#panBtn");
+            if (zIn) zIn.onclick = () => applyZoom(zoom * 1.25);
+            if (zOut) zOut.onclick = () => applyZoom(zoom / 1.25);
+            if (zRes) zRes.onclick = () => { applyZoom(1); const w = $("#padWrap"); if (w) { w.scrollLeft = 0; w.scrollTop = 0; } };
+            if (pBtn) pBtn.onclick = () => setPan(!panMode);
 
             const clr = $("#clr");
-            if (clr) clr.onclick = () => { cx.clearRect(0, 0, pad.width, pad.height); signed = false; const conf = $("#conf"); if(conf) conf.disabled = true; };
+            if (clr) clr.onclick = () => { cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.clearRect(0, 0, pad.width, pad.height); cx.restore(); signed = false; const conf = $("#conf"); if(conf) conf.disabled = true; };
 
             const toSign = $("#toSign");
             if (toSign) toSign.onclick = () => {
@@ -7292,7 +7409,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
 
 
 // =====================================================================================
-// v2.1.0 ADDITIONS  (purely additive - no existing logic was changed)
+// v2.1.1 ADDITIONS  (purely additive - no existing logic was changed)
 //   1. View Breakdown fix ($ was module-scoped, so inline onclick could not see it)
 //   2. Smart photo loader: automatic Drive fallbacks + "Reload photo" button everywhere
 //   3. Zoomable photo viewer (pinch / wheel / double-tap / drag) for admin & teacher
