@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "1.8.86";
+const APP_VERSION = "1.8.89";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -598,79 +598,34 @@ function getStationeryItemSize() {
 window.getStationeryItemSize = getStationeryItemSize;
 
 window.initStationeryRain = function() {
-    const container = document.getElementById('stationery-rain-container') || document.getElementById('stationeryRainContainer');
+    const container = document.getElementById('stationery-rain-container') || document.getElementById('rain');
     if (!container) return;
 
-    const isMobile = window.innerWidth <= 768;
-    const targetCount = isMobile ? 18 : 32;
+    const shapes = [
+      ['s-pencil', 16, 64], ['s-pencil', 16, 64], ['s-pen', 14, 64], ['s-marker', 18, 56],
+      ['s-ruler', 18, 64], ['s-eraser', 32, 20], ['s-clip', 14, 36], ['s-book', 28, 36], ['s-scissors', 30, 40]
+    ];
+    const count = window.innerWidth < 600 ? 14 : window.innerWidth < 1100 ? 22 : 32;
+    const rnd = (a, b) => a + Math.random() * (b - a);
 
     container.innerHTML = '';
 
-    const stationerySVGs = [
-        // 1. Pencil
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 26l3 3 17-17-3-3L6 26z" fill="#FFC107"/><path d="M4 28l2-2 3 3-2 2H4v-3z" fill="#795548"/><path d="M23 6l3 3 2-2-3-3-2 2z" fill="#E91E63"/><path d="M22 7l3 3 1-1-3-3-1 1z" fill="#9E9E9E"/></svg>`,
-        // 2. Ballpoint Pen
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 24l2 2 16-16-2-2L8 24z" fill="#2196F3"/><path d="M5 27l3-3-2-2-3 3v2h2z" fill="#0D47A1"/><path d="M24 6l2 2 3-3-2-2-3 3z" fill="#B0BEC5"/><path d="M20 10l6-6" stroke="#90A4AE" stroke-width="2"/></svg>`,
-        // 3. Eraser
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 18l12 10 10-10L16 8 6 18z" fill="#FF80AB"/><path d="M12 23l6 5 10-10-6-5-10 10z" fill="#3F51B5"/></svg>`,
-        // 4. Sharpener
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="6" y="8" width="20" height="16" rx="3" fill="#00BCD4"/><circle cx="16" cy="16" r="4" fill="#37474F"/><path d="M16 12v8" stroke="#CFD8DC" stroke-width="2"/></svg>`,
-        // 5. Ruler
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="4" y="10" width="24" height="12" rx="2" fill="#FFD54F"/><path d="M8 10v4M12 10v6M16 10v4M20 10v4" stroke="#5D4037" stroke-width="1.5"/></svg>`,
-        // 6. Highlighter
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M10 12h12v12H10z" fill="#76FF03"/><path d="M12 6h8v6h-8z" fill="#33691E"/><path d="M13 24l3 5 3-5h-6z" fill="#CCFF90"/></svg>`,
-        // 7. Marker
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="11" y="10" width="10" height="14" rx="2" fill="#FF3D00"/><path d="M13 4h6v6h-6z" fill="#DD2C00"/><path d="M14 24l2 4 2-4h-4z" fill="#FF9E80"/></svg>`,
-        // 8. Notebook
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="8" y="5" width="18" height="22" rx="2" fill="#3F51B5"/><path d="M6 8h4M6 12h4M6 16h4M6 20h4M6 24h4" stroke="#FFF" stroke-width="2"/><path d="M12 9h10M12 14h10M12 19h10" stroke="#9FA8DA" stroke-width="1.5"/></svg>`,
-        // 9. Paper Sheet
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 4h11l7 7v17H8V4z" fill="#ECEFF1"/><path d="M19 4v7h7" fill="#CFD8DC"/><path d="M11 14h10M11 18h10M11 22h7" stroke="#90A4AE" stroke-width="1.5"/></svg>`,
-        // 10. Sticky Note
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 6h20v14l-6 6H6V6z" fill="#FFEE58"/><path d="M20 20v6l6-6h-6z" fill="#FBC02D"/></svg>`,
-        // 11. Paper Clip
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M12 8v12a4 4 0 0 0 8 0V7a2.5 2.5 0 0 0-5 0v11a1 1 0 0 0 2 0V9" fill="none" stroke="#B0BEC5" stroke-width="2.5" stroke-linecap="round"/></svg>`,
-        // 12. Binder Clip
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 18h16l-3 8H11l-3-8z" fill="#263238"/><path d="M12 8c0-3 2-4 4-4s4 1 4 4v10h-8V8z" fill="none" stroke="#B0BEC5" stroke-width="2"/></svg>`,
-        // 13. Scissors
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="10" cy="24" r="3" fill="none" stroke="#E91E63" stroke-width="2"/><circle cx="22" cy="24" r="3" fill="none" stroke="#E91E63" stroke-width="2"/><path d="M11 21l8-13M21 21L13 8" stroke="#B0BEC5" stroke-width="2.5"/></svg>`,
-        // 14. Glue Stick
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="11" y="12" width="10" height="14" rx="1" fill="#FF9800"/><rect x="11" y="6" width="10" height="6" fill="#FFF"/><path d="M11 22h10v4h-10z" fill="#E65100"/></svg>`,
-        // 15. Stapler
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 22h20v3H6z" fill="#455A64"/><path d="M6 18c0-4 4-6 10-6h10v6H6z" fill="#1E88E5"/><path d="M6 18v4h2v-4H6z" fill="#CFD8DC"/></svg>`,
-        // 16. Pencil Case
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="5" y="10" width="22" height="12" rx="4" fill="#9C27B0"/><path d="M5 14h22" stroke="#BA68C8" stroke-width="2"/><circle cx="24" cy="14" r="1.5" fill="#FFD54F"/></svg>`,
-        // 17. Crayon
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M8 12l10-6 6 6-10 16-6-16z" fill="#E91E63"/><path d="M11 10l3-1.8 3 3L14 13l-3-3z" fill="#C2185B"/></svg>`,
-        // 18. Correction Tape
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M6 12a8 8 0 0 1 12-7l8 5a5 5 0 0 1 0 8l-8 5a8 8 0 0 1-12-11z" fill="#009688"/><circle cx="12" cy="16" r="3" fill="#FFF"/></svg>`,
-        // 19. Folder
-        `<svg viewBox="0 0 32 32"><path d="M4 8h8l3 3h13v13H4V8z" fill="#FFCA28"/><path d="M4 12h24v12H4V12z" fill="#FFB300"/></svg>`,
-        // 20. Set Square Ruler
-        `<svg viewBox="0 0 32 32"><path d="M6 26V6l20 20H6z" fill="#FF7043"/><path d="M10 22V12l10 10H10z" fill="#FFF"/></svg>`
-    ];
-
-    for (let i = 0; i < targetCount; i++) {
-        const drop = document.createElement('div');
-        drop.className = 'stationery-drop';
-
-        const svgIndex = i % stationerySVGs.length;
-        drop.innerHTML = stationerySVGs[svgIndex];
-
-        const leftPos = Math.random() * 92 + 2; // 2% to 94%
-        const size = getStationeryItemSize(); // Responsive item size
-        const duration = (Math.random() * 8 + 7).toFixed(2); // 7s to 15s
-        const delay = (Math.random() * -12).toFixed(2); // -12s to 0s
-        const sway = (Math.random() * 50 - 25).toFixed(0); // -25px to 25px
-        const opacity = (Math.random() * 0.15 + 0.85).toFixed(2); // 0.85 to 1.0 opacity
-
-        drop.style.setProperty('--x', `${leftPos}%`);
-        drop.style.setProperty('--size', `${size}px`);
-        drop.style.setProperty('--duration', `${duration}s`);
-        drop.style.setProperty('--delay', `${delay}s`);
-        drop.style.setProperty('--sway', `${sway}px`);
-        drop.style.opacity = opacity;
-
-        container.appendChild(drop);
+    for (let i = 0; i < count; i++) {
+        const [id, w, h] = shapes[i % shapes.length];
+        const scale = rnd(0.7, 1.3);
+        const el = document.createElement('div');
+        el.className = 'drop-item';
+        el.style.left = rnd(0, 100) + '%';
+        el.style.width = (w * scale) + 'px';
+        el.style.height = (h * scale) + 'px';
+        el.style.setProperty('--dur', rnd(7, 15) + 's');
+        el.style.setProperty('--delay', '-' + rnd(0, 15) + 's');
+        el.style.setProperty('--sway', rnd(-40, 40) + 'px');
+        el.style.setProperty('--rot-start', rnd(-40, 40) + 'deg');
+        el.style.setProperty('--spin', rnd(-180, 180) + 'deg');
+        el.style.setProperty('--static-top', rnd(5, 90) + '%');
+        el.innerHTML = '<svg><use href="#' + id + '"/></svg>';
+        container.appendChild(el);
     }
 };
 
@@ -687,6 +642,61 @@ function isValidImageUrl(url) {
     const cleanUrl = String(url).trim().toLowerCase();
     return cleanUrl !== '' && cleanUrl !== 'undefined' && cleanUrl !== 'null' && cleanUrl !== '[object object]';
 }
+
+window.handleProductImageError = function(imgEl) {
+    if (!imgEl) return;
+    const tryN = parseInt(imgEl.dataset.try || '0', 10);
+    const baseSrc = imgEl.getAttribute('data-src') || '';
+    if (tryN < 2 && /(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})/.test(baseSrc) && typeof getDirectDriveUrl === 'function') {
+        imgEl.dataset.try = String(tryN + 1);
+        imgEl.src = getDirectDriveUrl(baseSrc, tryN + 1);
+        return;
+    }
+    imgEl.style.display = 'none';
+    const container = imgEl.parentElement;
+    if (!container) return;
+
+    let retryBtn = container.querySelector('.img-retry-btn');
+    if (!retryBtn) {
+        retryBtn = document.createElement('button');
+        retryBtn.className = 'img-retry-btn';
+        retryBtn.type = 'button';
+        retryBtn.setAttribute('aria-label', 'Tap to reload image');
+        retryBtn.innerHTML = '⟳ Tap to reload';
+        retryBtn.style.cssText = 'min-height: 44px; padding: 10px 18px; background-color: #2563eb; color: #ffffff; font-weight: bold; border: none; border-radius: 12px; cursor: pointer; z-index: 10; margin: auto; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; box-shadow: 0 4px 12px rgba(37,99,235,0.3); transition: transform 0.15s ease;';
+
+        retryBtn.onclick = function(e) {
+            if (e) {
+                e.stopPropagation();
+                e.preventDefault();
+            }
+            retryBtn.style.display = 'none';
+            imgEl.dataset.try = '0';
+            imgEl.style.display = 'block';
+
+            const origSrc = imgEl.getAttribute('data-src') || imgEl.src;
+            if (origSrc) {
+                const cleanSrc = origSrc.replace(/([?&])r=\d+/, '');
+                const sep = cleanSrc.includes('?') ? '&' : '?';
+                imgEl.src = cleanSrc + sep + 'r=' + Date.now();
+            }
+        };
+        container.appendChild(retryBtn);
+    } else {
+        retryBtn.style.display = 'inline-flex';
+    }
+};
+
+window.addEventListener('online', () => {
+    console.log("🌐 Network online restored - retrying failed images after 3s...");
+    setTimeout(() => {
+        document.querySelectorAll('.img-retry-btn').forEach(btn => {
+            if (btn && btn.style.display !== 'none') {
+                btn.click();
+            }
+        });
+    }, 3000);
+});
 
 window.createReloadableImgHtml = function(imgSrc, altText = "Image", customStyle = "", isThumb = true) {
     const validSrc = isValidImageUrl(imgSrc) ? imgSrc : FALLBACK_IMG;
@@ -1674,6 +1684,7 @@ window.openBarcodeScanner = function(targetInputId) {
 window.openTextScanner = function(targetInputId) {
     console.log("Text Scanner Triggered for:", targetInputId);
     currentOcrTarget = targetInputId;
+    resetOcrUi();
     if (typeof startOcrCamera === 'function') startOcrCamera();
 };
 
@@ -1777,8 +1788,8 @@ async function startOcrCamera() {
     } else {
         console.log("Live stream failed. Opening native camera...");
         if (fallbackInput) {
-            alert("Live camera failed. Opening device camera app...");
-            fallbackInput.click();
+            showOcrModalOnly();
+            showToast("Live camera not available. Use Gallery or Camera App button.", "error");
         } else {
             showToast("Camera error: Access denied or not found.", "error");
         }
@@ -1842,44 +1853,224 @@ function speakExtractedText(text) {
     window.speechSynthesis.speak(utterance);
 }
 
+// ---------- Advanced Text Scanner (v1.9.19) ----------
+function resetOcrUi() {
+    const panel = $('ocr-result-panel');
+    if (panel) panel.style.display = 'none';
+    ['ocr-camera-wrap', 'ocr-tools', 'ocr-actions', 'ocr-hint'].forEach(id => { const e = $(id); if (e) e.style.display = ''; });
+    const loader = $('ocr-loader');
+    if (loader) loader.style.display = 'none';
+}
+
+function showOcrModalOnly() {
+    const m = $('ocr-scanner-modal');
+    if (!m) return;
+    m.classList.add('active');
+    Object.assign(m.style, { display: 'flex', visibility: 'visible', opacity: '1', zIndex: '1070', pointerEvents: 'auto' });
+}
+
+function ocrGrayStretch(src, maxW) {
+    const w = src.width, h = src.height;
+    const scale = w < 1400 ? Math.min(2, 1400 / w) : Math.min(1, maxW / w);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * scale));
+    c.height = Math.max(1, Math.round(h * scale));
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    const d = img.data, hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4) {
+        const g = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0;
+        d[i] = d[i + 1] = d[i + 2] = g; hist[g]++;
+    }
+    const total = c.width * c.height;
+    let lo = 0, hi = 255, acc = 0;
+    for (lo = 0; lo < 255; lo++) { acc += hist[lo]; if (acc > total * 0.01) break; }
+    acc = 0;
+    for (hi = 255; hi > 0; hi--) { acc += hist[hi]; if (acc > total * 0.01) break; }
+    const range = Math.max(1, hi - lo);
+    for (let i = 0; i < d.length; i += 4) {
+        const v = Math.max(0, Math.min(255, ((d[i] - lo) * 255) / range));
+        d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+}
+
+function ocrOtsu(src) {
+    const c = document.createElement('canvas');
+    c.width = src.width; c.height = src.height;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0);
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    const d = img.data, hist = new Array(256).fill(0);
+    for (let i = 0; i < d.length; i += 4) hist[d[i]]++;
+    const total = c.width * c.height;
+    let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+    let sumB = 0, wB = 0, best = 0, thr = 128;
+    for (let t = 0; t < 256; t++) {
+        wB += hist[t]; if (!wB) continue;
+        const wF = total - wB; if (!wF) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB, mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > best) { best = between; thr = t; }
+    }
+    for (let i = 0; i < d.length; i += 4) { const v = d[i] > thr ? 255 : 0; d[i] = d[i + 1] = d[i + 2] = v; }
+    ctx.putImageData(img, 0, 0);
+    return c;
+}
+
+async function ocrDetectBarcodes(canvas) {
+    try {
+        if (!('BarcodeDetector' in window)) return [];
+        const found = await new BarcodeDetector().detect(canvas);
+        return found.map(b => b.rawValue).filter(Boolean);
+    } catch (e) { return []; }
+}
+
 async function runOcrScan(canvasElement) {
     const loader = $('ocr-loader');
     const statusText = $('ocr-status-text');
+    showOcrModalOnly();
     if (loader) loader.style.display = 'flex';
 
     try {
-        const worker = await Tesseract.createWorker('eng');
-        await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
-            tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:-./ ',
-            preserve_interword_spaces: '1'
-        });
+        if (statusText) statusText.textContent = "Enhancing image...";
+        const gray = ocrGrayStretch(canvasElement, 2600);
+        const codes = await ocrDetectBarcodes(canvasElement);
 
-        if (statusText) statusText.textContent = "Enhancing image for OCR...";
-        const enhancedCanvas = preprocessImageForOcr(canvasElement);
+        if (statusText) statusText.textContent = "Reading text...";
+        const worker = await Tesseract.createWorker($('ocr-lang')?.value || 'eng');
+        await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO, preserve_interword_spaces: '1' });
+        let { data } = await worker.recognize(gray);
 
-        if (statusText) statusText.textContent = "Reading text from label...";
-        const { data } = await worker.recognize(enhancedCanvas);
-        const sanitized = data.text.trim();
-
+        if ((data.confidence || 0) < 65) {
+            if (statusText) statusText.textContent = "Improving accuracy...";
+            const second = await worker.recognize(ocrOtsu(gray));
+            if ((second.data.confidence || 0) > (data.confidence || 0)) data = second.data;
+        }
         await worker.terminate();
 
-        const inputEl = $(currentOcrTarget);
-        if (inputEl && sanitized.length > 1) {
-            inputEl.value = sanitized;
-            inputEl.dispatchEvent(new Event('input'));
-            speakExtractedText(sanitized);
-            showToast(`Captured: ${sanitized}`, 'success');
-        } else {
-            alert("Could not extract clear text. Please ensure the label is in focus and well-lit.");
+        const clean = t => String(t || '').replace(/\s+/g, ' ').trim();
+        let lines = (data.lines || []).map(l => ({ text: clean(l.text), conf: Math.round(l.confidence || 0) }));
+        if (!lines.length) lines = String(data.text || '').split('\n').map(t => ({ text: clean(t), conf: Math.round(data.confidence || 0) }));
+        lines = lines.filter(l => l.text.length > 1 && /[\p{L}\p{N}]/u.test(l.text) && l.conf >= 25);
+
+        if (loader) loader.style.display = 'none';
+        if (!lines.length && !codes.length) {
+            showToast("No clear text found. Try better light or move closer.", "error");
+            return;
         }
-        stopOcrCamera();
+        showOcrResults(lines, codes);
     } catch (error) {
         console.error("OCR Error:", error);
         showToast("OCR processing error.", "error");
         if (loader) loader.style.display = 'none';
     }
 }
+
+function showOcrResults(lines, codes) {
+    ['ocr-camera-wrap', 'ocr-tools', 'ocr-actions', 'ocr-hint'].forEach(id => { const e = $(id); if (e) e.style.display = 'none'; });
+    const panel = $('ocr-result-panel');
+    if (panel) panel.style.display = 'block';
+
+    const labels = { 'inv-item-name': 'Item Name', 'inv-description': 'Description', 'inv-serial-number': 'Serial No.' };
+    const tBtn = $('ocr-send-target');
+    if (tBtn) tBtn.textContent = 'Use for ' + (labels[currentOcrTarget] || 'field');
+
+    const box = $('ocr-lines');
+    const edit = $('ocr-text-edit');
+    box.innerHTML = '';
+    const sync = () => { edit.value = [...box.querySelectorAll('.ocr-line.on')].map(b => b.dataset.t).join('\n'); };
+
+    lines.forEach(l => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ocr-line' + (l.conf >= 60 ? ' on' : '');
+        b.dataset.t = l.text;
+        const sp = document.createElement('span'); sp.textContent = l.text;
+        const em = document.createElement('em'); em.textContent = l.conf + '%';
+        b.append(sp, em);
+        b.onclick = () => { b.classList.toggle('on'); sync(); };
+        box.appendChild(b);
+    });
+
+    const nums = new Set(codes);
+    (lines.map(l => l.text).join(' ').match(/\b\d{8,14}\b/g) || []).forEach(n => nums.add(n));
+    const sug = $('ocr-suggest');
+    sug.innerHTML = '';
+    nums.forEach(n => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ocr-line num'; b.textContent = n;
+        b.onclick = () => setOcrField('inv-serial-number', n, false);
+        sug.appendChild(b);
+    });
+    sug.style.display = nums.size ? 'flex' : 'none';
+    sync();
+}
+
+function setOcrField(id, value, multiline) {
+    const el = $(id);
+    if (!el) return;
+    let v = String(value || '').trim();
+    if (id === 'inv-serial-number') v = v.replace(/\s+/g, '');
+    else if (!multiline) v = v.replace(/\s+/g, ' ');
+    if (!v) { showToast("Select some text first.", "error"); return; }
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    showToast("Filled: " + v.slice(0, 40), "success");
+}
+
+function ocrFileToScan(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width; canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            runOcrScan(canvas);
+        };
+        img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'ocr-gallery-input') {
+        ocrFileToScan(e.target.files[0]);
+        e.target.value = '';
+    }
+});
+
+document.addEventListener('click', async (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('#ocr-gallery-btn')) { $('ocr-gallery-input')?.click(); return; }
+    if (t.closest('#ocr-torch-btn')) {
+        const track = ocrStream && ocrStream.getVideoTracks()[0];
+        try {
+            const on = !(track && track.__torch);
+            await track.applyConstraints({ advanced: [{ torch: on }] });
+            track.__torch = on;
+        } catch (err) { showToast("Flash is not supported on this device.", "error"); }
+        return;
+    }
+    if (t.closest('#ocr-rescan-btn')) {
+        resetOcrUi();
+        if (!ocrStream) startOcrCamera();
+        return;
+    }
+    if (t.closest('#ocr-done-btn')) { stopOcrCamera(); return; }
+    const send = t.closest('[data-ocr-send]');
+    if (send) {
+        const target = send.dataset.ocrSend === 'target' ? currentOcrTarget : send.dataset.ocrSend;
+        setOcrField(target, $('ocr-text-edit')?.value || '', target === 'inv-description');
+    }
+});
 
 // ==================== HANDOVER ====================
 window.openHandoverSignatureModal = async function(orderId) {
@@ -2185,11 +2376,12 @@ window.enrollBiometrics = async function(adecNumber) {
                 },
                 pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
                 authenticatorSelection: {
-                    authenticatorAttachment: "platform",
+                    authenticatorAttachment: "platform",   // fingerprint / face / phone screen lock (PIN, pattern)
                     userVerification: "required",
+                    residentKey: "discouraged"
                 },
                 timeout: 60000,
-                attestation: "direct"
+                attestation: "none"
             }
         };
 
@@ -2199,6 +2391,8 @@ window.enrollBiometrics = async function(adecNumber) {
             localStorage.setItem('biometric_enrolled', 'true');
             localStorage.setItem('biometric_adec', adecNumber);
             localStorage.setItem('biometric_cred_id', btoa(String.fromCharCode(...new Uint8Array(credential.rawId))));
+            localStorage.setItem('biometricEnabled', 'true');
+            if (typeof window.syncBiometricToggles === 'function') window.syncBiometricToggles();
             showToast("Biometric login enabled!", "success");
             const modal = bootstrap.Modal.getInstance($('biometricEnrollModal'));
             if (modal) modal.hide();
@@ -2247,12 +2441,19 @@ window.loginWithBiometrics = async function() {
     }
 };
 
+window.syncBiometricToggles = function() {
+    const on = window.isBiometricEnrolled() && localStorage.getItem('biometricEnabled') === 'true';
+    ['biometric-toggle-admin', 'biometric-toggle-drawer', 'biometric-toggle-teacher'].forEach(id => { const e = document.getElementById(id); if (e) e.checked = on; });
+    const bb = document.getElementById('biometric-login-btn');
+    if (bb) bb.classList.toggle('d-none', !window.isBiometricEnrolled());
+};
+
 window.toggleBiometricAuth = async function(event) {
     const isChecked = event.target.checked;
     if (isChecked) {
         const supported = await window.checkBiometricSupport();
         if (!supported) {
-            alert("Biometric authentication is not supported on this device/browser.");
+            alert("Biometric / phone-lock login is not supported on this device or browser (HTTPS is required).\nهذا الجهاز أو المتصفح لا يدعم الدخول البيومتري.");
             event.target.checked = false;
             return;
         }
@@ -2273,7 +2474,9 @@ window.toggleBiometricAuth = async function(event) {
             event.target.checked = false;
         }
     } else {
+        ['biometric_enrolled', 'biometric_adec', 'biometric_cred_id'].forEach(k => localStorage.removeItem(k));
         localStorage.setItem('biometricEnabled', 'false');
+        window.syncBiometricToggles();
         showToast("Biometric lock disabled.");
     }
 };
@@ -2297,6 +2500,24 @@ window.showDashboardSection = function(sectionId) {
 };
 
 // ==================== LOGIN ====================
+window.hideLoginSection = function() {
+    const loginModal = document.getElementById('loginModal') ||
+                       document.getElementById('loginSection') ||
+                       document.getElementById('login-view') ||
+                       document.querySelector('.login-container');
+    if (loginModal) {
+        loginModal.style.display = 'none';
+        loginModal.style.visibility = 'hidden';
+        loginModal.classList.add('hidden');
+        loginModal.classList.add('d-none');
+        loginModal.classList.remove('active');
+    }
+
+    // Ensure backdrop overlay is also removed
+    const backdrops = document.querySelectorAll('.modal-backdrop, .overlay');
+    backdrops.forEach(b => b.remove());
+};
+
 window.handleUserLogin = async function(event) {
     if (event) event.preventDefault();
     console.log("--> Direct On-Demand Login Triggered!");
@@ -2337,12 +2558,7 @@ window.handleUserLogin = async function(event) {
         localStorage.setItem('stationery_user_adec', 'Asif');
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
 
-        const loginEl = document.getElementById('login-view');
-        if (loginEl) {
-            loginEl.classList.add('d-none');
-            loginEl.style.display = 'none';
-        }
-
+        window.hideLoginSection();
         window.renderDashboardForRole('ADMIN', 'Asif');
         if (loginError) loginError.textContent = "";
         return;
@@ -2392,12 +2608,7 @@ window.handleUserLogin = async function(event) {
                 };
                 localStorage.setItem('currentUser', JSON.stringify(currentUser));
 
-                const loginEl = document.getElementById('login-view');
-                if (loginEl) {
-                    loginEl.classList.add('d-none');
-                    loginEl.style.display = 'none';
-                }
-
+                window.hideLoginSection();
                 if (loginError) loginError.textContent = "";
                 window.renderDashboardForRole(role, matchedKey);
 
@@ -2439,30 +2650,20 @@ window.handleUserLogin = async function(event) {
 
 window.handleUserLogout = function(event) {
     if (event) event.preventDefault();
-
-    if (confirm("Are you sure you want to logout?")) {
-        console.log("Clearing user session...");
-
-        localStorage.removeItem('stationery_user_adec');
-        localStorage.removeItem('currentUserPass');
-        localStorage.removeItem('currentUserRole');
-        localStorage.removeItem('currentUserName');
-        localStorage.removeItem('teacherStationeryCart');
-        sessionStorage.removeItem('isAdminAuthenticated');
-        sessionStorage.clear();
-
-        cleanupListeners();
-        currentUser = null;
-        window.stationeryCart = [];
-        updateCartBadge();
-        catalogState.allItems = []; catalogState.filtered = []; catalogState.currentPage = 1; catalogState.searchTerm = '';
-
-        alert("Logged out successfully.");
-        window.location.reload();
-    }
+    // keep the device's fingerprint / face / phone-lock enrollment so it can be used on the next login
+    const keep = {};
+    ['biometric_enrolled','biometric_adec','biometric_cred_id','biometricEnabled'].forEach(k => { const v = localStorage.getItem(k); if (v !== null) keep[k] = v; });
+    localStorage.clear();
+    sessionStorage.clear();
+    Object.entries(keep).forEach(([k, v]) => localStorage.setItem(k, v));
+    location.reload();
 };
 
 window.safeShowView = function(viewIdToShow) {
+    if (viewIdToShow === 'login-view') document.body.classList.remove('teacher-mode');
+    if (viewIdToShow !== 'login-view') {
+        window.hideLoginSection();
+    }
     const allViews = document.querySelectorAll('.view, .dashboard-view');
 
     let targetFound = false;
@@ -2471,6 +2672,7 @@ window.safeShowView = function(viewIdToShow) {
             if (view.id === viewIdToShow) {
                 view.classList.add('active');
                 view.classList.remove('d-none');
+                view.classList.remove('hidden');
                 view.style.display = 'flex';
                 view.style.visibility = 'visible';
                 view.style.opacity = '1';
@@ -2488,7 +2690,10 @@ window.safeShowView = function(viewIdToShow) {
         const fallbackView = $('login-view');
         if (fallbackView) {
             fallbackView.classList.add('active');
+            fallbackView.classList.remove('d-none');
+            fallbackView.classList.remove('hidden');
             fallbackView.style.display = 'flex';
+            fallbackView.style.visibility = 'visible';
         }
     }
 };
@@ -2953,7 +3158,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const enrolled = window.isBiometricEnrolled();
             if (supported && enrolled) {
                 bioBtn.classList.remove('d-none');
-                bioBtn.onclick = window.loginWithBiometrics;
+                bioBtn.onclick = () => window.loginWithBiometrics().catch(() => {});
             }
         });
     }
@@ -3100,6 +3305,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const targetTab = $(targetId);
             if (targetTab) targetTab.classList.add('active');
             toggleDrawer(false);
+            window.scrollTo({ top: 0, behavior: 'auto' });
         });
     });
 
@@ -3262,15 +3468,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const vw = video.videoWidth;
         const vh = video.videoHeight;
-        const cropWidth = vw * 0.8;
-        const cropHeight = vh * 0.4;
-        const cropX = (vw - cropWidth) / 2;
-        const cropY = (vh - cropHeight) / 2;
-
-        canvas.width = cropWidth;
-        canvas.height = cropHeight;
+        canvas.width = vw;
+        canvas.height = vh;
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+        ctx.drawImage(video, 0, 0, vw, vh);
 
         runOcrScan(canvas);
     };
@@ -3409,6 +3610,9 @@ function renderNotificationList() {
 
 // ==================== ROLE / DASHBOARD ====================
 window.renderDashboardForRole = function(userRole, adecNumber) {
+    if (typeof window.hideLoginSection === 'function') {
+        window.hideLoginSection();
+    }
     if (typeof window.startIdleSessionTimer === 'function') {
         window.startIdleSessionTimer();
     }
@@ -3423,11 +3627,21 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
         sidebar.classList.remove('d-none');
         sidebar.style.display = 'flex';
         const overlay = $('drawer-overlay');
-        if (overlay) overlay.classList.remove('active');
+        if (overlay) { overlay.classList.remove('active'); overlay.style.display = ''; }
         sidebar.classList.remove('open');
     }
 
     const roleUpper = String(userRole).toUpperCase();
+    document.body.classList.toggle('teacher-mode', roleUpper === 'TEACHER');
+    if (roleUpper === 'TEACHER') {
+        ['side-drawer', 'drawer-overlay'].forEach(id => { const e = $(id); if (e) { e.style.display = 'none'; e.classList.remove('open', 'active'); } });
+    }
+    if (roleUpper !== 'TEACHER') {
+        const nm = (currentUser && (currentUser.name || currentUser.adecPassNumber)) || 'Admin';
+        const dn = $('admin-drawer-name'); if (dn) dn.textContent = nm;
+        const dr = $('admin-drawer-role'); if (dr) dr.textContent = (roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') ? 'Developer' : 'Administrator';
+        const dv = $('admin-drawer-av'); if (dv) dv.textContent = String(nm).split(' ').map(x => x[0]).join('').substring(0, 2).toUpperCase();
+    }
     if ($('admin-menu')) $('admin-menu').style.display = (roleUpper === 'ADMIN' || roleUpper === 'DEVELOPER' || roleUpper === 'SUPER_ADMIN') ? 'flex' : 'none';
     if ($('teacher-menu')) $('teacher-menu').style.display = roleUpper === 'TEACHER' ? 'flex' : 'none';
 
@@ -3456,23 +3670,343 @@ window.renderDashboardForRole = function(userRole, adecNumber) {
             listenForNewOrders();
         }
     } else if (roleUpper === 'TEACHER') {
-        const teacherContainer = $('user-view-container');
-        if (teacherContainer) {
-            teacherContainer.classList.remove('d-none');
-            teacherContainer.classList.add('active');
-            teacherContainer.style.display = 'flex';
-
-            const teacherNameEl = $('teacher-display-name');
-            const teacherIdEl = $('teacher-display-id');
-            if (teacherNameEl) teacherNameEl.innerText = currentUser?.name || 'Staff Member';
-            if (teacherIdEl) teacherIdEl.innerText = `Employee ID: ${adecNumber || 'N/A'}`;
-
-            fetchInventory();
-            fetchTeacherOrderHistory(adecNumber);
-        }
+        safeShowView('user-view-container');
+        window.initNewTeacherDashboard(adecNumber);
     } else {
         showView('login-view');
     }
+};
+
+window.initNewTeacherDashboard = function(adecNumber) {
+    try {
+        const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+        let teacherContainer = document.getElementById('user-view-container') || document.querySelector('#user-view-container') || document.querySelector('.dashboard-container') || document.body;
+        if (!teacherContainer) {
+            console.warn("⚠️ #user-view-container not found, using fallback container.");
+        }
+
+        teacherContainer.classList.remove('d-none');
+        teacherContainer.classList.add('active');
+        teacherContainer.style.display = 'flex';
+        teacherContainer.style.visibility = 'visible';
+        teacherContainer.style.opacity = '1';
+
+        const name = currentUser?.name || 'Abdulaziz Alali';
+        const adec = adecNumber || currentUser?.adecPassNumber || currentUser?.uid || 'PASS203011';
+        const initials = name.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase();
+
+        const nameEl = document.getElementById('teacher-display-name');
+        const idEl = document.getElementById('teacher-display-id');
+        const drawerNameEl = document.getElementById('drawer-display-name');
+        const drawerIdEl = document.getElementById('drawer-display-id');
+        const av1 = document.getElementById('teacher-avatar-init');
+        const av2 = document.getElementById('drawer-avatar-init');
+
+        if (nameEl) nameEl.innerText = name;
+        if (idEl) idEl.innerText = `Employee ID: ${adec}`;
+        if (drawerNameEl) drawerNameEl.innerText = name;
+        if (drawerIdEl) drawerIdEl.innerText = adec;
+        if (av1) av1.innerText = initials;
+        if (av2) av2.innerText = initials;
+        if (typeof window.syncBiometricToggles === 'function') window.syncBiometricToggles();
+
+        let P = [];
+        const buildP = () => {
+            const raw = (window.masterInventoryList && window.masterInventoryList.length > 0)
+                ? window.masterInventoryList
+                : (typeof getFlatInventoryList === 'function' ? getFlatInventoryList() : []);
+            return raw.map(item => [
+                item.itemName || item.name || 'Stationery Item',
+                item.category || 'General',
+                String(item.serialNumber || item.batchNo || 'N/A'),
+                parseInt(item.currentStock ?? item.currentQty ?? item.quantity ?? item.totalAvailableStock ?? 0, 10) || 0,
+                item.unit || 'Pcs',
+                item.emoji || '📦',
+                item.color || '#eef2fb',
+                item
+            ]);
+        };
+        P = buildP();
+
+        let cart={}, cat="All";
+
+        const cats=["All",...new Set(P.map(p=>p[1]))];
+        const chipsEl = $("#chips");
+        if (chipsEl) {
+            chipsEl.innerHTML = cats.map(c=>`<button class="chip${c==="All"?" on":""}">${c}</button>`).join("");
+            chipsEl.onclick = e => {
+                const c = e.target.closest(".chip");
+                if (!c) return;
+                cat = c.textContent;
+                $$("#chips .chip").forEach(x=>x.classList.toggle("on", x===c));
+                renderCatalogGrid();
+            };
+        }
+
+        function renderCatalogGrid() {
+            try {
+                const qEl = $("#q");
+                const t = qEl ? qEl.value.toLowerCase() : "";
+                const l = P.map((p,i)=>[p,i]).filter(([p])=>(cat==="All"||p[1]===cat)&&(p[0].toLowerCase().includes(t)||p[2].toLowerCase().includes(t)));
+                const gridEl = $("#grid");
+                if (gridEl) {
+                    gridEl.innerHTML = l.length ? l.map(([p,i])=>{
+                        const itemObj = (typeof p[7] === 'object' && p[7] !== null) ? p[7] : {};
+                        const rawImg = itemObj.imageUrl || itemObj.image || itemObj.photoUrl || itemObj.photo || itemObj.itemImageUrl || itemObj.photoBase64 || itemObj.url || (typeof p[7] === 'string' && p[7].startsWith('http') ? p[7] : '');
+
+                        let mediaHtml = '';
+                        if (rawImg && isValidImageUrl(rawImg)) {
+                            const imgSrc = typeof getDirectDriveUrl === 'function' ? getDirectDriveUrl(rawImg) : rawImg;
+                            mediaHtml = `
+                                <div class="card-img-wrapper" style="aspect-ratio: 4/3; width: 100%; background: ${p[6] || '#f8f9fa'}; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; border-radius: 12px 12px 0 0;">
+                                    <img src="${escapeHtml ? escapeHtml(imgSrc) : imgSrc}"
+                                         data-src="${escapeHtml ? escapeHtml(imgSrc) : imgSrc}"
+                                         alt="${escapeHtml ? escapeHtml(p[0] || 'Stationery Item') : p[0]}"
+                                         class="product-card-img"
+                                         referrerpolicy="no-referrer"
+                                         decoding="async"
+                                         loading="lazy"
+                                         style="width: 100%; height: 100%; object-fit: contain; display: block;"
+                                         onerror="window.handleProductImageError(this)" />
+                                </div>`;
+                        } else {
+                            console.warn(`[Catalog] Product "${p[0]}" (SN: ${p[2]}) has no valid image URL.`);
+                            mediaHtml = `
+                                <div class="pic" style="aspect-ratio: 4/3; width: 100%; background: ${p[6] || '#fef3c7'}; display: grid; place-items: center; font-size: 56px; border-radius: 12px 12px 0 0;">
+                                    ${p[5] || '📦'}
+                                </div>`;
+                        }
+
+                        return `
+                        <article class="p">
+                            ${mediaHtml}
+                            <div class="pb">
+                                <span class="tag">${escapeHtml ? escapeHtml(p[1]) : p[1]}</span>
+                                <div class="pn">${escapeHtml ? escapeHtml(p[0]) : p[0]}</div>
+                                <div class="sn">SN: <b>${escapeHtml ? escapeHtml(p[2]) : p[2]}</b></div>
+                                <span class="av-b${p[3]<5?" low":""}">${p[3]<5?"Low stock: ":"Available: "}${p[3]} ${p[4]}</span>
+                                <button class="add" data-i="${i}">🛒 Add to Cart</button>
+                            </div>
+                        </article>`;
+                    }).join("") : `<div class="empty">No items match your search.</div>`;
+                }
+            } catch (err) {
+                console.error("❌ Error in renderCatalogGrid:", err);
+            }
+        }
+
+        const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
+        function upd(){
+            const cc=document.getElementById("cc");
+            const dn=document.getElementById("dn");
+            const cVal=count();
+            if (cc) cc.textContent = cVal;
+            if (dn) dn.textContent = cVal;
+        }
+
+        function cartR(){
+            const k=Object.keys(cart);
+            const cb=$("#cartBody");
+            if (cb) {
+                cb.innerHTML = k.length ? k.map(i=>`
+                    <div class="ci">
+                        <span class="e" style="background:${P[i][6]}">${P[i][5]}</span>
+                        <div class="t">${P[i][0]}</div>
+                        <div class="qty">
+                            <button data-m="${i}" aria-label="Less">−</button>
+                            <b>${cart[i]}</b>
+                            <button data-p="${i}" aria-label="More">+</button>
+                        </div>
+                    </div>`).join("") : `<div class="empty">Your cart is empty.</div>`;
+            }
+            const ts=$("#toSign");
+            if (ts) ts.disabled = !k.length;
+        }
+
+        const ov=$("#ov");
+        function closeAll(){$$(".sheet,.drawer").forEach(e=>e.classList.remove("on")); if(ov) ov.classList.remove("on");}
+        function openSheet(el){closeAll(); if(el) el.classList.add("on"); if(ov) ov.classList.add("on");}
+        if (ov) ov.onclick = closeAll;
+        $$("[data-close]").forEach(b=>b.onclick = closeAll);
+
+        const menuB=$("#menuB");
+        if (menuB) menuB.onclick = () => openSheet($("#drawer"));
+
+        const bellB=$("#bellB");
+        if (bellB) bellB.onclick = () => { openSheet($("#noteS")); const dot=$("#notif-dot"); if(dot) dot.style.display="none"; };
+
+        const cartB=$("#cartB");
+        if (cartB) cartB.onclick = () => { cartR(); openSheet($("#cartS")); };
+
+        const grid=$("#grid");
+        if (grid) {
+            grid.onclick = e => {
+                const b = e.target.closest(".add");
+                if (!b) return;
+                const i = b.dataset.i;
+                cart[i] = (cart[i] || 0) + 1;
+                upd();
+                b.textContent = "✓ Added";
+                setTimeout(() => b.textContent = "🛒 Add to Cart", 700);
+            };
+        }
+
+        const qInput = $("#q");
+        if (qInput) qInput.oninput = renderCatalogGrid;
+
+        const cartBody = $("#cartBody");
+        if (cartBody) {
+            cartBody.onclick = e => {
+                const m = e.target.dataset.m, p = e.target.dataset.p;
+                if (m !== undefined && --cart[m] <= 0) delete cart[m];
+                if (p !== undefined) cart[p]++;
+                upd();
+                cartR();
+            };
+        }
+
+        function view(v){
+            const vCat=$("#vCat"), vHist=$("#vHist");
+            if (vCat) vCat.hidden = (v === "hist");
+            if (vHist) vHist.hidden = (v !== "hist");
+            $$(".nav").forEach(n=>n.classList.toggle("on", n.dataset.go === (v==="hist"?"hist":"cat")));
+        }
+
+        $$(".nav").forEach(n => {
+            n.onclick = () => {
+                const g = n.dataset.go;
+                if (g === "cart") {
+                    cartR();
+                    openSheet($("#cartS"));
+                } else {
+                    closeAll();
+                    view(g === "hist" ? "hist" : "cat");
+                }
+            };
+        });
+
+        const pad = $("#pad");
+        if (pad) {
+            const cx = pad.getContext("2d");
+            let draw = false, signed = false;
+            function fit(){
+                const r = pad.getBoundingClientRect(), d = devicePixelRatio || 1;
+                pad.width = r.width * d;
+                pad.height = r.height * d;
+                cx.scale(d, d);
+                cx.lineWidth = 2.5;
+                cx.lineCap = "round";
+                cx.strokeStyle = "#0f1a3a";
+            }
+            const pt = e => { const r = pad.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+            pad.onpointerdown = e => { draw = true; pad.setPointerCapture(e.pointerId); cx.beginPath(); cx.moveTo(...pt(e)); };
+            pad.onpointermove = e => { if (!draw) return; cx.lineTo(...pt(e)); cx.stroke(); signed = true; const conf = $("#conf"); if(conf) conf.disabled = false; };
+            pad.onpointerup = () => draw = false;
+
+            const clr = $("#clr");
+            if (clr) clr.onclick = () => { cx.clearRect(0, 0, pad.width, pad.height); signed = false; const conf = $("#conf"); if(conf) conf.disabled = true; };
+
+            const toSign = $("#toSign");
+            if (toSign) toSign.onclick = () => {
+                const signN = $("#signN");
+                if (signN) signN.textContent = count();
+                openSheet($("#signS"));
+                fit();
+                if (clr) clr.click();
+            };
+
+            const conf = $("#conf");
+            if (conf) {
+                conf.onclick = async () => {
+                    if (Object.keys(cart).length === 0) return;
+                    const signatureDataUrl = pad.toDataURL();
+                    const orderId = 'ORD-' + Date.now();
+
+                    const items = Object.keys(cart).map(i => {
+                        const prod = P[i];
+                        return {
+                            itemId: prod[7]?.id || prod[2],
+                            itemName: prod[0],
+                            serialNumber: prod[2],
+                            requestQuantity: cart[i],
+                            unit: prod[4],
+                            imageUrl: prod[7]?.imageUrl || ''
+                        };
+                    });
+
+                    try {
+                        window.showGlobalLoader?.("Submitting Order...");
+                        const orderData = {
+                            orderId,
+                            teacherUid: adec,
+                            teacherName: name,
+                            timestamp: new Date().toISOString(),
+                            items,
+                            status: 'Pending Approval',
+                            teacherRequestSignature: signatureDataUrl,
+                            teacherSign: signatureDataUrl,
+                            signature: signatureDataUrl,
+                            pickupLocation: "Awaiting Admin Details",
+                            requestedAt: new Date().toISOString(),
+                            stockDeducted: false
+                        };
+
+                        const cleanOrderData = typeof sanitizeForFirebase === 'function' ? sanitizeForFirebase(orderData) : orderData;
+                        await set(ref(db, 'orders/' + orderId), cleanOrderData);
+                        await logActivity?.("Order Placed", `ID: ${orderId}, ${items.length} items`);
+
+                        cart = {};
+                        upd();
+                        closeAll();
+
+                        const toast = $("#toast");
+                        if (toast) {
+                            toast.classList.add("on");
+                            setTimeout(() => toast.classList.remove("on"), 2200);
+                        }
+
+                        if (typeof fetchTeacherOrderHistory === 'function') {
+                            fetchTeacherOrderHistory(adec);
+                        }
+                    } catch (err) {
+                        console.error("Order submit error:", err);
+                        alert("Error submitting order: " + err.message);
+                    } finally {
+                        window.hideGlobalLoader?.();
+                    }
+                };
+            }
+        }
+
+        if (typeof fetchInventory === 'function') fetchInventory();
+        if (typeof fetchTeacherOrderHistory === 'function') fetchTeacherOrderHistory(adec);
+
+        // Re-render when Firebase inventory arrives / changes (fixes photos & items not showing)
+        window.refreshTeacherCatalog = () => {
+            try {
+                P = buildP();
+                const cs = ["All", ...new Set(P.map(p => p[1]))];
+                if (!cs.includes(cat)) cat = "All";
+                const ce = $("#chips");
+                if (ce) ce.innerHTML = cs.map(c => `<button class="chip${c === cat ? " on" : ""}">${c}</button>`).join("");
+                renderCatalogGrid();
+            } catch (err) { console.error("refreshTeacherCatalog error:", err); }
+        };
+        renderCatalogGrid();
+    } catch (e) {
+        console.error("❌ Error in initNewTeacherDashboard:", e);
+    }
+};
+
+window.renderTeacherDashboard = function() {
+    const grid = document.getElementById('productGrid') || document.querySelector('.products-grid') || document.getElementById('grid');
+    if (grid) {
+        grid.style.display = 'grid';
+        grid.style.visibility = 'visible';
+        grid.style.opacity = '1';
+    }
+    if (typeof renderCatalogGrid === 'function') renderCatalogGrid();
+    if (typeof loadProducts === 'function') loadProducts();
 };
 
 async function handleUserRole(adecNumber) {
@@ -3711,6 +4245,7 @@ function fetchInventory() {
         const data = snapshot.val() || {};
         inventoryData = data;
         window.masterInventoryList = getFlatInventoryList();
+        if (typeof window.refreshTeacherCatalog === 'function') window.refreshTeacherCatalog();
 
         const categoriesForCatalog = getTeacherGroupedCatalog(data);
 
@@ -4099,7 +4634,10 @@ function renderMasterInventory() {
 
     try {
         const term = (adminInventoryState.searchTerm || '').toLowerCase().trim();
-        const catFilter = ($('inventory-filter-category')?.value || '').trim().toLowerCase();
+        const catFilter = ($('inventory-filter-category')?.value || $('categoryFilter')?.value || '').trim().toLowerCase();
+        const lowOnlyEl = $('lowOnly');
+        const lowOnly = lowOnlyEl ? lowOnlyEl.checked : false;
+        const LOW_LIMIT = 10;
 
         // Group inventory by Category -> Serial Number (Unique Parent Card) -> Batches Sub-Rows
         const categoryGroupMap = new Map();
@@ -4216,124 +4754,113 @@ function renderMasterInventory() {
             return;
         }
 
-        // Build Accordion HTML for Category -> Unique Parent Card (per Serial Number) -> Batch Sub-Rows
-        let html = '<div class="accordion inventory-category-accordion" id="adminInventoryCategoryAccordion">';
+        let html = '';
         let categoryIndex = 0;
 
         categoryGroupMap.forEach((categoryProductsMap, categoryName) => {
+            const productsList = Array.from(categoryProductsMap.values()).filter(prod => {
+                if (lowOnly && prod.totalStock > LOW_LIMIT) return false;
+                return true;
+            });
+            if (productsList.length === 0) return;
+
             categoryIndex++;
-            const categoryAccordionId = `inv_cat_acc_${categoryIndex}`;
-            const isFirst = categoryIndex === 1;
-
-            const productsList = Array.from(categoryProductsMap.values());
             const categoryTotalStock = productsList.reduce((sum, p) => sum + p.totalStock, 0);
-
-            let catBadgeClass = 'bg-primary';
-            if (categoryTotalStock <= 0) catBadgeClass = 'bg-secondary';
-            else if (categoryTotalStock <= 5) catBadgeClass = 'bg-danger animate-pulse';
-            else if (categoryTotalStock < 20) catBadgeClass = 'bg-warning text-dark';
+            const openClass = (term || lowOnly || catFilter || (window.__openInvCats && window.__openInvCats.has(categoryName))) ? ' open' : '';
 
             html += `
-                <div class="accordion-item mb-3 border rounded shadow-sm overflow-hidden" style="border-radius: 12px !important;">
-                    <h2 class="accordion-header" id="heading_${categoryAccordionId}">
-                        <button class="accordion-button ${isFirst ? '' : 'collapsed'} bg-white py-3 fw-bold fs-5 text-dark d-flex justify-content-between align-items-center"
-                                type="button" data-bs-toggle="collapse" data-bs-target="#collapse_${categoryAccordionId}"
-                                aria-expanded="${isFirst ? 'true' : 'false'}" aria-controls="collapse_${categoryAccordionId}">
-                            <div class="d-flex align-items-center gap-2">
-                                <i class="bi bi-folder-fill text-warning me-1"></i>
-                                <span>${escapeHtml(categoryName)}</span>
-                                <span class="badge bg-light text-secondary border small ms-2">${productsList.length} Unique Product${productsList.length === 1 ? '' : 's'}</span>
-                            </div>
-                            <span class="badge ${catBadgeClass} p-2 px-3 me-3">
-                                Category Stock: ${categoryTotalStock}
-                            </span>
-                        </button>
-                    </h2>
-                    <div id="collapse_${categoryAccordionId}" class="accordion-collapse collapse ${isFirst ? 'show' : ''}"
-                         aria-labelledby="heading_${categoryAccordionId}" data-bs-parent="#adminInventoryCategoryAccordion">
-                        <div class="accordion-body bg-light p-3">
+                <article class="cat${openClass}" data-cat="${categoryIndex}" data-name="${escapeHtml(categoryName)}">
+                    <button class="cat-head" type="button" onclick="window.toggleInvCat(this)">
+                        <span class="folder"><svg class="i"><use href="#i-folder"/></svg></span>
+                        <h3>${escapeHtml(categoryName)}</h3>
+                        <span class="chip">${productsList.length} Unique Product${productsList.length === 1 ? '' : 's'}</span>
+                        <span class="chip stock">Category Stock: ${categoryTotalStock}</span>
+                        <span class="chev"><svg class="i"><use href="#i-chev"/></svg></span>
+                    </button>
+                    <div class="cat-body">
+                        <table class="tbl">
+                            <thead>
+                                <tr>
+                                    <th>Image</th>
+                                    <th>Brand / Manufacturer</th>
+                                    <th>Serial / Batch No.</th>
+                                    <th>Received Date</th>
+                                    <th>Current Qty</th>
+                                    <th>Initial Qty</th>
+                                    <th>Status</th>
+                                    <th style="text-align:end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
             `;
 
             productsList.forEach((prod) => {
                 const { catId, catData, productName, serialNumber, totalStock, allBatches, unit } = prod;
                 const unitLabel = unit || catData?.unit || 'Pcs';
 
-                let adminStockBadgeHTML = '';
-                if (totalStock <= 0) {
-                    adminStockBadgeHTML = `<span class="badge bg-secondary text-white p-2 px-3 fs-6">❌ Out of Stock (0 ${unitLabel})</span>`;
-                } else if (totalStock <= 5) {
-                    adminStockBadgeHTML = `<span class="badge bg-danger text-white p-2 px-3 fs-6 animate-pulse">⚠️ Emergency Reorder Needed (${totalStock} ${unitLabel} Left)</span>`;
-                } else if (totalStock < 20) {
-                    adminStockBadgeHTML = `<span class="badge bg-warning text-dark p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
-                } else {
-                    adminStockBadgeHTML = `<span class="badge bg-success text-white p-2 px-3 fs-6">Total Current Stock: ${totalStock} ${unitLabel}</span>`;
-                }
-
                 html += `
-                    <div class="card mb-3 border-0 shadow-sm overflow-hidden" style="border-radius: 10px;">
-                        <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
-                            <div>
-                                <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-box-seam text-primary me-2"></i>${escapeHtml(productName)}</h5>
-                                <small class="text-muted">SN: <strong class="text-danger">${escapeHtml(serialNumber)}</strong> | Category: <strong>${escapeHtml(categoryName)}</strong></small>
+                    <tr class="group">
+                        <td colspan="8">
+                            <div class="group-in">
+                                <div>
+                                    <div class="name"><svg class="i"><use href="#i-box"/></svg>${escapeHtml(productName)}</div>
+                                    <div class="sn">SN: <code>${escapeHtml(serialNumber)}</code> | Category: <b>${escapeHtml(categoryName)}</b></div>
+                                </div>
+                                <div class="group-right">
+                                    <span class="status ${totalStock <= LOW_LIMIT ? 'low' : ''}" style="font-size:.9rem;padding:8px 14px;border-radius:10px">Total Current Stock: ${totalStock} ${escapeHtml(unitLabel)}</span>
+                                    <button class="btn btn-green btn-sm" onclick="window.openRestockModal('${escapeHtml(catId)}')"><svg class="i"><use href="#i-plus"/></svg>Add Stock</button>
+                                </div>
                             </div>
-                            <div class="d-flex align-items-center gap-2">
-                                ${adminStockBadgeHTML}
-                                <button class="btn btn-sm btn-success fw-bold ms-2" onclick="window.openRestockModal('${escapeHtml(catId)}')">
-                                    <i class="bi bi-plus-circle me-1"></i> + Add Stock
-                                </button>
-                            </div>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="table table-hover align-middle mb-0 batch-inventory-table" style="font-size: 13px;">
-                                <thead class="bg-light text-muted">
-                                    <tr>
-                                        <th style="width: 60px;">Image</th>
-                                        <th>Brand / Manufacturer</th>
-                                        <th>Serial / Batch No.</th>
-                                        <th>Received Date</th>
-                                        <th class="text-center">Current Qty</th>
-                                        <th class="text-center">Initial Qty</th>
-                                        <th>Status</th>
-                                        <th class="text-end">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>`;
+                        </td>
+                    </tr>
+                `;
 
                 if (allBatches.length === 0) {
-                    html += `<tr><td colspan="8" class="text-center py-4 text-muted italic empty-batch-cell">No active stock batches for this product.</td></tr>`;
+                    html += `<tr><td colspan="8" class="empty">No active stock batches for this product.</td></tr>`;
                 } else {
                     allBatches.forEach((batchItem) => {
                         const { catId: bCatId, batchId, currentStock: cStock, initialQty, brand, serialNumber: bSerial, receivedDate, imageUrl, isLegacy } = batchItem;
+                        const [statusLabel, statusCls] = cStock <= 0 ? ['Out of Stock', 'out'] : cStock <= LOW_LIMIT ? ['Low Stock', 'low'] : ['In Stock', ''];
+                        const pct = initialQty ? Math.max(0, Math.min(100, Math.round(cStock / initialQty * 100))) : 0;
 
                         html += `
-                            <tr>
-                                <td data-label="Image"><img src="${FALLBACK_IMG}" class="rounded inventory-batch-thumb" data-url="${imageUrl}" style="width: 40px; height: 40px; object-fit: contain; background: #f8f9fa;" loading="lazy"></td>
-                                <td data-label="Brand / Manufacturer"><span class="fw-bold text-dark">${escapeHtml(brand)}</span></td>
-                                <td data-label="Serial / Batch No."><code>${escapeHtml(bSerial)}</code></td>
+                            <tr class="batch ${statusCls ? 'low' : ''}">
+                                <td data-label="Image"><img src="${imageUrl || FALLBACK_IMG}" class="thumb" onerror="this.onerror=null; this.src='${FALLBACK_IMG}';" loading="lazy"></td>
+                                <td data-label="Brand / Manufacturer"><b>${escapeHtml(brand)}</b></td>
+                                <td data-label="Serial / Batch No."><span class="serial">${escapeHtml(bSerial)}</span></td>
                                 <td data-label="Received Date">${escapeHtml(receivedDate)}</td>
-                                <td data-label="Current Qty" class="text-center"><span class="badge ${cStock < 10 ? 'bg-warning text-dark' : 'bg-light text-dark border'} fw-bold">${cStock}</span></td>
-                                <td data-label="Initial Qty" class="text-center text-muted">${initialQty}</td>
-                                <td data-label="Status">${getStatusBadge(cStock)}</td>
-                                <td data-label="Actions" class="text-end">`;
+                                <td data-label="Current Qty">
+                                    <div>
+                                        <span class="qty">${cStock}</span>
+                                        <div class="bar"><i style="width: ${pct}%"></i></div>
+                                    </div>
+                                </td>
+                                <td data-label="Initial Qty">${initialQty}</td>
+                                <td data-label="Status"><span class="status ${statusCls}">${statusLabel}</span></td>
+                                <td class="act" style="text-align:end;">
+                                    <div class="row-actions">
+                        `;
                         if (!isLegacy && batchId) {
                             html += `
-                                    <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Edit</button>
-                                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')">Delete</button>`;
+                                        <button class="btn-outline edit" onclick="window.openEditBatchModal('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')"><span>Edit</span></button>
+                                        <button class="btn-outline del" onclick="window.deleteBatch('${escapeHtml(bCatId)}', '${escapeHtml(batchId)}')"><span>Delete</span></button>
+                            `;
                         } else {
                             html += `<span class="text-muted small">Legacy Record</span>`;
                         }
-                        html += `</td></tr>`;
+                        html += `
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
                     });
                 }
-
-                html += `</tbody></table></div></div>`;
             });
 
-            html += `</div></div></div>`;
+            html += `</tbody></table></div></article>`;
         });
 
         html += '</div>';
-
         container.innerHTML = html;
 
         document.querySelectorAll('.inventory-batch-thumb').forEach(img => {
@@ -4347,6 +4874,16 @@ function renderMasterInventory() {
 }
 
 window.renderMasterInventoryReport = renderMasterInventory;
+
+// Category card open/close (remembers open cards after re-render)
+window.__openInvCats = window.__openInvCats || new Set();
+window.toggleInvCat = function(btn) {
+    const card = btn.closest('.cat');
+    if (!card) return;
+    const isOpen = card.classList.toggle('open');
+    const name = card.dataset.name;
+    if (isOpen) window.__openInvCats.add(name); else window.__openInvCats.delete(name);
+};
 
 window.openAddStockModal = function(catName) {
     const modalEl = $('addStockModal');
@@ -4960,24 +5497,27 @@ function fetchAdminOrders() {
 
                 card.innerHTML = `
                     <div class="request-header">
-                        <h4>${escapeHtml(order.teacherName)}</h4>
-                        <span class="badge ${isPending ? 'bg-warning' : 'bg-info'}">${order.status}</span>
+                        <div class="rq-who"><span class="rq-av">${escapeHtml(String(order.teacherName || 'T').trim().charAt(0).toUpperCase())}</span><h4>${escapeHtml(order.teacherName)}</h4></div>
+                        <span class="rq-status ${isPending ? 'pending' : 'approved'}">${escapeHtml(order.status)}</span>
                     </div>
-                    <div class="request-meta small text-muted mb-2">
-                        ADEK: ${order.teacherUid} | Items: ${order.items?.length || 0}
+                    <div class="rq-meta">
+                        <span>🪪 ADEK: ${escapeHtml(String(order.teacherUid || '-'))}</span>
+                        <span>📦 Items: ${order.items?.length || 0}</span>
+                        <span>🔢 Total Qty: ${(order.items || []).reduce((s, i) => s + (parseInt(i.requestQuantity, 10) || 0), 0)}</span>
+                        ${order.timestamp ? `<span>🕒 ${new Date(order.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>` : ''}
                     </div>
                     <div class="request-items" style="display:flex;gap:10px;padding:10px 0;"></div>
                     ${teacherSigSrc ? `
-                        <div class="mb-2 text-center border rounded p-1.5 bg-light">
-                            <small class="d-block text-muted fw-bold mb-1">Teacher's Order Signature</small>
+                        <div class="rq-sig">
+                            <small class="rq-sig-title">✍️ Teacher's Order Signature</small>
                             <img src="${teacherSigSrc}" class="admin-signature-img" style="max-height:70px; max-width:100%; object-fit:contain;" onerror="this.onerror=null; this.parentElement.innerHTML='<small class=\\'text-muted\\'>Signature Preview Unavailable</small>';">
                         </div>
-                    ` : '<div class="mb-2 text-center border rounded p-1 bg-light"><small class="text-muted">No Teacher Signature Provided</small></div>'}
+                    ` : '<div class="rq-sig empty"><small>No Teacher Signature Provided</small></div>'}
                     <div class="request-actions">
-                        ${isPending ? `<button class="action-btn prepare-btn btn-success" style="flex:1;" onclick="window.handleAdminPrepareClick(event, '${id}')">Approve Order</button>` : ''}
+                        ${isPending ? `<button class="rq-btn rq-approve" onclick="window.handleAdminPrepareClick(event, '${id}')">✅ Approve Order</button>` : ''}
                         ${order.status.includes('Approved') ? `
-                            <button class="action-btn handover-btn" style="flex:1;" onclick="window.handleFinalHandover(event, '${id}')">
-                                Final Handover & Sign
+                            <button class="rq-btn rq-handover" onclick="window.handleFinalHandover(event, '${id}')">
+                                ✍️ Final Handover & Sign
                             </button>
                         ` : ''}
                     </div>`;
@@ -4985,14 +5525,14 @@ function fetchAdminOrders() {
                 const wrap = card.querySelector('.request-items');
                 wrap.style.flexDirection = 'column';
                 (order.items || []).forEach(it => {
-                    const d = document.createElement('div'); d.className = 'd-flex align-items-center gap-2 mb-2 p-1 border rounded bg-white';
+                    const d = document.createElement('div'); d.className = 'req-item';
                     d.innerHTML = `
                         <img class="inventory-thumb admin-order-thumb" width="45" height="45" style="object-fit: contain;" data-url="${it.imageUrl}" loading="lazy">
                         <div style="flex: 1; overflow: hidden;">
-                            <h6 class="mb-0 small fw-bold text-truncate">${escapeHtml(it.itemName)}</h6>
-                            <small class="text-muted d-block" style="font-size: 9px;">SN: ${it.serial || it.serialNumber}</small>
+                            <h6 class="req-nm">${escapeHtml(it.itemName)}</h6>
+                            <small class="req-sn">SN: ${escapeHtml(String(it.serial || it.serialNumber || '-'))}</small>
                         </div>
-                        <span class="badge bg-primary" style="font-size: 9px;">x${it.requestQuantity}</span>
+                        <span class="req-qty">x${it.requestQuantity}</span>
                     `;
                     wrap.appendChild(d);
                 });
@@ -5076,6 +5616,25 @@ function fetchTeacherOrderHistory(adec) {
 }
 
 function renderTeacherOrderHistory() {
+    const histList = document.getElementById('histList');
+    if (histList) {
+        if (teacherOrdersState.filtered.length === 0) {
+            histList.innerHTML = `<div class="empty">No orders yet.</div>`;
+        } else {
+            histList.innerHTML = teacherOrdersState.filtered.map(([id, order]) => {
+                const dateStr = new Date(order.timestamp).toLocaleString();
+                const itemsSummary = order.items ? order.items.map(i => `${i.itemName} ×${i.requestQuantity || 1}`).join(', ') : 'Stationery';
+                return `
+                    <div class="hist">
+                        <b>Order ID: ${id} (${order.status})</b>
+                        <small>· ${dateStr}</small>
+                        <div>${itemsSummary}</div>
+                        <small style="display:block; margin-top:4px;">📍 Pickup: ${order.pickupLocation || 'Awaiting Admin Details'}</small>
+                    </div>`;
+            }).join('');
+        }
+    }
+
     const list = $('teacher-history-list'); const cards = $('teacher-history-cards'); if (!list || !cards) return;
     list.innerHTML = ''; cards.innerHTML = '';
     const start = (teacherOrdersState.currentPage - 1) * PAGE_SIZE; const end = start + PAGE_SIZE;
@@ -5741,6 +6300,14 @@ async function addCategory(name) {
     showToast("Added!");
 }
 
+function pickImg(o) {
+    if (!o || typeof o !== 'object') return '';
+    const keys = ['imageUrl','imageURL','image','photoUrl','photoURL','photo','itemImageUrl','itemImage','img','imgUrl','picture','thumbnail','photoBase64','url'];
+    for (const k of keys) { const v = o[k]; if (typeof v === 'string' && v.trim() && isValidImageUrl(v)) return v.trim(); }
+    return '';
+}
+window.pickImg = pickImg;
+
 function getFlatInventoryList() {
     const list = [];
     const sourceData = inventoryData || {};
@@ -5758,9 +6325,9 @@ function getFlatInventoryList() {
                     category: category,
                     name: itemName,
                     itemName: itemName,
-                    imageUrl: b.imageUrl || catData.imageUrl || b.photo || b.image || '',
-                    photo: b.imageUrl || catData.imageUrl || b.photo || b.image || '',
-                    image: b.imageUrl || catData.imageUrl || b.photo || b.image || '',
+                    imageUrl: pickImg(b) || pickImg(catData),
+                    photo: pickImg(b) || pickImg(catData),
+                    image: pickImg(b) || pickImg(catData),
                     brand: b.brandName || b.brand || b.manufacturer || catData.brand || 'Standard',
                     manufacturer: b.brandName || b.brand || b.manufacturer || catData.brand || 'Standard',
                     serialNumber: b.serialNumber || b.batchNo || catData.serialNumber || 'N/A',
@@ -5782,9 +6349,9 @@ function getFlatInventoryList() {
                 category: category,
                 name: itemName,
                 itemName: itemName,
-                imageUrl: catData.imageUrl || catData.photo || catData.image || '',
-                photo: catData.imageUrl || catData.photo || catData.image || '',
-                image: catData.imageUrl || catData.photo || catData.image || '',
+                imageUrl: pickImg(catData),
+                photo: pickImg(catData),
+                image: pickImg(catData),
                 brand: catData.brand || catData.brandName || catData.manufacturer || 'Standard',
                 manufacturer: catData.brand || catData.brandName || catData.manufacturer || 'Standard',
                 serialNumber: catData.serialNumber || catData.batchNo || 'N/A',

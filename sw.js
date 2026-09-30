@@ -1,9 +1,11 @@
-const CACHE_NAME = 'stationery-app-v1.8.86';
+const CACHE_NAME = 'stationery-app-v1.9.17';
 const ASSETS = [
   'index.html',
   'style.css',
+  'login-waterdrop.css',
   'app.js',
   'school.png',
+  'manifest.json',
   'https://unpkg.com/html5-qrcode',
   'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',
   'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js',
@@ -13,7 +15,7 @@ const ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS);
+      return Promise.all(ASSETS.map((u) => cache.add(u).catch(() => {})));
     })
   );
 });

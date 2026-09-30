@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#1565C0">
-    <link rel="manifest" href="./manifest.json?v=1.8.86">
+    <link rel="manifest" href="manifest.json?v=1.9.17">
     <link rel="apple-touch-icon" href="school.png">
     <title>Stationery Tracker System</title>
-    <link rel="stylesheet" href="style.css?v=1.8.86">
+    <link rel="stylesheet" href="style.css?v=1.9.19">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="login-waterdrop.css?v=1.9.17">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -66,6 +67,11 @@
             <button type="button" id="close-drawer-btn" class="btn-close sidebar-close-btn" aria-label="Close"></button>
         </div>
 
+        <div class="sd-user">
+            <span class="sd-av" id="admin-drawer-av">A</span>
+            <div><b id="admin-drawer-name">Admin</b><small id="admin-drawer-role">Administrator</small></div>
+        </div>
+
         <!-- Admin Menu -->
         <nav id="admin-menu" class="drawer-nav" style="display: none;">
             <button data-target="tab-inventory" class="drawer-item active">📦 Master Inventory</button>
@@ -102,41 +108,94 @@
 
     <!-- Login View -->
     <section id="login-view" class="view active">
+        <!-- Stationery shapes SVG sprite (reused by falling rain) -->
+        <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+          <defs>
+            <symbol id="s-pencil" viewBox="0 0 16 64">
+              <rect x="1" y="0" width="14" height="8" rx="2" fill="#f28ab2"/>
+              <rect x="1" y="8" width="14" height="5" fill="#b9c0cc"/>
+              <rect x="1" y="13" width="14" height="34" fill="#ffc933"/>
+              <rect x="5" y="13" width="3" height="34" fill="#ffdf7a"/>
+              <polygon points="1,47 15,47 8,62" fill="#e8c9a0"/>
+              <polygon points="6,57 10,57 8,62" fill="#3a3f4b"/>
+            </symbol>
+            <symbol id="s-pen" viewBox="0 0 14 64">
+              <rect x="2" y="0" width="10" height="44" rx="4" fill="#2f6fe0"/>
+              <rect x="9" y="4" width="2" height="16" rx="1" fill="#cfd8ff"/>
+              <rect x="3" y="44" width="8" height="6" fill="#dfe4ee"/>
+              <polygon points="3,50 11,50 7,63" fill="#3b4252"/>
+            </symbol>
+            <symbol id="s-marker" viewBox="0 0 18 56">
+              <rect x="2" y="0" width="14" height="10" rx="3" fill="#ff5c8a"/>
+              <rect x="1" y="10" width="16" height="32" rx="3" fill="#ff8fb0"/>
+              <polygon points="3,42 15,42 13,54 5,54" fill="#ffd23f"/>
+            </symbol>
+            <symbol id="s-ruler" viewBox="0 0 18 64">
+              <rect x="1" y="0" width="16" height="64" rx="2" fill="#4fd1c5"/>
+              <g stroke="#0e5a55" stroke-width="1.2">
+                <path d="M1 6h8M1 14h5M1 22h8M1 30h5M1 38h8M1 46h5M1 54h8"/>
+              </g>
+            </symbol>
+            <symbol id="s-eraser" viewBox="0 0 32 20">
+              <rect x="0" y="0" width="32" height="20" rx="4" fill="#4b7bec"/>
+              <rect x="0" y="0" width="20" height="20" rx="4" fill="#ff8fa3"/>
+            </symbol>
+            <symbol id="s-clip" viewBox="0 0 14 36">
+              <path d="M4 26V8a4 4 0 0 1 8 0v22a6 6 0 0 1-12 0V10" fill="none" stroke="#c7ccd6" stroke-width="2.4" stroke-linecap="round"/>
+            </symbol>
+            <symbol id="s-book" viewBox="0 0 28 36">
+              <rect x="0" y="0" width="28" height="36" rx="3" fill="#ff9f43"/>
+              <rect x="0" y="0" width="5" height="36" rx="2" fill="#d97a12"/>
+              <rect x="10" y="8" width="13" height="3" rx="1.5" fill="#fff3e0"/>
+              <rect x="10" y="14" width="9" height="3" rx="1.5" fill="#fff3e0"/>
+            </symbol>
+            <symbol id="s-scissors" viewBox="0 0 30 40">
+              <path d="M8 26 L22 2 M22 26 L8 2" stroke="#cfd6e4" stroke-width="3" stroke-linecap="round"/>
+              <circle cx="8" cy="31" r="5" fill="none" stroke="#ff5e57" stroke-width="3"/>
+              <circle cx="22" cy="31" r="5" fill="none" stroke="#ff5e57" stroke-width="3"/>
+            </symbol>
+          </defs>
+        </svg>
+
         <div id="stationery-rain-container" class="stationery-rain-container" aria-hidden="true"></div>
-        <div class="login-container">
-            <img src="school.png" alt="School Logo" class="login-logo" onerror="this.style.display='none'">
-            <h2>School Stationery Tracker</h2>
-            <form id="login-form">
-                <div class="input-group">
-                    <label for="login-pass-number">ADEK Pass Number</label>
-                    <input type="text" id="login-pass-number" placeholder="ADEKأدخل رقم بطاقة/Enter Adek Pass No" required autocomplete="username">
+
+        <main class="card login-card-waterdrop">
+            <img class="logo" src="school.png" alt="School Logo" onerror="this.style.display='none'">
+            <h1>School Stationery Tracker</h1>
+            <form id="login-form" novalidate>
+                <div class="field">
+                    <label for="login-pass-number">ADEK Pass Number / رقم بطاقة ADEK</label>
+                    <div class="input-wrap">
+                        <input class="drop-input" id="login-pass-number" name="adekPass" type="text" inputmode="numeric"
+                               autocomplete="username" placeholder="أدخل رقم بطاقة ADEK / Enter ADEK Pass No" required>
+                    </div>
                 </div>
-                <div class="input-group">
-                    <label for="login-password">Password</label>
-                    <div class="password-field-wrapper">
-                        <input type="password" id="login-password" placeholder="أدخل كلمة المرور/Enter Password" required autocomplete="current-password">
-                        <button type="button" id="toggle-password-visibility" class="password-toggle-btn" tabindex="-1" aria-label="Show password">
-                            <i class="bi bi-eye"></i>
+
+                <div class="field">
+                    <label for="login-password">Password / كلمة المرور</label>
+                    <div class="input-wrap">
+                        <input class="drop-input" id="login-password" name="password" type="password"
+                               autocomplete="current-password" placeholder="أدخل كلمة المرور / Enter Password" required>
+                        <button class="eye" id="toggle-password-visibility" type="button" aria-label="Show password">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
                         </button>
                     </div>
-                    <div class="text-end mt-1">
-                        <a href="#" id="forgot-password-link" class="forgot-password-link" data-bs-toggle="modal" data-bs-target="#forgotPasswordModal">Forgot Password? / نسيت كلمة المرور؟</a>
-                    </div>
                 </div>
-                <button type="button" id="login-btn" onclick="window.handleUserLogin(event)" class="primary-btn">
-                    Login to Dashboard
-                </button>
-                <button type="button" id="biometric-login-btn" class="primary-btn purple mt-3 d-none">
+
+                <a class="forgot" id="forgot-password-link" href="#" data-bs-toggle="modal" data-bs-target="#forgotPasswordModal">Forgot Password? / نسيت كلمة المرور؟</a>
+
+                <button class="drop-btn btn-login" id="login-btn" type="button" onclick="window.handleUserLogin(event)">Login to Dashboard</button>
+
+                <button type="button" id="biometric-login-btn" class="drop-btn btn-login purple mt-2 d-none" onclick="window.loginWithBiometrics ? window.loginWithBiometrics() : null">
                     🔐 Login with Face ID / Fingerprint
                 </button>
+
+                <!-- Developer button: hidden unless SHOW_DEV_BUTTON is true (debug builds only) -->
+                <button class="drop-btn btn-dev" id="direct-admin-btn" type="button" onclick="window.openAdminModal(event)" hidden>⚡ Direct Open Developer Panel</button>
+
+                <p class="error" id="login-error" role="alert"></p>
             </form>
-            <div class="dev-tools">
-                <button type="button" id="direct-admin-btn" class="quick-access-btn direct-admin-btn" onclick="window.openAdminModal(event)">
-                    ⚡ Direct Open Developer Panel
-                </button>
-            </div>
-            <p id="login-error" class="error-message"></p>
-        </div>
+        </main>
     </section>
 
     <!-- Developer Dashboard -->
@@ -229,99 +288,102 @@
         </div>
     </section>
 
-    <!-- Admin Dashboard -->
-    <section id="admin-dashboard-container" class="view dashboard-view">
-        <header class="app-header border-bottom shadow-sm">
-            <div class="d-flex align-items-center gap-2">
-                <button id="admin-hamburger" class="btn p-0 border-0 fs-3 text-dark d-flex align-items-center menu-toggle">
-                    <i class="bi bi-list"></i>
-                </button>
-                <div class="header-logo-container">
-                    <img src="school.png" alt="School Logo">
-                </div>
-            </div>
+    <!-- Admin Dashboard (Redesigned UI v1.8.88) -->
+    <section id="admin-dashboard-container" class="view dashboard-view admin-dashboard-redesign">
+        <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+          <defs>
+            <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+            <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
+            <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+            <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+            <symbol id="i-cart" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.6L21 8H6"/></symbol>
+            <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+            <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 21a7 7 0 0 1 14 0M16 4.5a3.5 3.5 0 0 1 0 7M22 21a7 7 0 0 0-4-6.3"/></symbol>
+            <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></symbol>
+            <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16"/></symbol>
+            <symbol id="i-print" viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v7H6z"/></symbol>
+            <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+            <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="currentColor"/></symbol>
+            <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+            <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></symbol>
+            <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></symbol>
+            <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8v10H3z"/></symbol>
+          </defs>
+        </svg>
 
-            <div class="header-actions">
-                <div class="user-profile-badge d-flex align-items-center gap-2 me-2 border-end pe-3">
-                    <i class="bi bi-person-badge-fill fs-4 text-primary"></i>
-                    <div class="text-start">
-                        <div class="fw-bold text-dark small" id="admin-display-name">Admin: Asif</div>
-                        <div class="text-muted" style="font-size: 10px;">Administrator</div>
-                    </div>
-                </div>
-                <div id="notification-bell" class="notification-bell text-warning fs-4 cursor-pointer">
-                    <span class="bell-icon">🔔</span>
-                    <span id="notif-badge" class="badge-count" style="display: none;">0</span>
-                </div>
-                <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null">Logout</button>
-            </div>
+        <header class="topbar">
+          <button class="icon-btn" id="admin-hamburger" aria-label="Open menu"><svg class="i"><use href="#i-menu"/></svg></button>
+          <div class="logo-pill"><img src="school.png" alt="School logo"></div>
+          <div class="spacer"></div>
+          <div class="admin">
+            <div class="admin-avatar"><svg class="i"><use href="#i-user"/></svg></div>
+            <div><b id="admin-display-name">Admin: Asif</b><small>Administrator</small></div>
+          </div>
+          <button class="icon-btn" id="bellBtn" aria-label="Notifications"><svg class="i"><use href="#i-bell"/></svg><span class="badge-dot" id="notif-badge" style="display:none;"></span></button>
+          <button class="btn btn-red btn-sm" id="logoutBtn" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null"><svg class="i"><use href="#i-logout"/></svg><span class="t">Logout</span></button>
         </header>
-        <div class="content">
-            <div id="admin-content-area">
-                <!-- Tab: Inventory -->
-                <div id="tab-inventory" class="admin-tab active">
-                    <div id="admin-analytics-area">
-                        <h3>Usage Analytics</h3>
-                        <div id="analytics-cards" class="analytics-grid">
-                            <!-- Populated via fetchOrderHistoryForAnalytics() -->
-                            <p>Calculating analytics...</p>
-                        </div>
-                    </div>
-                    <div id="admin-master-inventory-area" style="margin-top:30px;">
-                        <div class="inventory-header-container d-flex justify-content-between align-items-center mb-4">
-                            <h3 class="mb-0 fw-bold text-dark">Master Inventory Report</h3>
-                            <div class="report-action-buttons d-flex gap-2">
-                                <button id="btnExportFullExcel" class="btn btn-success d-flex align-items-center gap-1 fw-bold" onclick="window.exportFullInventoryReport ? window.exportFullInventoryReport() : null">
-                                    📊 Export Full Inventory
-                                </button>
-                                <button id="btnPrintMasterReport" class="btn btn-primary d-flex align-items-center gap-1 fw-bold" onclick="window.printInventoryReport ? window.printInventoryReport() : null">
-                                    🖨️ Print / Export Report
-                                </button>
-                            </div>
-                        </div>
-                        <div class="row g-2 mb-3">
-                            <div class="col-md-8">
-                                <label for="admin-inventory-search" class="visually-hidden">Search inventory</label>
-                                <input type="text" id="admin-inventory-search" class="form-control" placeholder="🔍 Filter inventory by name or serial...">
-                            </div>
-                            <div class="col-md-4">
-                                <select id="inventory-filter-category" class="form-select category-select-element">
-                                    <option value="">All Categories</option>
-                                </select>
-                            </div>
-                        </div>
 
-                        <div id="inventory-container">
-                            <div class="table-responsive">
-                                <table class="history-table">
-                                    <thead>
-                                    <tr>
-                                        <th>Image</th>
-                                        <th>Serial Number</th>
-                                        <th>Item</th>
-                                        <th>Category</th>
-                                        <th>Description</th>
-                                        <th>Opening Quantity</th>
-                                        <th>Quantity Available</th>
-                                        <th>Status</th>
-                                        <th>Action</th>
-                                    </tr>
-                                    </thead>
-                                    <tbody id="master-inventory-list">
-                                    <tr><td colspan="9">Loading...</td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                        <div id="admin-inventory-pagination"></div>
-                    </div>
-                </div>
+        <div class="drawer" id="admin-drawer">
+          <div class="scrim" id="admin-scrim"></div>
+          <nav aria-label="Main menu">
+            <a href="#" class="active"><svg class="i"><use href="#i-home"/></svg>Dashboard</a>
+            <a href="#inventory"><svg class="i"><use href="#i-box"/></svg>Inventory</a>
+            <a href="#" onclick="window.openAdminModal(event)">Orders & Requests</a>
+            <a href="#" onclick="$('teacherAnalyticsModal') ? new bootstrap.Modal($('teacherAnalyticsModal')).show() : null">Staff usage</a>
+          </nav>
+        </div>
+
+        <main style="max-width: 1400px; margin: 0 auto; padding: clamp(14px, 3vw, 32px);">
+          <div id="tab-inventory" class="admin-tab active">
+          <h2>Usage Analytics</h2>
+          <section class="stats" aria-label="Usage analytics">
+            <article class="stat">
+              <div class="ico" style="background:#e7f0ff;color:var(--blue)"><svg class="i"><use href="#i-cart"/></svg></div>
+              <div class="label">TOTAL ORDERS</div>
+              <div class="value" id="statOrders">0</div>
+              <div class="hint">Lifetime Volume</div>
+            </article>
+            <article class="stat">
+              <div class="ico" style="background:#fff4d6;color:var(--amber)"><svg class="i"><use href="#i-layers"/></svg></div>
+              <div class="label">PIPELINE STATUS</div>
+              <div class="pipe"><span class="p" id="statP">0P</span><span>|</span><span class="a" id="statA">0A</span><span>|</span><span class="d" id="statD">0D</span></div>
+              <div class="hint">Pending / Approved / Done</div>
+            </article>
+            <article class="stat accent">
+              <div class="ico" style="background:#dff6fb;color:#0aa2c0"><svg class="i"><use href="#i-users"/></svg></div>
+              <div class="label">TEACHER USAGE</div>
+              <div class="value"><span id="statStaff">0</span> Staff</div>
+              <button class="btn btn-blue btn-sm" id="breakdownBtn" onclick="$('teacherAnalyticsModal') ? new bootstrap.Modal($('teacherAnalyticsModal')).show() : null"><svg class="i"><use href="#i-chart"/></svg>View Breakdown</button>
+            </article>
+          </section>
+
+          <section id="inventory">
+            <div class="section-head">
+              <h2>Master Inventory Report</h2>
+              <div class="actions">
+                <button class="btn btn-green" id="btnExportFullExcel" onclick="window.exportFullInventoryReport ? window.exportFullInventoryReport() : null"><svg class="i"><use href="#i-download"/></svg>Export Full Inventory</button>
+                <button class="btn btn-blue" id="btnPrintMasterReport" onclick="window.printInventoryReport ? window.printInventoryReport() : null"><svg class="i"><use href="#i-print"/></svg>Print / Export Report</button>
+              </div>
+            </div>
+
+            <div class="filters">
+              <label class="field"><svg class="i"><use href="#i-search"/></svg>
+                <input id="admin-inventory-search" type="search" placeholder="Filter inventory by name or serial…" aria-label="Filter inventory">
+              </label>
+              <label class="field"><select id="inventory-filter-category" aria-label="Category"><option value="">All Categories</option></select></label>
+              <label class="toggle"><input type="checkbox" id="lowOnly"> Low stock only</label>
+            </div>
+
+            <div id="inventory-container"></div>
+          </section>
+          </div><!-- /tab-inventory -->
 
                 <!-- Tab: Add Item -->
                 <div id="tab-add-item" class="admin-tab">
                     <div class="form-container" style="border-left:5px solid #10b981;">
                         <h3>Add New Inventory Item</h3>
                         <form id="add-inventory-form">
+                            <button type="button" class="smart-scan-btn" onclick="window.openTextScanner('inv-item-name')">🪄 <span><b>Smart Label Scan</b><small>Photo lo ya gallery se upload karo - Item name, description aur serial number automatically detect hoga</small></span></button>
                             <div class="form-group">
                                 <label for="item-category-dropdown">Category</label>
                                 <select id="item-category-dropdown" class="form-select category-select-element" required onchange="window.handleCategorySelectionForForm ? window.handleCategorySelectionForForm(this.value) : null">
@@ -568,71 +630,147 @@
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
+        </main>
     </section>
+</div><!-- /#app -->
 
     <!-- Teacher Dashboard -->
-    <section id="user-view-container" class="view dashboard-view">
-        <header class="app-header border-bottom shadow-sm">
-            <div class="d-flex align-items-center gap-2">
-                <button id="teacher-hamburger" class="btn p-0 border-0 fs-3 text-dark d-flex align-items-center menu-toggle">
-                    <i class="bi bi-list"></i>
-                </button>
-                <div class="header-logo-container">
-                    <img src="school.png" alt="School Logo">
-                </div>
-            </div>
+    <section id="user-view-container" class="view dashboard-view" style="display: none;">
+<style>
+:root{--bg:#eef1f6;--card:#fff;--ink:#141b2d;--muted:#5b6579;--line:#dfe4ee;--blue:#2563eb;--navy:#0f1a3a;--amber:#f59e0b;--red:#e11d48;--green:#15803d;--greenbg:#dcfce7;--chip:#e6ebf5;box-sizing:border-box}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b1020;--card:#151d33;--ink:#eef2fb;--muted:#9aa6c0;--line:#27324f;--chip:#22304f;--greenbg:#12341f;--green:#4ade80}}
+:root[data-theme="dark"]{--bg:#0b1020;--card:#151d33;--ink:#eef2fb;--muted:#9aa6c0;--line:#27324f;--chip:#22304f;--greenbg:#12341f;--green:#4ade80}
+#user-view-container{margin:0;padding:0;background:var(--bg);color:var(--ink);font:16px/1.4 "Segoe UI",system-ui,-apple-system,Arial,sans-serif;overflow:hidden;position:relative;width:100%;height:100%;height:100dvh;max-height:100dvh;display:flex;flex-direction:column;box-sizing:border-box}
+#user-view-container button{font:inherit;cursor:pointer;border:0;color:inherit;background:none}
+#user-view-container .hdr{flex:none;position:relative;z-index:20;display:flex;align-items:center;gap:8px;padding:10px clamp(10px,3vw,24px);background:var(--card);border-bottom:1px solid var(--line)}
+#user-view-container .ib{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-size:20px;position:relative}
+#user-view-container .ib:hover{background:var(--chip)}
+#user-view-container .brand{font-weight:700;font-size:clamp(.95rem,3vw,1.15rem);white-space:nowrap}
+#user-view-container .sp{flex:1}
+#user-view-container .user{display:flex;align-items:center;gap:10px;min-width:0}
+#user-view-container .av{width:38px;height:38px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:700;flex:none}
+#user-view-container .user b{display:block;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#user-view-container .user small{color:var(--muted);font-size:.72rem}
+@media(max-width:640px){#user-view-container .user div{display:none}}
+#user-view-container .dot{position:absolute;top:4px;right:3px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--red);color:#fff;font-size:.7rem;font-weight:700;display:grid;place-items:center}
+#user-view-container .cartb{background:var(--amber);color:#1a1200;border-radius:14px;height:44px;padding:0 14px;font-weight:700;display:flex;align-items:center;gap:6px}
+#user-view-container .out{background:var(--red);color:#fff;border-radius:14px;height:44px;padding:0 16px;font-weight:700}
+@media(max-width:640px){#user-view-container .out{display:none}}
+#user-view-container main{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;max-width:1400px;width:100%;margin:0 auto;padding:12px clamp(12px,3vw,24px) 0;box-sizing:border-box}
+#vCat,#vHist{display:flex;flex-direction:column;flex:1;min-height:0;height:100%;overflow:hidden}
+#vCat[hidden],#vHist[hidden]{display:none !important}
+#vCat h1,#vCat .search,#vCat .chips,#vHist h1{flex:none}
+#user-view-container h1{margin:0 0 10px;font-size:clamp(1.3rem,4vw,1.8rem)}
+#user-view-container .search{width:100%;height:48px;border:1px solid var(--line);border-radius:16px;padding:0 18px;font:inherit;font-size:16px;background:var(--card);color:var(--ink);margin-bottom:8px}
+#user-view-container .chips{display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px;scrollbar-width:none;-ms-overflow-style:none}
+#user-view-container .chips::-webkit-scrollbar{display:none}
+#user-view-container .chip{flex:none;height:38px;padding:0 16px;border-radius:19px;background:var(--chip);font-weight:600;font-size:.88rem}
+#user-view-container .chip.on{background:var(--blue);color:#fff}
+#grid,#histList{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:calc(24px + env(safe-area-inset-bottom));-webkit-overflow-scrolling:touch}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:clamp(12px,2vw,20px);padding-top:6px}
+#user-view-container .p{background:var(--card);border:1px solid var(--line);border-radius:20px;overflow:hidden;display:flex;flex-direction:column}
+#user-view-container .pic{aspect-ratio:4/3;display:grid;place-items:center;font-size:56px}
+#user-view-container .pb{padding:14px;display:flex;flex-direction:column;gap:8px;flex:1}
+#user-view-container .tag{align-self:flex-start;background:var(--chip);color:var(--muted);font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:10px}
+#user-view-container .pn{font-weight:700;overflow-wrap:anywhere}
+#user-view-container .sn{font-size:.82rem;color:var(--muted)}#user-view-container .sn b{color:var(--red)}
+#user-view-container .av-b{align-self:flex-start;background:var(--greenbg);color:var(--green);font-weight:700;font-size:.82rem;padding:4px 12px;border-radius:12px}
+#user-view-container .av-b.low{background:#fee2e2;color:#b91c1c}
+#user-view-container .add{margin-top:auto;height:48px;border-radius:14px;background:var(--blue);color:#fff;font-weight:700}
+#user-view-container .add:hover{filter:brightness(1.1)}
+#user-view-container .empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:40px 0}
+/* overlays */
+#user-view-container .ov{position:fixed;inset:0;background:rgba(8,12,28,.55);opacity:0;pointer-events:none;transition:opacity .2s;z-index:30}
+#user-view-container .ov.on{opacity:1;pointer-events:auto}
+#user-view-container .drawer{position:fixed;top:0;bottom:0;left:0;width:min(86vw,320px);background:var(--card);z-index:40;transform:translateX(-102%);transition:transform .25s;display:flex;flex-direction:column;padding:calc(20px + env(safe-area-inset-top,0px)) 16px 20px}
+#user-view-container .drawer.on{transform:none}
+#user-view-container .dh{display:flex;gap:12px;align-items:center;padding:14px;border-radius:18px;background:var(--navy);color:#fff;margin-bottom:16px}
+#user-view-container .dh small{opacity:.75;display:block}
+#user-view-container .nav{display:flex;align-items:center;gap:14px;height:52px;padding:0 14px;border-radius:14px;width:100%;text-align:start;font-weight:600}
+#user-view-container .nav:hover{background:var(--chip)}#user-view-container .nav.on{background:var(--blue);color:#fff}
+#user-view-container .nav em{font-style:normal;font-size:1.2rem}
+#user-view-container .nav .n{margin-inline-start:auto;background:var(--amber);color:#1a1200;border-radius:10px;padding:0 8px;font-size:.8rem}
+#user-view-container .dlogout{margin-top:auto;height:50px;border-radius:14px;background:var(--red);color:#fff;font-weight:700}
+#user-view-container .sheet{position:fixed;z-index:50;background:var(--card);display:flex;flex-direction:column;left:50%;top:50%;width:min(94vw,520px);max-height:88dvh;border-radius:24px;transform:translate(-50%,-46%) scale(.97);opacity:0;pointer-events:none;transition:.2s}
+#user-view-container .sheet.on{opacity:1;pointer-events:auto;transform:translate(-50%,-50%)}
+@media(max-width:600px){#user-view-container .sheet{left:0;right:0;top:auto;bottom:0;width:100%;border-radius:24px 24px 0 0;transform:translateY(100%);padding-bottom:env(safe-area-inset-bottom,0px)}#user-view-container .sheet.on{transform:none}}
+#user-view-container .sh{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--line)}
+#user-view-container .sh h2{margin:0;font-size:1.2rem}
+#user-view-container .sb{padding:14px 20px;overflow-y:auto;flex:1}
+#user-view-container .sf{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px}
+#user-view-container .btn{flex:1;height:50px;border-radius:14px;font-weight:700;background:var(--blue);color:#fff}
+#user-view-container .btn.g{background:var(--chip);color:var(--ink)}#user-view-container .btn:disabled{opacity:.45;cursor:not-allowed}
+#user-view-container .ci{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+#user-view-container .ci .e{font-size:30px;width:52px;height:52px;border-radius:14px;display:grid;place-items:center;flex:none}
+#user-view-container .ci .t{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}
+#user-view-container .qty{display:flex;align-items:center;gap:6px}
+#user-view-container .qty button{width:36px;height:36px;border-radius:10px;background:var(--chip);font-weight:700}
+#user-view-container .note{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+#user-view-container .note i{font-style:normal;width:40px;height:40px;border-radius:12px;background:var(--chip);display:grid;place-items:center;flex:none}
+#user-view-container .note small{color:var(--muted);display:block}
+#user-view-container .pad{width:100%;height:190px;border:2px dashed var(--muted);border-radius:16px;background:#fff;touch-action:none;display:block}
+#user-view-container .hint{color:var(--muted);font-size:.85rem;margin:8px 0 0}
+#user-view-container .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,120px);background:var(--green);color:#fff;padding:12px 20px;border-radius:14px;font-weight:700;z-index:60;transition:transform .3s}
+#user-view-container .toast.on{transform:translate(-50%,0)}
+#user-view-container .hist{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+#user-view-container .hist small{color:var(--muted)}
+</style>
 
-            <div class="header-actions">
-                <div class="user-profile-badge d-flex align-items-center gap-2 me-2 border-end pe-3">
-                    <i class="bi bi-person-circle fs-4 text-success"></i>
-                    <div class="text-start">
-                        <div class="fw-bold text-dark small" id="teacher-display-name">Teacher Name</div>
-                        <div class="text-muted" id="teacher-display-id" style="font-size: 10px;">Employee ID: --</div>
-                    </div>
-                </div>
-                <button id="cart-btn" class="cart-btn-main me-2" onclick="window.openCartModal()">🛒 <span id="cart-count">0</span></button>
-                <button class="btn btn-danger fw-bold px-3 py-2 rounded-2 shadow-sm" onclick="handleUserLogout(event)">Logout</button>
-            </div>
-        </header>
-        <div class="content">
-            <div id="stationery-catalog-section" class="dashboard-section">
-                <h2>Stationery Catalog</h2>
-                <div class="search-bar mb-3">
-                    <label for="stationery-search" class="visually-hidden">Search</label>
-                    <input type="text" id="stationery-search" class="form-control" placeholder="🔍 Search by name or serial..." autocomplete="off">
-                </div>
-                <div id="teacherCatalogGrid" class="row">
-                    <div id="stationery-list" class="grid-container w-100">
-                        <p>Loading catalog...</p>
-                    </div>
-                </div>
-            </div>
+<header class="hdr">
+  <button class="ib" id="menuB" aria-label="Open menu">☰</button>
+  <span class="brand">Stationery Tracker</span>
+  <span class="sp"></span>
+  <div class="user"><span class="av" id="teacher-avatar-init">AA</span><div><b id="teacher-display-name">Abdulaziz Alali</b><small id="teacher-display-id">Employee ID: PASS203011</small></div></div>
+  <button class="ib" id="bellB" aria-label="Notifications">🔔<span class="dot" id="notif-dot" style="display:none;">0</span></button>
+  <button class="cartb" id="cartB" aria-label="Open cart">🛒 <span id="cc">0</span></button>
+  <button class="out" onclick="window.handleUserLogout(event)">Logout</button>
+</header>
 
-            <div id="order-history-section" class="dashboard-section d-none">
-                <h3>My Order History</h3>
-                <div id="teacher-orders-container">
-                    <div class="table-responsive desktop-only">
-                        <table class="history-table">
-                            <thead>
-                            <tr>
-                                <th>Item Details</th>
-                                <th>Status</th>
-                                <th>📍 Pickup Location</th>
-                                <th>Action</th>
-                            </tr>
-                            </thead>
-                            <tbody id="teacher-history-list">
-                            <tr><td colspan="4">Loading...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <div id="teacher-history-cards" class="mobile-only"></div>
-                </div>
-                <div id="teacher-orders-pagination"></div>
-            </div>
-        </div>
+<main>
+  <div id="vCat">
+    <h1>Stationery Catalog</h1>
+    <input class="search" id="q" type="search" placeholder="Search by name or serial…" aria-label="Search">
+    <div class="chips" id="chips"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+  <div id="vHist" hidden><h1>Order History</h1><div id="histList"></div></div>
+</main>
+
+<div class="ov" id="ov"></div>
+
+<aside class="drawer" id="drawer" aria-label="Menu">
+  <div class="dh"><span class="av" id="drawer-avatar-init">AA</span><div><b id="drawer-display-name">Abdulaziz Alali</b><small>Teacher · <span id="drawer-display-id">PASS203011</span></small></div></div>
+  <button class="nav on" data-go="cat"><em>📚</em>Catalog</button>
+  <button class="nav" data-go="cart"><em>🛒</em>Add to Cart<span class="n" id="dn">0</span></button>
+  <button class="nav" data-go="hist"><em>🧾</em>Order History</button>
+  <div class="nav2" role="group" aria-label="Biometric login"><em>🔐</em><span>Fingerprint / Face / Phone Lock</span><label class="sw"><input type="checkbox" id="biometric-toggle-teacher" onclick="window.toggleBiometricAuth(event)" aria-label="Enable biometric login"><i></i></label></div>
+  <button class="nav2" type="button" onclick="window.enableFcmNotifications && window.enableFcmNotifications()"><em>🔔</em><span>Enable Notifications</span></button>
+  <button class="dlogout" onclick="window.handleUserLogout(event)">Logout</button>
+</aside>
+
+<section class="sheet" id="cartS" role="dialog" aria-label="Cart">
+  <div class="sh"><h2>Your Cart</h2><button class="ib" data-close aria-label="Close">✕</button></div>
+  <div class="sb" id="cartBody"></div>
+  <div class="sf"><button class="btn g" data-close>Keep browsing</button><button class="btn" id="toSign">Continue to sign</button></div>
+</section>
+
+<section class="sheet" id="signS" role="dialog" aria-label="Signature">
+  <div class="sh"><h2>Sign to confirm</h2><button class="ib" data-close aria-label="Close">✕</button></div>
+  <div class="sb">
+    <p style="margin:0 0 10px;color:var(--muted)">By signing, you confirm receiving <b id="signN">0</b> item(s).</p>
+    <canvas class="pad" id="pad"></canvas>
+    <p class="hint">Sign inside the box using your finger or mouse.</p>
+  </div>
+  <div class="sf"><button class="btn g" id="clr">Clear</button><button class="btn" id="conf" disabled>Confirm order</button></div>
+</section>
+
+<section class="sheet" id="noteS" role="dialog" aria-label="Notifications">
+  <div class="sh"><h2>Notifications</h2><button class="ib" data-close aria-label="Close">✕</button></div>
+  <div class="sb" id="notificationsBody">
+    <div class="empty">No notifications yet.</div>
+  </div>
+</section>
+<div class="toast" id="toast">Order confirmed ✓</div>
     </section>
 
     <!-- Teacher Order Signature Modal -->
@@ -679,19 +817,21 @@
     <!-- Admin Approval Modal -->
     <div class="modal fade" id="admin-approval-modal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content rounded-4 shadow">
-                <div class="modal-header bg-success text-white">
-                    <h5 class="modal-title fs-6 fw-bold">Approve Order Request</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            <div class="modal-content">
+                <div class="modal-header hv-head ok">
+                    <div class="hv-title"><span class="hv-ico">✅</span><div><h5 class="modal-title">Approve Order Request</h5><small>Teacher will be notified with the pickup details</small></div></div>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="modal-body p-4">
-                    <div class="mb-3">
-                        <label for="pickup-location-input" class="form-label small fw-bold">Pickup Location / Handover Comment</label>
-                        <textarea id="pickup-location-input" class="form-control" rows="3" placeholder="e.g. Collect from Main Office, Store Room 2"></textarea>
+                <div class="modal-body">
+                    <label for="pickup-location-input" class="hv-label">Pickup Location / Handover Comment</label>
+                    <textarea id="pickup-location-input" class="form-control hv-input" rows="3" placeholder="e.g. Collect from Main Office, Store Room 2"></textarea>
+                    <div class="hv-quick" aria-label="Quick pick">
+                        <span>Quick pick:</span>
+                        <button type="button" onclick="document.getElementById('pickup-location-input').value=this.textContent.trim()">Main Office</button>
+                        <button type="button" onclick="document.getElementById('pickup-location-input').value=this.textContent.trim()">Store Room 2</button>
+                        <button type="button" onclick="document.getElementById('pickup-location-input').value=this.textContent.trim()">Reception</button>
                     </div>
-                    <button type="button" class="btn btn-success w-100 fw-bold py-2" onclick="window.confirmAdminOrderApproval(event)">
-                        Confirm Approval & Notify Teacher
-                    </button>
+                    <button type="button" class="hv-btn success" onclick="window.confirmAdminOrderApproval(event)">✔ Confirm Approval & Notify Teacher</button>
                 </div>
             </div>
         </div>
@@ -862,12 +1002,12 @@
     <!-- Handover Modal -->
     <div class="modal fade" id="handoverModal" tabindex="-1" aria-labelledby="handoverModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-lg">
-            <div class="modal-content border-0 shadow">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title fw-bold" id="handoverModalLabel">Final Order Handover & Receiver Signature</h5>
+            <div class="modal-content">
+                <div class="modal-header hv-head">
+                    <div class="hv-title"><span class="hv-ico">📦</span><div><h5 class="modal-title" id="handoverModalLabel">Final Order Handover & Receiver Signature</h5><small>Check stock allocation, then take the receiver signature</small></div></div>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="modal-body p-4">
+                <div class="modal-body">
                     <div id="handover-order-summary" class="alert alert-info text-start mb-3" style="font-size: 14px;">
                         Loading order details...
                     </div>
@@ -900,10 +1040,10 @@
                             </button>
                         </div>
                     </div>
-                    <button type="button" id="clear-handover-sig" class="btn btn-sm btn-outline-secondary mb-3">Clear Signature</button>
-                    <button type="button" class="btn btn-success w-100 py-2 fw-bold shadow-sm" onclick="window.submitHandoverWithSignature(event)">
-                        Complete Handover & Close Order
-                    </button>
+                    <div class="hv-footer">
+                        <button type="button" id="clear-handover-sig" class="hv-btn ghost">🧹 Clear Signature</button>
+                        <button type="button" class="hv-btn success" onclick="window.submitHandoverWithSignature(event)">✔ Complete Handover & Close Order</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1107,23 +1247,55 @@
 
     <!-- OCR Scanner Modal (FIXED: z-index boosted, display controlled by .active class) -->
     <div id="ocr-scanner-modal" class="modal" style="z-index: 1070;">
-        <div class="modal-content" style="max-width:500px; text-align:center; position:relative;">
-            <h3>📝 OCR Text Scanner</h3>
-            <p style="font-size:12px; color:#64748b; margin-bottom:10px;">Snapshot a clear label to extract text</p>
-
+        <div class="modal-content ocr-adv">
+            <div class="ocr-head">
+                <h3>🪄 Advanced Text Scanner</h3>
+                <button type="button" class="ocr-x" aria-label="Close" onclick="document.getElementById('close-ocr-btn').click()">✕</button>
+            </div>
             <input type="file" id="ocr-file-fallback" accept="image/*" capture="environment" style="display: none;">
+            <input type="file" id="ocr-gallery-input" accept="image/*" style="display: none;">
 
-            <div id="ocr-camera-wrap" style="position:relative; width:100%; aspect-ratio: 4/3; background:#000; border-radius:12px; overflow:hidden; border:2px solid #e2e8f0;">
-                <video id="ocr-video" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover;"></video>
+            <div id="ocr-camera-wrap" class="ocr-cam">
+                <video id="ocr-video" autoplay playsinline muted></video>
                 <canvas id="ocr-canvas" style="display:none;"></canvas>
-
-                <div id="ocr-loader" style="display:none; position:absolute; inset:0; background:rgba(15,23,42,0.8); color:white; flex-direction:column; align-items:center; justify-content:center; z-index:10;">
+                <div class="ocr-frame"></div>
+                <div id="ocr-loader" style="display:none;">
                     <div class="spinner" style="border-top-color:#fff; margin-bottom:10px;"></div>
                     <p id="ocr-status-text">Scanning & Reading Text...</p>
                 </div>
             </div>
 
-            <div class="modal-actions" style="margin-top:20px; flex-direction:column; gap:10px;">
+            <div id="ocr-tools" class="ocr-tools">
+                <select id="ocr-lang" aria-label="Language">
+                    <option value="eng">English</option>
+                    <option value="eng+ara">English + Arabic</option>
+                </select>
+                <button type="button" id="ocr-torch-btn">🔦 Flash</button>
+                <button type="button" id="ocr-gallery-btn">🖼️ Gallery</button>
+                <button type="button" onclick="document.getElementById('ocr-file-fallback').click()">📷 Camera App</button>
+            </div>
+            <p id="ocr-hint" class="ocr-hint">Keep the label inside the frame, good light, no shadow. You can also upload a photo from the gallery.</p>
+
+            <div id="ocr-result-panel" class="ocr-result" style="display:none;">
+                <div class="ocr-sub">Detected lines - tap to select / unselect</div>
+                <div id="ocr-lines" class="ocr-lines"></div>
+                <div class="ocr-sub">Possible serial / barcode numbers</div>
+                <div id="ocr-suggest" class="ocr-lines row"></div>
+                <div class="ocr-sub">Final text (you can edit)</div>
+                <textarea id="ocr-text-edit" rows="3"></textarea>
+                <div class="ocr-send">
+                    <button type="button" id="ocr-send-target" class="main" data-ocr-send="target">Use</button>
+                    <button type="button" data-ocr-send="inv-item-name">Item Name</button>
+                    <button type="button" data-ocr-send="inv-description">Description</button>
+                    <button type="button" data-ocr-send="inv-serial-number">Serial No.</button>
+                </div>
+                <div class="ocr-send two">
+                    <button type="button" id="ocr-rescan-btn">↻ Scan again</button>
+                    <button type="button" id="ocr-done-btn" class="main">Done</button>
+                </div>
+            </div>
+
+            <div id="ocr-actions" class="ocr-actions">
                 <button id="ocr-snap-btn" class="primary-btn purple">📸 Snap & Extract Text</button>
                 <button id="close-ocr-btn" class="secondary-btn">Close / Stop Camera</button>
             </div>
@@ -1203,6 +1375,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=1.8.86"></script>
+<script type="module" src="app.js?v=1.9.19"></script>
 </body>
 </html>
