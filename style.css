@@ -3396,3 +3396,58 @@ body.v21-noscroll { overflow: hidden !important; }
 .sigv-err { color: #dc2626; font-size: .82rem; margin-top: 8px; min-height: 1em; white-space: normal; }
 .sigv-foot { flex-wrap: wrap; }
 .sigv-sec { border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 14px; min-height: 44px; padding: 0 16px; font-weight: 700; cursor: pointer; }
+
+
+/* ==================== v2.4.0 MOBILE ADMIN: header fits + much less scrolling ==================== */
+@media (max-width:720px){
+  /* 1) Header: bell + logout always visible, logo shrinks instead of pushing them off-screen */
+  .admin-dashboard-redesign .topbar{height:58px !important;gap:6px !important;padding-left:8px !important;padding-right:8px !important;overflow:hidden}
+  .admin-dashboard-redesign .topbar > *{flex:0 0 auto !important;min-width:0}
+  .admin-dashboard-redesign .topbar .spacer{display:none !important}
+  .admin-dashboard-redesign .topbar .logo-pill{flex:1 1 0 !important;min-width:0 !important;height:40px !important;padding:0 10px !important;overflow:hidden;justify-content:center}
+  .admin-dashboard-redesign .topbar .logo-pill img{max-width:100% !important;max-height:22px !important;width:auto;height:auto;object-fit:contain}
+  .admin-dashboard-redesign .topbar .admin{gap:0 !important}
+  .admin-dashboard-redesign .topbar .admin > div:not(.admin-avatar){display:none !important}
+  .admin-dashboard-redesign .topbar .admin-avatar{width:36px !important;height:36px !important}
+  .admin-dashboard-redesign .topbar .icon-btn{width:40px !important;height:40px !important;position:relative}
+  .admin-dashboard-redesign .topbar .btn{height:40px !important;min-width:40px;padding:0 10px !important}
+  .admin-dashboard-redesign .topbar .notif-count{top:2px !important;right:2px !important}
+
+  /* 2) Titles + spacing smaller */
+  .admin-dashboard-redesign main h2{font-size:1.2rem !important;margin:2px 0 10px !important}
+  .admin-dashboard-redesign .section-head h2{font-size:1.15rem !important}
+
+  /* 3) Usage Analytics: 3 small cards in ONE row (was 3 tall cards) */
+  .admin-dashboard-redesign .stats{grid-template-columns:repeat(3,minmax(0,1fr)) !important;gap:8px !important;margin-bottom:14px !important}
+  .admin-dashboard-redesign .stat{padding:10px 4px !important;border-radius:14px !important;gap:2px !important;min-width:0}
+  .admin-dashboard-redesign .stat .ico{width:32px !important;height:32px !important;margin-bottom:2px !important;border-radius:10px !important}
+  .admin-dashboard-redesign .stat .ico svg{width:18px;height:18px}
+  .admin-dashboard-redesign .stat .label{font-size:.58rem !important;letter-spacing:0 !important;line-height:1.15}
+  .admin-dashboard-redesign .stat .value{font-size:clamp(.95rem,4.6vw,1.3rem) !important;white-space:nowrap}
+  .admin-dashboard-redesign .stat .hint{font-size:.58rem !important;line-height:1.15}
+  .admin-dashboard-redesign .stat .btn{height:28px !important;padding:0 6px !important;font-size:.6rem !important;gap:3px !important;margin-top:2px}
+  .admin-dashboard-redesign .stat .btn svg{width:11px;height:11px}
+
+  /* 4) Master Inventory buttons: 2 x 2 grid (was 4 full-width buttons) */
+  .admin-dashboard-redesign .section-head{display:block !important;margin-bottom:10px !important}
+  .admin-dashboard-redesign .section-head .actions{display:grid !important;grid-template-columns:1fr 1fr !important;gap:8px !important;width:100%;margin-top:8px}
+  .admin-dashboard-redesign .section-head .actions .btn{width:100% !important;min-width:0 !important;height:42px !important;padding:0 6px !important;font-size:.75rem !important;line-height:1.1;white-space:normal;display:inline-flex !important;align-items:center;justify-content:center;gap:4px;text-align:center}
+  .admin-dashboard-redesign .section-head .actions .btn svg{width:14px;height:14px;flex:none}
+
+  /* 5) Filters: search on top, category + low-stock side by side */
+  .admin-dashboard-redesign .filters{display:grid !important;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) !important;gap:8px !important;margin-bottom:12px !important}
+  .admin-dashboard-redesign .filters > .field:first-child{grid-column:1 / -1}
+  .admin-dashboard-redesign .filters .field,.admin-dashboard-redesign .filters .toggle{min-height:44px !important;height:44px !important;margin:0 !important}
+  .admin-dashboard-redesign .filters .toggle{grid-column:auto !important;padding:0 10px !important;font-size:.8rem !important;gap:6px;white-space:nowrap}
+  .admin-dashboard-redesign .filters select{font-size:.9rem !important}
+
+  /* 6) Category cards: small header (title + count + stock + arrow) instead of 3 stacked rows */
+  .admin-dashboard-redesign .cat{margin-bottom:8px !important}
+  .admin-dashboard-redesign .cat-head{display:grid !important;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"f t v" "c s s";align-items:center;gap:6px 10px !important;padding:10px 12px !important}
+  .admin-dashboard-redesign .cat-head .folder{grid-area:f;font-size:1.15rem !important;display:flex}
+  .admin-dashboard-redesign .cat-head h3{grid-area:t;font-size:1rem !important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .admin-dashboard-redesign .cat-head .chev{grid-area:v;margin:0 !important}
+  .admin-dashboard-redesign .cat-head .chip{font-size:.72rem !important;padding:4px 10px !important;line-height:1.2;white-space:nowrap;justify-self:start}
+  .admin-dashboard-redesign .cat-head .chip:not(.stock){grid-area:c}
+  .admin-dashboard-redesign .cat-head .chip.stock{grid-area:s}
+}

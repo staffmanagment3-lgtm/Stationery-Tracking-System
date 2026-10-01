@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "2.3.3";
+const APP_VERSION = "2.4.0";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -5262,7 +5262,7 @@ window.handleSaveRestockBatch = async function(e) {
         if (file) {
             showToast("Processing batch photo...");
             const compressed = await window.compressAndScaleImage(file);
-            const studio = await window.generateStudioProductPhoto(compressed);
+            const studio = await window.studioPhotoWithPreview(compressed, file);
             const driveUrl = await uploadToGoogleDrive(studio, `Restock_${serialNumber}_${Date.now()}.jpg`, 'product');
             imageUrl = driveUrl || studio;
         }
@@ -5283,7 +5283,8 @@ window.handleSaveRestockBatch = async function(e) {
         fetchMasterInventory();
         fetchInventory();
     } catch (err) {
-        alert("Error: " + err.message);
+        if (err && err.code === 'PHOTO_CANCELLED') showToast("Photo upload cancelled.", "error");
+        else alert("Error: " + err.message);
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -7805,7 +7806,7 @@ async function saveInventoryItem(e) {
         const compressedBase64 = await window.compressAndScaleImage(file);
 
         if (msg) msg.textContent = "Step 2: AI Enhancing Studio Background...";
-        const studioPhotoBase64 = await window.generateStudioProductPhoto(compressedBase64);
+        const studioPhotoBase64 = await window.studioPhotoWithPreview(compressedBase64, file);
 
         if (msg) msg.textContent = "Step 3: Uploading Studio Photo to Google Drive...";
         const driveUrl = await uploadPhotoToGoogleDrive(studioPhotoBase64, `${serialNumber}_${Date.now()}.jpg`, 'product');
@@ -7867,7 +7868,7 @@ async function saveInventoryItem(e) {
         }, 1200);
     } catch (err) {
         showToast(err.message, "error");
-        if (msg) { msg.textContent = "Error: " + err.message; msg.className = "message error"; }
+        if (msg) { msg.textContent = (err && err.code === 'PHOTO_CANCELLED') ? err.message : "Error: " + err.message; msg.className = "message error"; }
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -9296,4 +9297,192 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire); else wire();
+})();
+
+// =====================================================================================
+// v2.4.0 (additive) - AI product photo: better background removal + Before/After PREVIEW + CONFIRM
+//   * nothing is uploaded until the user taps "Use AI Photo & Upload"
+//   * user can pick: AI photo (with background colour), original photo, or cancel
+// =====================================================================================
+(function initV240PhotoStudio() {
+    'use strict';
+    const OUT = 900;
+    const BG = { white: '#ffffff', gray: '#f1f3f6', cream: '#fbf7ef', blue: '#eef4ff' };
+
+    const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('image load failed')); i.src = src; });
+    const blobToImg = async (blob) => { const u = URL.createObjectURL(blob); try { return await loadImg(u); } finally { setTimeout(() => URL.revokeObjectURL(u), 3000); } };
+
+    // Make semi-transparent parts (clear plastic, thin edges) solid, then crop tightly around the object
+    function cleanCutout(img) {
+        const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        const x = c.getContext('2d', { willReadFrequently: true });
+        x.drawImage(img, 0, 0);
+        const d = x.getImageData(0, 0, w, h), p = d.data;
+        let minX = w, minY = h, maxX = -1, maxY = -1, solid = 0;
+        for (let yy = 0; yy < h; yy++) {
+            for (let xx = 0; xx < w; xx++) {
+                const i = (yy * w + xx) * 4;
+                let a = p[i + 3] / 255;
+                a = Math.min(1, Math.max(0, (a - 0.06) / 0.5));     // alpha boost: product is no longer washed-out / see-through
+                a = a * a * (3 - 2 * a);                             // smooth edge
+                p[i + 3] = Math.round(a * 255);
+                if (a > 0.25) { solid++; if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (yy < minY) minY = yy; if (yy > maxY) maxY = yy; }
+            }
+        }
+        x.putImageData(d, 0, 0);
+        const coverage = solid / (w * h);
+        if (maxX < 0) return { canvas: c, coverage: 0, ok: false };
+        const pad = Math.round(Math.max(w, h) * 0.01);
+        minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+        maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
+        const cw = maxX - minX + 1, ch = maxY - minY + 1;
+        const out = document.createElement('canvas'); out.width = cw; out.height = ch;
+        out.getContext('2d').drawImage(c, minX, minY, cw, ch, 0, 0, cw, ch);
+        return { canvas: out, coverage, ok: coverage > 0.015 && coverage < 0.97 };
+    }
+
+    // Product centered on a clean studio background (object fills the frame, soft shadow)
+    function composite(cut, bgKey) {
+        const c = document.createElement('canvas'); c.width = OUT; c.height = OUT;
+        const x = c.getContext('2d');
+        x.fillStyle = BG[bgKey] || BG.white; x.fillRect(0, 0, OUT, OUT);
+        const pad = OUT * 0.09, box = OUT - pad * 2;
+        const sc = Math.min(box / cut.width, box / cut.height);
+        const dw = cut.width * sc, dh = cut.height * sc;
+        const dx = (OUT - dw) / 2, dy = (OUT - dh) / 2 - OUT * 0.01;
+        x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+        x.save();
+        x.shadowColor = 'rgba(15,26,58,.22)'; x.shadowBlur = OUT * 0.03; x.shadowOffsetY = OUT * 0.012;
+        try { x.filter = 'contrast(1.05) saturate(1.08) brightness(1.02)'; } catch (e) { }
+        x.drawImage(cut, dx, dy, dw, dh);
+        x.restore();
+        return c.toDataURL('image/jpeg', 0.9);
+    }
+
+    async function runAI(srcDataUrl) {
+        const blob = await window.imglyRemoveBackground(srcDataUrl);
+        const img = await blobToImg(blob);
+        return cleanCutout(img);
+    }
+
+    // keeps the old function name working (white background, no preview)
+    window.generateStudioProductPhoto = async function(base64OrFile) {
+        try {
+            const src = (typeof base64OrFile === 'string') ? base64OrFile : await window.compressAndScaleImage(base64OrFile, 1280, 0.92);
+            const r = await runAI(src);
+            if (!r.ok) return src;
+            return composite(r.canvas, 'white');
+        } catch (err) {
+            console.warn('AI Processing Warning, using original:', err);
+            return (typeof base64OrFile === 'string') ? base64OrFile : await window.compressAndScaleImage(base64OrFile);
+        }
+    };
+
+    let cssDone = false;
+    function addCss() {
+        if (cssDone) return; cssDone = true;
+        const st = document.createElement('style');
+        st.textContent = `
+        #sp-ov{position:fixed;inset:0;z-index:20000;background:rgba(5,9,22,.82);display:flex;align-items:center;justify-content:center;padding:max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom))}
+        #sp-ov .sp-card{width:min(900px,100%);max-height:100%;display:flex;flex-direction:column;background:#151d33;color:#eef2fb;border:1px solid #27324f;border-radius:20px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+        #sp-ov .sp-h{padding:14px 18px;border-bottom:1px solid #27324f}
+        #sp-ov .sp-h b{display:block;font-size:1.1rem}#sp-ov .sp-h small{opacity:.7}
+        #sp-ov .sp-b{padding:14px 16px;overflow-y:auto;flex:1}
+        #sp-ov .sp-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        #sp-ov .sp-fig{margin:0;background:#0f1a3a;border-radius:14px;overflow:hidden;border:1px solid #27324f}
+        #sp-ov .sp-fig figcaption{padding:8px 12px;font-weight:700;font-size:.9rem;background:#1b2745;display:flex;justify-content:space-between;gap:8px}
+        #sp-ov .sp-img{aspect-ratio:1/1;display:grid;place-items:center;background:#fff;position:relative}
+        #sp-ov .sp-img img{width:100%;height:100%;object-fit:contain;display:block}
+        #sp-ov .sp-load{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(15,26,58,.92);color:#fff;text-align:center;padding:14px;font-size:.9rem}
+        #sp-ov .sp-spin{width:38px;height:38px;border-radius:50%;border:4px solid #334;border-top-color:#60a5fa;animation:spSpin 1s linear infinite}
+        @keyframes spSpin{to{transform:rotate(360deg)}}
+        #sp-ov .sp-bg{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+        #sp-ov .sp-bg span{font-size:.85rem;opacity:.8}
+        #sp-ov .sp-sw{width:34px;height:34px;border-radius:50%;border:3px solid #27324f;cursor:pointer;padding:0}
+        #sp-ov .sp-sw.on{border-color:#3b82f6}
+        #sp-ov .sp-note{margin:10px 0 0;font-size:.85rem;color:#fbbf24}
+        #sp-ov .sp-f{display:flex;gap:8px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid #27324f;background:#111a30}
+        #sp-ov .sp-f button{flex:1 1 140px;min-height:46px;border:0;border-radius:12px;font-weight:700;font-size:.95rem;cursor:pointer;color:#fff;background:#334155}
+        #sp-ov .sp-f button.ok{background:#16a34a}
+        #sp-ov .sp-f button.orig{background:#2563eb}
+        #sp-ov .sp-f button.no{background:#e11d48}
+        #sp-ov .sp-f button:disabled{opacity:.45;cursor:not-allowed}
+        @media (max-width:640px){#sp-ov .sp-grid{gap:8px}#sp-ov .sp-fig figcaption{font-size:.78rem;padding:6px 8px}}
+        @media (max-width:420px){#sp-ov .sp-grid{grid-template-columns:1fr}}`;
+        document.head.appendChild(st);
+    }
+
+    // Shows Before / After and waits for the user's decision. Resolves with the final photo (data URL).
+    window.studioPhotoWithPreview = function(originalDataUrl, originalFile) {
+        addCss();
+        return new Promise(async (resolve, reject) => {
+            const ov = document.createElement('div'); ov.id = 'sp-ov';
+            ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true');
+            ov.innerHTML = `
+              <div class="sp-card">
+                <div class="sp-h"><b>📸 Photo Preview</b><small>Compare Before / After. Nothing is uploaded until you confirm.</small></div>
+                <div class="sp-b">
+                  <div class="sp-grid">
+                    <figure class="sp-fig"><figcaption>Before <span>(Original)</span></figcaption><div class="sp-img"><img id="sp-before" alt="Original photo"></div></figure>
+                    <figure class="sp-fig"><figcaption>After <span>(AI Studio)</span></figcaption>
+                      <div class="sp-img"><img id="sp-after" alt="AI photo" style="display:none">
+                        <div class="sp-load" id="sp-load"><div class="sp-spin"></div><div>AI is removing the background…<br><small>First time can take ~1 minute (model download). Please wait.</small></div></div>
+                      </div></figure>
+                  </div>
+                  <div class="sp-bg" id="sp-bg" style="display:none"><span>Background:</span>
+                    <button type="button" class="sp-sw on" data-bg="white" style="background:#fff" aria-label="White"></button>
+                    <button type="button" class="sp-sw" data-bg="gray" style="background:#f1f3f6" aria-label="Light gray"></button>
+                    <button type="button" class="sp-sw" data-bg="cream" style="background:#fbf7ef" aria-label="Cream"></button>
+                    <button type="button" class="sp-sw" data-bg="blue" style="background:#eef4ff" aria-label="Soft blue"></button>
+                  </div>
+                  <p class="sp-note" id="sp-note" style="display:none"></p>
+                </div>
+                <div class="sp-f">
+                  <button type="button" class="no" id="sp-cancel">✕ Cancel</button>
+                  <button type="button" class="orig" id="sp-orig">Use Original</button>
+                  <button type="button" class="ok" id="sp-ok" disabled>✓ Use AI Photo &amp; Upload</button>
+                </div>
+              </div>`;
+            document.body.appendChild(ov);
+            const q = (sel) => ov.querySelector(sel);
+            q('#sp-before').src = originalDataUrl;
+
+            let closed = false, cut = null, bg = 'white', aiUrl = null;
+            const onKey = (e) => { if (e.key === 'Escape') cancel(); };
+            const done = (fn) => { if (closed) return; closed = true; document.removeEventListener('keydown', onKey); ov.remove(); fn(); };
+            const cancel = () => done(() => { const e = new Error('Photo upload cancelled.'); e.code = 'PHOTO_CANCELLED'; reject(e); });
+            document.addEventListener('keydown', onKey);
+            q('#sp-cancel').onclick = cancel;
+            q('#sp-orig').onclick = () => done(() => resolve(originalDataUrl));
+            q('#sp-ok').onclick = () => { if (aiUrl) done(() => resolve(aiUrl)); };
+            q('#sp-bg').onclick = (e) => {
+                const b = e.target.closest('[data-bg]'); if (!b || !cut) return;
+                bg = b.dataset.bg;
+                ov.querySelectorAll('.sp-sw').forEach(x => x.classList.toggle('on', x === b));
+                aiUrl = composite(cut, bg); q('#sp-after').src = aiUrl;
+            };
+
+            try {
+                const big = originalFile ? await window.compressAndScaleImage(originalFile, 1280, 0.92) : originalDataUrl;   // bigger input = cleaner edges
+                const r = await runAI(big);
+                if (closed) return;
+                if (!r.ok) {
+                    const note = q('#sp-note');
+                    note.style.display = 'block';
+                    note.textContent = '⚠ AI could not separate this object clearly. Please compare, or choose "Use Original".';
+                }
+                cut = r.canvas;
+                aiUrl = composite(cut, bg);
+                q('#sp-after').src = aiUrl; q('#sp-after').style.display = 'block';
+                q('#sp-load').style.display = 'none';
+                q('#sp-bg').style.display = 'flex';
+                q('#sp-ok').disabled = false;
+            } catch (err) {
+                if (closed) return;
+                console.warn('AI background removal failed:', err);
+                q('#sp-load').innerHTML = '<div style="font-size:1.6rem">⚠️</div><div>AI background removal is not available right now (check internet).<br><small>You can still use the original photo.</small></div>';
+            }
+        });
+    };
 })();
