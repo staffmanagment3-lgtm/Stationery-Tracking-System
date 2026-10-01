@@ -4281,16 +4281,37 @@ window.initNewTeacherDashboard = function(adecNumber) {
             const raw = (window.masterInventoryList && window.masterInventoryList.length > 0)
                 ? window.masterInventoryList
                 : (typeof getFlatInventoryList === 'function' ? getFlatInventoryList() : []);
-            return raw.map(item => [
-                item.itemName || item.name || 'Stationery Item',
-                item.category || 'General',
-                String(item.serialNumber || item.batchNo || 'N/A'),
-                parseInt(item.currentStock ?? item.currentQty ?? item.quantity ?? item.totalAvailableStock ?? 0, 10) || 0,
-                item.unit || 'Pcs',
-                item.emoji || '📦',
-                item.color || '#eef2fb',
-                item
-            ]);
+            // Teacher view: ONE card per serial number, stock = sum of all restocks/batches.
+            // (Admin Master Inventory still shows every restock batch separately.)
+            const rows = [];
+            const bySn = {};
+            raw.forEach(item => {
+                const sn = String(item.serialNumber || item.batchNo || 'N/A').trim();
+                const stock = Math.max(0, parseInt(item.currentStock ?? item.currentQty ?? item.quantity ?? item.totalAvailableStock ?? 0, 10) || 0);
+                const snKey = sn.toLowerCase();
+                const mergeable = sn && snKey !== 'n/a' && snKey !== 'undefined' && snKey !== 'null';
+                if (mergeable && bySn[snKey]) {
+                    const row = bySn[snKey];
+                    row[3] += stock;
+                    const rep = row[7] || {};
+                    const hasImg = o => !!(o && (o.imageUrl || o.image || o.photoUrl || o.photo || o.itemImageUrl || o.photoBase64));
+                    if (!hasImg(rep) && hasImg(item)) row[7] = item; // keep a photo on the card
+                    return;
+                }
+                const row = [
+                    item.itemName || item.name || 'Stationery Item',
+                    item.category || 'General',
+                    sn || 'N/A',
+                    stock,
+                    item.unit || 'Pcs',
+                    item.emoji || '📦',
+                    item.color || '#eef2fb',
+                    item
+                ];
+                rows.push(row);
+                if (mergeable) bySn[snKey] = row;
+            });
+            return rows;
         };
         P = buildP();
 

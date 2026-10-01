@@ -3497,3 +3497,42 @@ body.v21-noscroll { overflow: hidden !important; }
 #pf-ov .pf-row b{font-size:.95rem;text-align:right;overflow-wrap:anywhere}
 #pf-ov .pf-close{display:block;width:calc(100% - 36px);margin:6px 18px 18px;min-height:46px;border:0;border-radius:12px;background:#2563eb;color:#fff;font-weight:700;font-size:.95rem;cursor:pointer}
 .admin-dashboard-redesign .topbar .admin-avatar,#user-view-container .hdr .av{cursor:pointer}
+
+
+/* ==================== v2.4.2 MOBILE FIXES (admin: Live Requisition cards + Approve modal) ==================== */
+/* Live Requisition: long text (nowrap) was stretching the grid column wider than the screen -> card cut on the right */
+#tab-orders,#admin-requests-area,#admin-requests-list{min-width:0;max-width:100%;box-sizing:border-box}
+.admin-dashboard-redesign #admin-requests-list{grid-template-columns:repeat(auto-fill,minmax(min(100%,470px),1fr))}
+#admin-requests-list > *{min-width:0;max-width:100%}
+.admin-dashboard-redesign .request-card{min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden}
+.request-card .request-header{min-width:0}
+.request-card .rq-who{flex:1 1 0;min-width:0}
+.request-card .rq-who h4{min-width:0}
+.request-card .req-item{min-width:0;max-width:100%;box-sizing:border-box}
+.request-card .req-item > div{min-width:0}
+.request-card .rq-sig{max-width:100%;box-sizing:border-box;overflow:hidden}
+.request-card .rq-sig img{max-width:100% !important;height:auto}
+.request-card .rq-meta{min-width:0}
+.request-card .rq-meta span{max-width:100%;overflow-wrap:anywhere}
+
+@media (max-width:576px){
+  .admin-dashboard-redesign #admin-requests-list{grid-template-columns:minmax(0,1fr) !important}
+  #admin-requests-area{padding:10px !important}
+  .admin-dashboard-redesign .request-card{padding:14px !important}
+  .request-card .rq-status{white-space:normal;text-align:center}
+  .request-card .req-nm{white-space:normal;overflow-wrap:anywhere}
+
+  /* Approve Order modal: legacy .modal{padding:14px} + 100vw dialog pushed it off-screen to the right */
+  #admin-approval-modal,#handoverModal{padding:0 !important;left:0 !important;width:100% !important;overflow-x:hidden !important}
+  #admin-approval-modal .modal-dialog,#handoverModal .modal-dialog{width:100% !important;max-width:100% !important;margin:0 !important;box-sizing:border-box}
+  #admin-approval-modal .modal-content{width:100% !important;max-width:100% !important;box-sizing:border-box}
+  #admin-approval-modal .hv-head{padding:14px 16px !important}
+  #admin-approval-modal .hv-title{gap:10px;flex:1 1 auto}
+  #admin-approval-modal .hv-title > div{min-width:0}
+  #admin-approval-modal .hv-title h5{font-size:1rem;overflow-wrap:anywhere}
+  #admin-approval-modal .hv-ico{width:36px;height:36px;font-size:1.1rem}
+  #admin-approval-modal .btn-close{flex:none}
+  #admin-approval-modal .modal-body{padding:16px !important;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px)) !important}
+  #admin-approval-modal .hv-input{width:100%;box-sizing:border-box}
+  #admin-approval-modal .hv-btn{white-space:normal;text-align:center;padding:10px 14px;line-height:1.3}
+}
