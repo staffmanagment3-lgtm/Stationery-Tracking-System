@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "2.4.0";
+const APP_VERSION = "2.4.1";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -9485,4 +9485,48 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             }
         });
     };
+})();
+
+
+// =====================================================================================
+// v2.4.1 (additive) - tap the profile avatar -> shows ADEK Pass Number, Role, Name, Designation
+// =====================================================================================
+(function initV241Profile() {
+    'use strict';
+    const esc = (v) => escapeHtml(v == null ? '' : String(v));
+    const ROLE_LABEL = { ADMIN: 'Administrator', TEACHER: 'Teacher / Staff', DEVELOPER: 'Developer', SUPER_ADMIN: 'Super Admin' };
+
+    window.openProfileCard = function() {
+        const u = (typeof currentUser !== 'undefined' && currentUser) ? currentUser : {};
+        const role = String(u.role || '').toUpperCase();
+        const name = u.name || u.adecPassNumber || 'User';
+        const adek = u.adecPassNumber || u.uid || 'N/A';
+        const initials = String(name).trim().split(/\s+/).map(x => x[0]).join('').substring(0, 2).toUpperCase() || 'U';
+        const rows = [
+            ['ADEK Pass Number', adek],
+            ['Role', ROLE_LABEL[role] || role || 'N/A'],
+            ['Designation', u.designation || (role === 'TEACHER' ? 'Teacher' : (ROLE_LABEL[role] || 'N/A'))],
+            ['Name', name]
+        ];
+        const old = document.getElementById('pf-ov'); if (old) old.remove();
+        const ov = document.createElement('div'); ov.id = 'pf-ov';
+        ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true'); ov.setAttribute('aria-label', 'Profile');
+        ov.innerHTML = `<div class="pf-card">
+            <div class="pf-top"><div class="pf-av">${esc(initials)}</div><b>${esc(name)}</b><span class="pf-role">${esc(ROLE_LABEL[role] || role || 'User')}</span></div>
+            <div class="pf-list">${rows.map(([k, v]) => `<div class="pf-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>
+            <button type="button" class="pf-close">Close</button></div>`;
+        const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
+        const onKey = (e) => { if (e.key === 'Escape') close(); };
+        ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+        ov.querySelector('.pf-close').onclick = close;
+        document.addEventListener('keydown', onKey);
+        document.body.appendChild(ov);
+        ov.querySelector('.pf-close').focus();
+    };
+
+    // one delegated listener: works for the admin avatar and the teacher avatar, even after re-render
+    document.addEventListener('click', (e) => {
+        const t = e.target.closest && e.target.closest('.admin-dashboard-redesign .topbar .admin-avatar, #user-view-container .hdr .av');
+        if (t) window.openProfileCard();
+    });
 })();

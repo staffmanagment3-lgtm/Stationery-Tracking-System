@@ -1,7 +1,7 @@
 /* Stationery Tracker - single Service Worker (offline cache + background push).
    IMPORTANT: only ONE service worker may control this scope. The old setup registered
    both sw.js and firebase-messaging-sw.js on the same scope, so they replaced each other. */
-const CACHE_NAME = 'stationery-app-v2.4.0';
+const CACHE_NAME = 'stationery-app-v2.4.1';
 
 try {
   importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
