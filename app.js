@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.3.2";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -846,6 +846,121 @@ const ImageCache = {
     }
 };
 
+
+// ==================== v2.3.1 DRIVE IMAGE FALLBACK (photos + signatures) ====================
+// Google blocks direct <img>/fetch hot-linking of Drive files (403 / CORS). When any Drive image fails to load,
+// we ask the Apps Script ("getImage") for the file as base64, cache it on the device (IndexedDB) and show it.
+// This also feeds the Receipt PDF / Print. Needs the getImage block in the Apps Script (see .gs file).
+function extractDriveId(url) {
+    const m = String(url || '').match(/(?:id=|\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})/);
+    return m ? m[1] : null;
+}
+window.extractDriveId = extractDriveId;
+
+const _drvMem = new Map();
+const _drvPending = new Map();
+let _drvActive = 0;
+const _drvWaiters = [];
+let _drvWarned = false;
+
+async function _drvAcquire() {
+    if (_drvActive < 3) { _drvActive++; return; }
+    await new Promise(r => _drvWaiters.push(r));
+    _drvActive++;
+}
+function _drvRelease() { _drvActive--; const n = _drvWaiters.shift(); if (n) n(); }
+
+window.driveImageViaScript = function(rawUrl, maxSide = 700) {
+    const id = extractDriveId(rawUrl);
+    if (!id) return Promise.resolve(null);
+    if (_drvMem.has(id)) return Promise.resolve(_drvMem.get(id));
+    if (_drvPending.has(id)) return _drvPending.get(id);
+
+    const p = (async () => {
+        const cached = await ImageCache.get('drv:' + id);
+        if (cached) { _drvMem.set(id, cached); return cached; }
+
+        const scriptUrl = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+        if (!scriptUrl) return null;
+
+        await _drvAcquire();
+        try {
+            // v2.3.2: every request has a 30s timeout (a hung Apps Script call used to block the whole queue, so
+            // photos stayed on the spinner forever) and the toast now says WHY it failed.
+            const warnOnce = (why) => {
+                if (_drvWarned) return;
+                _drvWarned = true;
+                console.warn('Drive getImage failed:', why);
+                try { showToast('Photos could not load: ' + why, 'error'); } catch (e) { }
+            };
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 30000);
+                try {
+                    const r = await fetch(scriptUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getImage', fileId: id }), signal: ctrl.signal });
+                    const txt = await r.text();
+                    let j = null;
+                    try { j = JSON.parse(txt); } catch (pe) { }
+                    if (j && j.status === 'success' && j.data) {
+                        let data = j.data;
+                        if (data.length > 450000 && typeof _rcptNormalize === 'function') {
+                            const norm = await _rcptNormalize(data, maxSide, /image\/png/.test(data.slice(0, 30)));
+                            if (norm) data = norm;
+                        }
+                        _drvMem.set(id, data);
+                        ImageCache.set('drv:' + id, data);
+                        return data;
+                    }
+                    if (!j) { warnOnce('Apps Script did not return JSON. Deploy a NEW VERSION of the script that contains the getImage block (see drive-script-getimage-snippet.gs).'); return null; }
+                    warnOnce(j.message ? String(j.message).slice(0, 140) : 'Apps Script returned an error (is the getImage block added?)');
+                    return null;
+                } catch (e) {
+                    if (attempt === 1) {
+                        console.warn('getImage request failed', e);
+                        warnOnce(e && e.name === 'AbortError' ? 'Apps Script took more than 30 seconds to answer.' : 'could not reach the Apps Script (internet or wrong Drive Connector URL).');
+                    }
+                } finally { clearTimeout(timer); }
+            }
+            return null;
+        } finally { _drvRelease(); }
+    })();
+
+    _drvPending.set(id, p);
+    p.finally(() => _drvPending.delete(id));
+    return p;
+};
+
+// Any <img> (history lists, admin tables, signatures, catalog...) that fails to load from Google gets the fallback.
+document.addEventListener('error', async (ev) => {
+    const img = ev.target;
+    if (!(img instanceof HTMLImageElement)) return;
+    const src = img.currentSrc || img.src || '';
+    if (!/google|googleusercontent/i.test(src) || img.dataset.drvTried === '1') return;
+    const id = extractDriveId(src) || extractDriveId(img.dataset.url);
+    if (!id) return;
+    img.dataset.drvTried = '1';
+    img.dataset.drvOrig = src;
+    const data = await window.driveImageViaScript(src);
+    if (data) {
+        img.src = data;
+        img.classList.add('loaded');
+        img.parentElement && img.parentElement.classList.remove('skeleton');
+    } else {
+        img.dataset.drvFailed = '1';
+        img.title = 'Tap to retry loading this picture';
+    }
+}, true);
+
+// Tap a picture that failed -> try again
+document.addEventListener('click', (ev) => {
+    const img = ev.target;
+    if (!(img instanceof HTMLImageElement) || img.dataset.drvFailed !== '1') return;
+    const orig = img.dataset.drvOrig;
+    if (!orig) return;
+    delete img.dataset.drvFailed; delete img.dataset.drvTried;
+    img.src = orig;
+});
+
 window.loadCachedImage = async function(imgElement, imageSrcOrId) {
     if (!imgElement) return;
     imgElement.onerror = () => {
@@ -935,11 +1050,13 @@ window.compressAndScaleImage = function(file, maxWidth = 800, quality = 0.85) {
 window.generateStudioProductPhoto = async function(base64OrFile) {
     try {
         console.log("🤖 Processing AI Background Removal for Studio Look...");
+        try { showToast("AI is removing the photo background... (first time can take a minute)"); } catch (e) { }
         const blob = await imglyRemoveBackground(base64OrFile);
         const transparentUrl = URL.createObjectURL(blob);
         return new Promise((resolve) => {
             const img = new Image();
             img.src = transparentUrl;
+            img.onerror = () => resolve(typeof base64OrFile === 'string' ? base64OrFile : null);
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = 800;
@@ -961,6 +1078,7 @@ window.generateStudioProductPhoto = async function(base64OrFile) {
         });
     } catch (err) {
         console.warn("AI Processing Warning, falling back to compressed photo:", err);
+        try { showToast("Background removal unavailable (check internet). Original photo used.", "error"); } catch (e) { }
         return typeof base64OrFile === 'string' ? base64OrFile : await window.compressAndScaleImage(base64OrFile);
     }
 };
@@ -1134,6 +1252,26 @@ async function executeSingleStockDeduction(order) {
 }
 window.executeSingleStockDeduction = executeSingleStockDeduction;
 
+
+// ---------- v2.3.0 stock consistency helpers ----------
+// Parent totals must ALWAYS equal the sum of its batches (this is what the admin dashboard shows).
+async function recalcParentTotals(itemId) {
+    const parentRef = ref(db, `inventory/${itemId}`);
+    const snap = await get(parentRef);
+    if (!snap.exists()) return null;
+    const p = snap.val();
+    const batches = (p.batches && typeof p.batches === 'object') ? Object.values(p.batches) : [];
+    if (!batches.length) return null; // legacy item without batches keeps its own value
+    const total = batches.reduce((sum, b) => sum + Math.max(0, parseInt(b?.currentStock ?? b?.currentQty ?? b?.quantity ?? 0, 10) || 0), 0);
+    await update(parentRef, {
+        currentQty: total, currentStock: total, quantity: total, availableStock: total, stock: total,
+        status: total > 0 ? (total <= 5 ? 'Low Stock' : 'In Stock') : 'Out of Stock',
+        lastUpdated: new Date().toISOString()
+    });
+    return total;
+}
+window.recalcParentTotals = recalcParentTotals;
+
 // ==================== REALTIME FIREBASE STOCK DEDUCTION ====================
 async function executeRealtimeStockDeduction(itemId, orderedQty) {
     if (!itemId) return;
@@ -1159,13 +1297,12 @@ async function executeRealtimeStockDeduction(itemId, orderedQty) {
     }
 
     const itemRef = ref(db, `inventory/${targetKey}`);
-    if (!itemData) {
-        try {
-            const snapshot = await get(itemRef);
-            itemData = snapshot.val();
-        } catch (e) {
-            console.error("Failed to fetch item for deduction:", e);
-        }
+    // v2.3.0: always deduct from the LIVE database value (the cached copy can be stale right after another change)
+    try {
+        const snapshot = await get(itemRef);
+        if (snapshot.exists()) itemData = snapshot.val();
+    } catch (e) {
+        console.error("Failed to fetch item for deduction:", e);
     }
 
     if (!itemData) {
@@ -2404,6 +2541,30 @@ window.submitHandoverWithSignature = async function(event) {
             requestQuantity: parseInt(item.requestQuantity || item.quantity || item.reqQty || 1, 10)
         }));
 
+        // Snapshot the ORIGINAL stock (before this order is deducted) so the voucher always shows it.
+        let voucherItems = null;
+        try {
+            const invNowSnap = await get(ref(db, 'inventory'));
+            const invNow = invNowSnap.val() || {};
+            const plans = window.currentHandoverSplitPlans || [];
+            voucherItems = rawItems.map((it, idx) => {
+                const node = _rcptFindInvNode(invNow, it);
+                const before = node ? _rcptNodeQty(node) : null;
+                const req = updatedItems[idx].requestQuantity;
+                const issued = before !== null ? Math.min(req, before) : req;
+                const plan = (plans[idx] && Array.isArray(plans[idx].splitPlan)) ? plans[idx].splitPlan : [];
+                return {
+                    ...it,
+                    issuedQty: issued,
+                    stockBefore: before,
+                    stockAfter: before !== null ? Math.max(0, before - issued) : null,
+                    batchInfo: plan.map(sp => `${sp.brand} (${sp.serialNumber}) x${sp.deductQty}`).join(', ')
+                };
+            });
+        } catch (snapErr) {
+            console.warn("Stock snapshot for voucher failed (voucher will use fallback):", snapErr);
+        }
+
         // ATOMIC DEDUCTION — the ONLY place stock changes
         const orderPayload = {
             orderId: orderId,
@@ -2432,6 +2593,7 @@ window.submitHandoverWithSignature = async function(event) {
             signature: reqSig,
             handedOverBy: adminName,
             issuedBy: adminName,
+            ...(voucherItems ? { items: sanitizeForFirebase(voucherItems) } : {}),
             status: 'Done'
         });
 
@@ -3354,10 +3516,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     adecPassNumber: adec,
                     password: pass,
                     role: 'TEACHER',
+                    designation: (window.getProvisionDesignation ? window.getProvisionDesignation() : 'Teacher'),
                     createdAt: new Date().toISOString()
                 });
-                showToast("Teacher account provisioned!");
+                showToast("Staff account provisioned!");
                 adminCreateTeacherForm.reset();
+                if (window.resetProvisionDesignation) window.resetProvisionDesignation();
             } catch (err) {
                 console.error("Teacher Creation Error:", err);
                 showToast("Error: " + err.message, "error");
@@ -3639,6 +3803,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const openAdminNotifications = () => {
+        notifFilter = 'all';
+        snapshotFreshNotifications();
         renderNotificationList();
         const el = $('notificationModal');
         if (el) bootstrap.Modal.getOrCreateInstance(el).show();
@@ -3648,7 +3814,6 @@ document.addEventListener('DOMContentLoaded', () => {
     $('bellBtn')?.addEventListener('click', openAdminNotifications);
     $('notification-bell')?.addEventListener('click', openAdminNotifications);
 
-    $('clear-all-notifications-btn')?.addEventListener('click', () => window.clearAllNotifications());
 
     $('ocr-file-fallback')?.addEventListener('change', (event) => {
         const file = event.target.files[0];
@@ -3710,30 +3875,71 @@ function rememberSeenKey(key) {
     try { localStorage.setItem('stationery_notif_seen_' + notifUserId(), JSON.stringify(arr)); } catch (e) { }
 }
 
-function showNotificationPopup(title, body) {
-    const modal = $('notification-modal');
-    if (!modal) return;
-    const t = $('notification-title'); if (t) t.textContent = '🔔 ' + title;
-    const p = $('notification-text'); if (p) p.textContent = body;
-    modal.classList.add('active');
+// ---------- Advanced Notification Center (v2.2.0) ----------
+// Shared by the Admin bell (Bootstrap modal) and the Teacher bell (bottom sheet).
+const NOTIF_TYPES = {
+    new:       { icon: '🆕', label: 'New Order',  cat: 'orders', color: '#2563eb' },
+    submitted: { icon: '📝', label: 'Submitted',  cat: 'orders', color: '#0891b2' },
+    approved:  { icon: '📦', label: 'Ready',      cat: 'orders', color: '#f59e0b' },
+    done:      { icon: '✅', label: 'Completed',  cat: 'orders', color: '#16a34a' },
+    stock:     { icon: '📥', label: 'Stock',      cat: 'stock',  color: '#7c3aed' },
+    system:    { icon: '🔔', label: 'Update',     cat: 'system', color: '#64748b' }
+};
+let notifFilter = 'all';
+let notifFreshIds = new Set(); // ids that were unread when the center was opened (kept highlighted)
+
+function inferNotifMeta(n) {
+    const key = String(n.key || '');
+    let type = n.type, orderId = n.orderId;
+    const m = key.match(/^(new|submitted|approved|done)_(.+)_(admin|teacher)$/);
+    if (m) { type = type || m[1]; orderId = orderId || m[2]; }
+    if (!type && /^inv_/.test(key)) type = 'stock';
+    if (!type) {
+        const t = String(n.title || '').toLowerCase();
+        type = /stock|item added|batch/.test(t) ? 'stock' : 'system';
+    }
+    return { type: NOTIF_TYPES[type] ? type : 'system', orderId: orderId || null };
+}
+
+function showNotificationPopup(title, body, meta) {
+    // Non-blocking slide-in banner (replaces the old full-screen popup). Tap = open the notification center.
+    let box = document.getElementById('nc-toast');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'nc-toast';
+        box.className = 'nc-toast';
+        document.body.appendChild(box);
+        box.addEventListener('click', () => {
+            box.classList.remove('show');
+            const bell = document.getElementById('bellBtn') || document.getElementById('bellB');
+            if (bell) bell.click();
+        });
+    }
+    const info = NOTIF_TYPES[(meta && meta.type) || 'system'] || NOTIF_TYPES.system;
+    box.innerHTML = `<div class="nc-toast-ico" style="background:${info.color}22;color:${info.color}">${info.icon}</div>
+        <div class="nc-toast-main"><b>${escapeHtml(title)}</b><span>${escapeHtml(body)}</span></div>`;
+    box.classList.add('show');
+    clearTimeout(box._t);
+    box._t = setTimeout(() => box.classList.remove('show'), 6500);
     try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { }
 }
 
-function pushInAppNotification({ key, title, body, popup = true }) {
+function pushInAppNotification({ key, title, body, popup = true, type, orderId }) {
     key = key || `evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     if (getSeenKeys().has(key)) return false; // already shown (dedupe push vs realtime)
     rememberSeenKey(key);
 
     if (!notificationsList.length) loadNotifications();
-    notificationsList.unshift({ id: Date.now() + Math.random(), key, title, message: body, ts: Date.now(), read: false });
+    const entry = { id: Date.now() + Math.random(), key, title, message: body, ts: Date.now(), read: false, type, orderId };
+    const meta = inferNotifMeta(entry);
+    entry.type = meta.type; entry.orderId = meta.orderId;
+    notificationsList.unshift(entry);
     notificationsList = notificationsList.slice(0, NOTIF_MAX);
     saveNotifications();
     updateNotificationBadge();
     renderNotificationList();
 
-    if (popup) {
-        showNotificationPopup(title, body);
-    }
+    if (popup) showNotificationPopup(title, body, meta);
     return true;
 }
 
@@ -3758,6 +3964,12 @@ function updateNotificationBadge() {
     }
 }
 
+// Called when the center is opened: remember what was unread (so it stays highlighted), then clear the badge.
+function snapshotFreshNotifications() {
+    notifFreshIds = new Set(notificationsList.filter(n => !n.read).map(n => String(n.id)));
+}
+window.snapshotFreshNotifications = snapshotFreshNotifications;
+
 function markAllNotificationsRead() {
     notificationsList.forEach(n => { n.read = true; });
     saveNotifications();
@@ -3767,6 +3979,7 @@ window.markAllNotificationsRead = markAllNotificationsRead;
 
 window.clearAllNotifications = function() {
     notificationsList = [];
+    notifFreshIds = new Set();
     saveNotifications();
     renderNotificationList();
     updateNotificationBadge();
@@ -3777,32 +3990,119 @@ function fmtNotifTime(ts) {
     catch (e) { return ''; }
 }
 
-function renderNotificationList() {
-    const adminBox = $('notification-list-container');
-    if (adminBox) {
-        adminBox.innerHTML = notificationsList.length === 0
-            ? `<li class="list-group-item text-center text-muted py-4">No notifications yet</li>`
-            : notificationsList.map(n => `
-                <li class="list-group-item d-flex justify-content-between align-items-start p-3">
-                    <div>
-                        <strong class="d-block text-dark">${escapeHtml(n.title)}</strong>
-                        <small class="text-secondary">${escapeHtml(n.message)}</small>
-                    </div>
-                    <span class="badge bg-light text-dark ms-2" style="font-size:10px;">${escapeHtml(fmtNotifTime(n.ts))}</span>
-                </li>`).join('');
-    }
-    const teacherBox = $('notificationsBody');
-    if (teacherBox) {
-        teacherBox.innerHTML = notificationsList.length === 0
-            ? `<div class="empty">No notifications yet.</div>`
-            : notificationsList.map(n => `
-                <div style="padding:12px 4px;border-bottom:1px solid rgba(148,163,184,.3)">
-                    <div style="font-weight:700">${escapeHtml(n.title)}</div>
-                    <div style="font-size:14px;opacity:.85">${escapeHtml(n.message)}</div>
-                    <div style="font-size:11px;opacity:.6;margin-top:2px">${escapeHtml(fmtNotifTime(n.ts))}</div>
-                </div>`).join('');
-    }
+function fmtNotifAgo(ts) {
+    const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return fmtNotifTime(ts);
 }
+
+function notifDayLabel(ts) {
+    const d = new Date(ts), t = new Date();
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    if (sameDay(d, t)) return 'Today';
+    const y = new Date(); y.setDate(t.getDate() - 1);
+    if (sameDay(d, y)) return 'Yesterday';
+    return d.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function buildNotificationCenterHTML() {
+    const list = notificationsList.map(n => ({ n, meta: inferNotifMeta(n) }));
+    const isUnread = (n) => !n.read || notifFreshIds.has(String(n.id));
+    const todayCount = list.filter(x => notifDayLabel(x.n.ts) === 'Today').length;
+    const unreadCount = list.filter(x => isUnread(x.n)).length;
+    const counts = {
+        all: list.length,
+        unread: unreadCount,
+        orders: list.filter(x => NOTIF_TYPES[x.meta.type].cat === 'orders').length,
+        stock: list.filter(x => NOTIF_TYPES[x.meta.type].cat === 'stock').length
+    };
+    const chips = [['all', 'All'], ['unread', 'Unread'], ['orders', 'Orders'], ['stock', 'Stock']]
+        .map(([k, label]) => `<button type="button" class="nc-chip ${notifFilter === k ? 'on' : ''}" data-nc="filter" data-v="${k}">${label}<i>${counts[k]}</i></button>`).join('');
+
+    const shown = list.filter(x => {
+        if (notifFilter === 'unread') return isUnread(x.n);
+        if (notifFilter === 'orders') return NOTIF_TYPES[x.meta.type].cat === 'orders';
+        if (notifFilter === 'stock') return NOTIF_TYPES[x.meta.type].cat === 'stock';
+        return true;
+    });
+
+    let body = '';
+    if (!shown.length) {
+        body = `<div class="nc-empty"><div class="nc-empty-ico">🔕</div><b>${list.length ? 'Nothing in this filter' : 'No notifications yet'}</b><span>${list.length ? 'Try another tab above.' : 'Order updates and stock alerts will appear here.'}</span></div>`;
+    } else {
+        let lastDay = '';
+        shown.forEach(({ n, meta }) => {
+            const day = notifDayLabel(n.ts);
+            if (day !== lastDay) { body += `<div class="nc-day">${escapeHtml(day)}</div>`; lastDay = day; }
+            const info = NOTIF_TYPES[meta.type];
+            const unread = isUnread(n);
+            body += `<div class="nc-item ${unread ? 'unread' : ''}" data-nid="${escapeHtml(String(n.id))}">
+                <div class="nc-ico" style="background:${info.color}22;color:${info.color}">${info.icon}</div>
+                <div class="nc-main">
+                    <div class="nc-top"><b>${escapeHtml(n.title)}</b><span class="nc-time" title="${escapeHtml(fmtNotifTime(n.ts))}">${escapeHtml(fmtNotifAgo(n.ts))}</span></div>
+                    <div class="nc-msg">${escapeHtml(n.message)}</div>
+                    <div class="nc-meta">
+                        <span class="nc-tag" style="background:${info.color}1f;color:${info.color}">${info.label}</span>
+                        ${meta.orderId ? `<span class="nc-tag nc-id">${escapeHtml(meta.orderId)}</span><button type="button" class="nc-link" data-nc="view" data-order="${escapeHtml(meta.orderId)}">View voucher →</button>` : ''}
+                    </div>
+                </div>
+                <button type="button" class="nc-x" data-nc="dismiss" data-nid="${escapeHtml(String(n.id))}" aria-label="Dismiss">✕</button>
+            </div>`;
+        });
+    }
+
+    return `<div class="nc-wrap">
+        <div class="nc-summary">
+            <div><b>${unreadCount}</b><span>Unread</span></div>
+            <div><b>${todayCount}</b><span>Today</span></div>
+            <div><b>${list.length}</b><span>Total</span></div>
+        </div>
+        <div class="nc-tools">
+            <div class="nc-chips">${chips}</div>
+            <div class="nc-actions">
+                <button type="button" class="nc-tbtn" data-nc="markall">✓ Mark all read</button>
+                <button type="button" class="nc-tbtn danger" data-nc="clear">🗑 Clear all</button>
+            </div>
+        </div>
+        <div class="nc-list">${body}</div>
+    </div>`;
+}
+
+function renderNotificationList() {
+    const html = buildNotificationCenterHTML();
+    const adminBox = $('notification-list-container');
+    if (adminBox) adminBox.innerHTML = html;
+    const teacherBox = $('notificationsBody');
+    if (teacherBox) teacherBox.innerHTML = html;
+}
+
+function closeNotificationCenters() {
+    try { const m = $('notificationModal'); if (m) bootstrap.Modal.getInstance(m)?.hide(); } catch (e) { }
+    document.querySelectorAll('#user-view-container .sheet.on, #user-view-container .drawer.on, #user-view-container .ov.on')
+        .forEach(el => el.classList.remove('on'));
+}
+
+// One delegated click handler for both centers
+document.addEventListener('click', (ev) => {
+    const el = ev.target.closest && ev.target.closest('[data-nc]');
+    if (!el) return;
+    const act = el.dataset.nc;
+    if (act === 'filter') { notifFilter = el.dataset.v || 'all'; renderNotificationList(); }
+    else if (act === 'markall') { notifFreshIds = new Set(); markAllNotificationsRead(); renderNotificationList(); }
+    else if (act === 'clear') { if (confirm('Clear all notifications?')) window.clearAllNotifications(); }
+    else if (act === 'dismiss') {
+        const id = el.dataset.nid;
+        notificationsList = notificationsList.filter(n => String(n.id) !== id);
+        notifFreshIds.delete(id);
+        saveNotifications(); updateNotificationBadge(); renderNotificationList();
+    } else if (act === 'view') {
+        const orderId = el.dataset.order;
+        closeNotificationCenters();
+        setTimeout(() => window.viewOrderReceipt(orderId), 300);
+    }
+});
 
 // One realtime watcher for both roles. Only changes AFTER the first load pop up.
 function startOrderEventWatcher() {
@@ -4093,7 +4393,7 @@ window.initNewTeacherDashboard = function(adecNumber) {
         if (menuB) menuB.onclick = () => openSheet($("#drawer"));
 
         const bellB=$("#bellB");
-        if (bellB) bellB.onclick = () => { renderNotificationList(); openSheet($("#noteS")); markAllNotificationsRead(); };
+        if (bellB) bellB.onclick = () => { notifFilter = 'all'; snapshotFreshNotifications(); renderNotificationList(); openSheet($("#noteS")); markAllNotificationsRead(); };
 
         const cartB=$("#cartB");
         if (cartB) cartB.onclick = () => { cartR(); openSheet($("#cartS")); };
@@ -4217,19 +4517,34 @@ window.initNewTeacherDashboard = function(adecNumber) {
             if (clr) clr.onclick = () => { cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.clearRect(0, 0, pad.width, pad.height); cx.restore(); signed = false; const conf = $("#conf"); if(conf) conf.disabled = true; };
 
             const toSign = $("#toSign");
-            if (toSign) toSign.onclick = () => {
+            const openSignPad = () => {
                 const signN = $("#signN");
                 if (signN) signN.textContent = count();
                 openSheet($("#signS"));
                 fit();
                 if (clr) clr.click();
             };
+            if (toSign) toSign.onclick = async () => {
+                // v2.3.0: returning staff -> verify (biometric / password) and auto-attach the saved signature
+                try {
+                    const saved = await window.getSavedSignature(adec);
+                    if (saved && window.confirmSavedSignatureUse) {
+                        window.confirmSavedSignatureUse(adec, saved, {
+                            onUse: () => { window.__useSavedSig = saved; const c = $("#conf"); if (c && c.onclick) c.onclick(); },
+                            onResign: () => openSignPad()
+                        });
+                        return;
+                    }
+                } catch (e) { console.warn("Saved signature check failed:", e); }
+                openSignPad();
+            };
 
             const conf = $("#conf");
             if (conf) {
                 conf.onclick = async () => {
                     if (Object.keys(cart).length === 0) return;
-                    const signatureDataUrl = pad.toDataURL();
+                    const useSaved = window.__useSavedSig || null; window.__useSavedSig = null;
+                    const signatureDataUrl = useSaved || pad.toDataURL();
                     const orderId = 'ORD-' + Date.now();
 
                     const items = Object.keys(cart).map(i => {
@@ -4263,6 +4578,7 @@ window.initNewTeacherDashboard = function(adecNumber) {
 
                         const cleanOrderData = typeof sanitizeForFirebase === 'function' ? sanitizeForFirebase(orderData) : orderData;
                         await set(ref(db, 'orders/' + orderId), cleanOrderData);
+                        if (!useSaved && window.saveUserSignature) window.saveUserSignature(adec, signatureDataUrl); // remember for next time
                         await logActivity?.("Order Placed", `ID: ${orderId}, ${items.length} items`);
 
                         cart = {};
@@ -5303,27 +5619,12 @@ window.openEditBatchModal = async function(catId, batchId) {
     try {
         const batchRef = ref(db, `inventory/${catId}/batches/${batchId}`);
         await update(batchRef, {
+            currentQty: newQty,
             currentStock: newQty,
             quantity: newQty,
             status: newQty > 0 ? "In Stock" : "Depleted"
         });
-
-        const parentRef = ref(db, `inventory/${catId}`);
-        const parentSnap = await get(parentRef);
-        if (parentSnap.exists()) {
-            const pVal = parentSnap.val();
-            const allBatches = pVal.batches || {};
-            const totalQty = Object.values(allBatches).reduce(
-                (sum, b) => sum + (parseInt(b.currentStock ?? b.quantity ?? 0, 10) || 0),
-                0
-            );
-            await update(parentRef, {
-                quantity: totalQty,
-                availableStock: totalQty,
-                currentStock: totalQty,
-                stock: totalQty
-            });
-        }
+        await recalcParentTotals(catId);
 
         showToast("Batch updated successfully!");
         fetchMasterInventory();
@@ -5337,6 +5638,7 @@ window.deleteBatch = async function(catId, batchId) {
         try {
             const __arch = window.archiveBatchBeforeDelete ? await window.archiveBatchBeforeDelete(catId, batchId) : { urls: [] };
             await remove(ref(db, `inventory/${catId}/batches/${batchId}`));
+            await recalcParentTotals(catId); // v2.3.0: keep parent total in sync after a batch is removed
             if (window.cleanupDeletedImages) window.cleanupDeletedImages(__arch.urls);
             showToast("Batch deleted successfully");
         } catch (e) {
@@ -5838,7 +6140,7 @@ function fetchAdminOrders() {
         orders.forEach(([id, order]) => {
             if (order.status === 'Handover Complete / Done' || order.status === 'Completed' || order.status === 'Done') {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><button class="view-details-btn">View Voucher</button></td>`;
+                tr.innerHTML = `<td>${id}</td><td>${escapeHtml(order.teacherName)}</td><td>${new Date(order.timestamp).toLocaleDateString()}</td><td><div class="it-wrap" style="display:flex;gap:4px;"></div></td><td><span class="badge bg-success">Done</span></td><td><div class="hist-actions-row"><button class="view-details-btn">View Voucher</button><button class="hist-act pdf" title="Download PDF" onclick="window.downloadOrderReceipt('${escapeHtml(id)}')">⬇ PDF</button><button class="hist-act prt" title="Print" onclick="window.printOrderReceipt('${escapeHtml(id)}')">🖨 Print</button></div></td>`;
                 const wrap = tr.querySelector('.it-wrap');
                 (order.items || []).slice(0, 3).forEach(it => {
                     const img = document.createElement('img');
@@ -5992,6 +6294,11 @@ function renderTeacherOrderHistory() {
                         <small>· ${dateStr}</small>
                         <div>${itemsSummary}</div>
                         <small style="display:block; margin-top:4px;">📍 Pickup: ${order.pickupLocation || 'Awaiting Admin Details'}</small>
+                        <div class="hist-actions-row">
+                            <button class="hist-act view" onclick="window.viewOrderReceipt('${escapeHtml(id)}')">👁 View</button>
+                            <button class="hist-act pdf" onclick="window.downloadOrderReceipt('${escapeHtml(id)}')">⬇ Download</button>
+                            <button class="hist-act prt" onclick="window.printOrderReceipt('${escapeHtml(id)}')">🖨 Print</button>
+                        </div>
                     </div>`;
             }).join('');
         }
@@ -6029,6 +6336,8 @@ function renderTeacherOrderHistory() {
             <td>${locationDisplay}</td>
             <td>
                 <button class="view-details-btn me-1">View Voucher</button>
+                <button class="hist-act pdf" onclick="window.downloadOrderReceipt('${escapeHtml(id)}')">⬇ PDF</button>
+                <button class="hist-act prt" onclick="window.printOrderReceipt('${escapeHtml(id)}')">🖨 Print</button>
                 ${isCancellable ? `<button class="btn btn-sm btn-outline-danger font-bold ms-1" onclick="window.cancelTeacherOrder('${escapeHtml(id)}')"><i class="bi bi-x-circle me-1"></i>Cancel</button>` : ''}
             </td>`;
 
@@ -6050,6 +6359,8 @@ function renderTeacherOrderHistory() {
             </div>
             <div class="d-flex gap-2 mt-2">
                 <button class="primary-btn blue omc-view-btn flex-grow-1">View Receipt</button>
+                <button class="hist-act pdf" onclick="window.downloadOrderReceipt('${escapeHtml(id)}')">⬇ PDF</button>
+                <button class="hist-act prt" onclick="window.printOrderReceipt('${escapeHtml(id)}')">🖨</button>
                 ${isCancellable ? `<button class="btn btn-outline-danger btn-sm font-bold px-3" onclick="window.cancelTeacherOrder('${escapeHtml(id)}')">Cancel</button>` : ''}
             </div>`;
         const cardItemsWrap = card.querySelector('.omc-items');
@@ -6118,85 +6429,6 @@ async function viewOrderDetails(id) {
     $('order-detail-modal').classList.add('active');
 }
 
-// ==================== RECEIPT / REQUISITION VOUCHER ====================
-window.viewOrderReceipt = async function(orderId) {
-    try {
-        showToast("Generating Official Requisition Voucher...", "info");
-        const snap = await get(ref(db, `orders/${orderId}`));
-        if (!snap.exists()) throw new Error("Order not found");
-        const order = snap.val();
-
-        const ts = new Date(order.completedAt || order.timestamp || Date.now());
-
-        if ($('receipt-order-id')) $('receipt-order-id').innerText = orderId;
-        if ($('receipt-date')) $('receipt-date').innerText = ts.toLocaleDateString() + ' ' + ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        if ($('receipt-dispatch-date')) $('receipt-dispatch-date').innerText = ts.toLocaleDateString();
-
-        if ($('receipt-teacher-name')) $('receipt-teacher-name').innerText = order.teacherName || "N/A";
-        if ($('receipt-teacher-id')) $('receipt-teacher-id').innerText = order.teacherUid || order.teacherId || "N/A";
-        if ($('receipt-department')) $('receipt-department').innerText = order.department || order.section || "Educational Staff";
-
-        if ($('receipt-issuer-name')) $('receipt-issuer-name').innerText = order.issuedBy || order.handedOverBy || "Authorized Storekeeper";
-        if ($('receipt-pickup-location')) $('receipt-pickup-location').innerText = order.pickupLocation || "Main Stationery Store";
-
-        const statusBadge = $('receipt-status-badge');
-        if (statusBadge) {
-            const isDone = (order.status || '').toLowerCase().includes('completed') || (order.status || '').toLowerCase().includes('done');
-            statusBadge.innerText = isDone ? "DELIVERED & APPROVED" : String(order.status || 'PENDING').toUpperCase();
-            statusBadge.className = isDone ? "badge bg-success fs-6 px-3 py-2 mb-2 d-inline-block" : "badge bg-warning text-dark fs-6 px-3 py-2 mb-2 d-inline-block";
-        }
-
-        const itemsList = Array.isArray(order.items) ? order.items : Object.values(order.items || {});
-
-        $('receipt-items-list').innerHTML = itemsList.map(item => {
-            const itemImg = isValidImageUrl(item.imageUrl) ? item.imageUrl : (inventoryData[item.itemName]?.imageUrl || FALLBACK_IMG);
-            const sn = item.batchSerialNumber || item.serialNumber || item.serial || item.sn || item.itemSn || 'N/A';
-            const reqQty = item.requestQuantity || item.quantity || item.reqQty || 1;
-            const issuedQty = item.issuedQty || reqQty;
-            const stockBal = (item.stockBalance !== undefined && item.stockBalance !== 'N/A') ? `${item.stockBalance} Pcs` : (inventoryData[item.itemName]?.quantity !== undefined ? `${inventoryData[item.itemName].quantity} Pcs` : 'In Stock');
-
-            return `
-            <tr>
-                <td class="text-center">
-                    <img src="${FALLBACK_IMG}" class="receipt-thumb" data-url="${itemImg}" style="width: 50px; height: 40px; object-fit: contain; border-radius: 4px;" loading="lazy">
-                </td>
-                <td class="text-start">
-                    <div class="fw-bold">${escapeHtml(item.itemName || item.name || 'Stationery Item')}</div>
-                    ${item.brandName ? `<small class="text-muted">Brand: ${escapeHtml(item.brandName)}</small>` : ''}
-                </td>
-                <td class="text-center"><code>${escapeHtml(sn)}</code></td>
-                <td class="text-center fw-bold">${reqQty}</td>
-                <td class="text-center fw-bold text-success">${issuedQty}</td>
-                <td class="text-center"><span class="badge bg-light text-dark border">${escapeHtml(stockBal)}</span></td>
-            </tr>
-        `}).join('');
-
-        document.querySelectorAll('.receipt-thumb').forEach(img => {
-            window.loadCachedImage(img, img.dataset.url);
-        });
-
-        // 1. Requester Signature Fallbacks
-        const requesterSign = order.requesterSignature || order.teacherRequestSignature || order.teacherSign || order.teacherSignature || order.signature || order.receiverSignature || '';
-
-        // 2. Storekeeper Signature Fallbacks
-        const issuerSign = order.authorizedSignature || order.handoverSignatureUrl || order.handoverSignature || order.issuerSign || order.adminSign || order.storekeeperSign || order.issuerSignature || '';
-
-        const teacherSigEl = $('receipt-teacher-sig');
-        if (teacherSigEl && teacherSigEl.parentElement) {
-            teacherSigEl.parentElement.innerHTML = renderSignatureHTML(requesterSign, "Requester Signature");
-        }
-
-        const adminSigEl = $('receipt-admin-sig');
-        if (adminSigEl && adminSigEl.parentElement) {
-            adminSigEl.parentElement.innerHTML = renderSignatureHTML(issuerSign, "Authorized Signature");
-        }
-
-        bootstrap.Modal.getOrCreateInstance($('receiptModal')).show();
-    } catch (e) {
-        showToast(e.message, "error");
-    }
-};
-
 /**
  * Base64 & Data URL Signature Validation & Formatting
  */
@@ -6227,25 +6459,509 @@ function renderSignatureHTML(rawSigData, labelTitle = "Digital Signature") {
 }
 window.renderSignatureHTML = renderSignatureHTML;
 
-window.printReceipt = function() {
-    window.print();
+// ==================== RECEIPT / REQUISITION VOUCHER (v2.2.0) ====================
+// One builder => the SAME professional voucher is used for: on-screen preview, PDF download and direct print.
+// All photos + signatures are converted to embedded data-URLs BEFORE rendering, so nothing is missing in PDF/print.
+
+const RECEIPT_WIDTH_PX = 794; // A4 @ 96dpi
+const _receiptImgCache = new Map();
+
+const RECEIPT_CSS = `
+.rcpt{width:${RECEIPT_WIDTH_PX}px;max-width:${RECEIPT_WIDTH_PX}px;margin:0 auto;background:#fff;color:#0f172a;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.45;box-sizing:border-box;padding:0 0 18px;position:relative}
+.rcpt *{box-sizing:border-box}
+.rcpt-topbar{height:8px;background:linear-gradient(90deg,#0f766e 0%,#0891b2 55%,#1e3a8a 100%)}
+.rcpt-head{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 28px 12px;border-bottom:2px solid #0f172a}
+.rcpt-logo{height:auto;max-height:62px;max-width:430px;object-fit:contain;object-position:left center;display:block}
+.rcpt-title-box{text-align:right;max-width:290px}
+.rcpt-title{font-size:13.5px;font-weight:800;letter-spacing:.6px;color:#0f172a;margin:0 0 2px}
+.rcpt-sub{font-size:10.5px;color:#475569;margin:0}
+.rcpt-status{display:inline-block;margin-top:6px;padding:4px 14px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:.8px;border:1.5px solid}
+.rcpt-st-done{color:#166534;background:#dcfce7;border-color:#16a34a}
+.rcpt-st-ready{color:#1d4ed8;background:#dbeafe;border-color:#2563eb}
+.rcpt-st-pend{color:#92400e;background:#fef3c7;border-color:#f59e0b}
+.rcpt-st-canc{color:#991b1b;background:#fee2e2;border-color:#dc2626}
+.rcpt-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 28px;background:#f1f5f9;border-bottom:1px solid #cbd5e1}
+.rcpt-meta div{font-size:11px;color:#475569}
+.rcpt-meta b{display:block;font-size:13px;color:#0f172a}
+.rcpt-barcode{height:38px;max-width:190px}
+.rcpt-cols{display:flex;gap:14px;padding:14px 28px 4px}
+.rcpt-box{flex:1;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden}
+.rcpt-box h4{margin:0;padding:6px 12px;background:#0f172a;color:#fff;font-size:10.5px;letter-spacing:.8px;text-transform:uppercase}
+.rcpt-row{display:flex;justify-content:space-between;gap:10px;padding:5px 12px;border-bottom:1px dashed #e2e8f0;font-size:11.5px}
+.rcpt-row:last-child{border-bottom:0}
+.rcpt-row span{color:#64748b}
+.rcpt-row b{color:#0f172a;text-align:right;overflow-wrap:anywhere}
+.rcpt-sec{padding:12px 28px 0}
+.rcpt-sec h3{margin:0 0 6px;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#0f172a}
+.rcpt-table{width:100%;border-collapse:collapse;font-size:11px}
+.rcpt-table th{background:#e2e8f0;color:#0f172a;font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;padding:7px 5px;border:1px solid #94a3b8;text-align:center}
+.rcpt-table td{padding:6px 5px;border:1px solid #cbd5e1;text-align:center;vertical-align:middle}
+.rcpt-table tr{page-break-inside:avoid}
+.rcpt-table td.l{text-align:left}
+.rcpt-table tbody tr:nth-child(even) td{background:#f8fafc}
+.rcpt-thumb{width:46px;height:46px;object-fit:contain;border:1px solid #e2e8f0;border-radius:6px;background:#fff;display:block;margin:0 auto}
+.rcpt-noimg{width:46px;height:46px;border:1px dashed #cbd5e1;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:8px;color:#94a3b8;margin:0 auto}
+.rcpt-iname{font-weight:700;font-size:11.5px}
+.rcpt-isub{font-size:9.5px;color:#64748b}
+.rcpt-sn{font-family:Consolas,'Courier New',monospace;font-size:10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:1px 5px;display:inline-block}
+.rcpt-stock{font-weight:800;color:#0f172a;font-size:12px}
+.rcpt-stock small{display:block;font-weight:500;color:#64748b;font-size:9px}
+.rcpt-issued{font-weight:800;color:#166534}
+.rcpt-total td{background:#0f172a !important;color:#fff;font-weight:800;border-color:#0f172a}
+.rcpt-signs{display:flex;gap:16px;padding:22px 28px 0;align-items:flex-end;page-break-inside:avoid}
+.rcpt-sign{flex:1;text-align:center}
+.rcpt-sigimg{height:62px;display:flex;align-items:flex-end;justify-content:center;border-bottom:1.5px solid #0f172a;padding-bottom:3px}
+.rcpt-sigimg img{max-height:58px;max-width:100%;object-fit:contain}
+.rcpt-sigtxt{font-size:9.5px;color:#166534;font-weight:700;padding-bottom:6px}
+.rcpt-signlbl{font-size:10.5px;font-weight:800;margin-top:4px;letter-spacing:.4px}
+.rcpt-signsub{font-size:9.5px;color:#64748b}
+.rcpt-seal{height:62px;border:1.5px dashed #94a3b8;border-radius:50%;width:62px;margin:0 auto;display:flex;align-items:center;justify-content:center;font-size:8px;color:#94a3b8;text-align:center;line-height:1.2}
+.rcpt-foot{margin:18px 28px 0;padding-top:8px;border-top:1px solid #cbd5e1;text-align:center;font-size:9.5px;color:#64748b;line-height:1.5}
+.rcpt-foot b{color:#0f172a}
+`;
+
+// ---------- image helpers ----------
+function _rcptBlobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = reject;
+        fr.readAsDataURL(blob);
+    });
+}
+
+// Re-draw through a canvas: shrinks big photos (small PDF) and guarantees a clean, embeddable image.
+function _rcptNormalize(dataUrl, maxSide, asPng) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+                if (!w || !h) return resolve(dataUrl);
+                const scale = Math.min(1, maxSide / Math.max(w, h));
+                w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                const ctx = c.getContext('2d');
+                if (!asPng) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
+                ctx.drawImage(img, 0, 0, w, h);
+                resolve(asPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85));
+            } catch (e) { resolve(dataUrl); }
+        };
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+    });
+}
+
+// Crops empty (white/transparent) margins - the school logo file has a lot of blank space around it.
+function _rcptTrim(dataUrl) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const w = img.naturalWidth, h = img.naturalHeight;
+                const c = document.createElement('canvas'); c.width = w; c.height = h;
+                const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+                const d = ctx.getImageData(0, 0, w, h).data;
+                let x0 = w, y0 = h, x1 = 0, y1 = 0;
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = (y * w + x) * 4;
+                    if (d[i + 3] > 12 && (d[i] < 244 || d[i + 1] < 244 || d[i + 2] < 244)) {
+                        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+                    }
+                }
+                if (x1 <= x0 || y1 <= y0) return resolve(dataUrl);
+                const pad = 4; x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+                x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+                const o = document.createElement('canvas'); o.width = x1 - x0 + 1; o.height = y1 - y0 + 1;
+                o.getContext('2d').drawImage(c, x0, y0, o.width, o.height, 0, 0, o.width, o.height);
+                resolve(o.toDataURL('image/png'));
+            } catch (e) { resolve(dataUrl); }
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+    });
+}
+
+function _rcptWithTimeout(promise, ms) {
+    return Promise.race([promise, new Promise((res) => setTimeout(() => res(null), ms))]);
+}
+
+async function _rcptFetchViaCors(url) {
+    const r = await fetch(url, { mode: 'cors', credentials: 'omit' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const b = await r.blob();
+    if (!b.type || !b.type.startsWith('image/')) throw new Error('not an image');
+    return _rcptBlobToDataUrl(b);
+}
+
+function _rcptFetchViaImgTag(url) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            try {
+                const c = document.createElement('canvas');
+                c.width = img.naturalWidth; c.height = img.naturalHeight;
+                c.getContext('2d').drawImage(img, 0, 0);
+                resolve(c.toDataURL('image/png'));
+            } catch (e) { reject(e); }
+        };
+        img.onerror = () => reject(new Error('img load failed'));
+        img.src = url;
+    });
+}
+
+// Optional: if the Apps Script has the "getImage" snippet, it can return the Drive file as base64 (no CORS problem).
+async function _rcptFetchViaScript(rawUrl) {
+    const scriptUrl = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+    const m = String(rawUrl).match(/(?:id=|\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})/);
+    if (!scriptUrl || !m) throw new Error('no script');
+    const r = await fetch(scriptUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getImage', fileId: m[1] }) });
+    const j = await r.json();
+    if (j && j.status === 'success' && j.data) return j.data;
+    throw new Error('script has no getImage');
+}
+
+/** Returns an embeddable data-URL (or null if the image really cannot be read). */
+async function receiptImageToDataUrl(rawUrl, opts = {}) {
+    const { maxSide = 420, asPng = false } = opts;
+    if (!isValidImageUrl(rawUrl) || rawUrl === FALLBACK_IMG) return null;
+    const raw = String(rawUrl).trim();
+    const cacheKey = `${raw}|${maxSide}|${asPng}`;
+    if (_receiptImgCache.has(cacheKey)) return _receiptImgCache.get(cacheKey);
+
+    const work = (async () => {
+        if (raw.startsWith('data:image')) return _rcptNormalize(raw, maxSide, asPng);
+
+        const isDriveFirst = /(?:id=|\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})/.test(raw);
+        if (isDriveFirst) {
+            const viaProxy = await window.driveImageViaScript(raw, maxSide);
+            if (viaProxy) {
+                const n = await _rcptNormalize(viaProxy, maxSide, asPng);
+                if (n) return n;
+            }
+        }
+        const candidates = [];
+        const isDrive = isDriveFirst;
+        if (isDrive) { for (let i = 0; i < 3; i++) candidates.push(getDirectDriveUrl(raw, i)); }
+        else candidates.push(raw);
+
+        for (const u of candidates) {
+            for (const fn of [_rcptFetchViaCors, _rcptFetchViaImgTag]) {
+                try {
+                    const d = await fn(u);
+                    const n = d ? await _rcptNormalize(d, maxSide, asPng) : null;
+                    if (n) return n;
+                } catch (e) { /* try next method */ }
+            }
+        }
+        if (isDrive) {
+            try {
+                const d = await _rcptFetchViaScript(raw);
+                const n = await _rcptNormalize(d, maxSide, asPng);
+                if (n) return n;
+            } catch (e) { /* not available */ }
+        }
+        return null;
+    })();
+
+    const result = await _rcptWithTimeout(work, 12000);
+    if (result) _receiptImgCache.set(cacheKey, result); // never cache failures
+    return result;
+}
+window.receiptImageToDataUrl = receiptImageToDataUrl;
+
+// ---------- stock helpers ----------
+function _rcptNodeQty(node) {
+    if (!node) return null;
+    if (node.batches && typeof node.batches === 'object' && Object.keys(node.batches).length > 0) {
+        return Object.values(node.batches).reduce((s, b) => s + Math.max(0, parseInt(b?.currentQty ?? b?.currentStock ?? b?.quantity ?? 0, 10) || 0), 0);
+    }
+    const v = parseInt(node.currentQty ?? node.currentStock ?? node.quantity ?? node.availableStock ?? node.stock ?? 0, 10);
+    return isNaN(v) ? 0 : Math.max(0, v);
+}
+
+function _rcptFindInvNode(inv, item) {
+    if (!inv) return null;
+    const sn = String(item.serialNumber || item.batchSerialNumber || item.serial || item.sn || item.itemId || '').trim();
+    if (sn && inv[sn]) return inv[sn];
+    const snL = sn.toLowerCase();
+    const nameL = String(item.itemName || item.name || '').trim().toLowerCase();
+    return Object.values(inv).find((n) => n && (
+        (snL && String(n.serialNumber || n.batchNo || '').trim().toLowerCase() === snL) ||
+        (nameL && String(n.itemName || n.name || '').trim().toLowerCase() === nameL)
+    )) || null;
+}
+window._rcptNodeQty = _rcptNodeQty;
+window._rcptFindInvNode = _rcptFindInvNode;
+
+async function _rcptEnsureInventory() {
+    if (inventoryData && Object.keys(inventoryData).length) return inventoryData;
+    try { const s = await get(ref(db, 'inventory')); return s.val() || {}; } catch (e) { return {}; }
+}
+
+// ---------- builder ----------
+function _rcptFmtDate(d) {
+    try { return new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    catch (e) { return '-'; }
+}
+
+function _rcptBarcodeSvg(text) {
+    try {
+        if (typeof JsBarcode === 'undefined') return '';
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        JsBarcode(svg, String(text), { format: 'CODE128', height: 34, width: 1.4, displayValue: false, margin: 0 });
+        svg.setAttribute('class', 'rcpt-barcode');
+        svg.setAttribute('preserveAspectRatio', 'xMaxYMid meet');
+        return svg.outerHTML;
+    } catch (e) { return ''; }
+}
+
+/** Fetches the order, resolves every image, and returns { order, html }. */
+async function buildReceiptForOrder(orderId, forExport) {
+    const snap = await get(ref(db, `orders/${orderId}`));
+    if (!snap.exists()) throw new Error('Order not found');
+    const order = snap.val();
+    const inv = await _rcptEnsureInventory();
+
+    const statusRaw = String(order.status || 'Pending');
+    const isCancelled = /cancel/i.test(statusRaw);
+    const isDone = /done|completed/i.test(statusRaw);
+    const isReady = !isDone && /approved|ready/i.test(statusRaw);
+    const stCls = isCancelled ? 'rcpt-st-canc' : isDone ? 'rcpt-st-done' : isReady ? 'rcpt-st-ready' : 'rcpt-st-pend';
+    const stTxt = isCancelled ? 'CANCELLED' : isDone ? 'ISSUED & COMPLETED' : isReady ? 'READY FOR PICKUP' : 'PENDING APPROVAL';
+
+    const items = (Array.isArray(order.items) ? order.items : Object.values(order.items || {})).filter(Boolean);
+
+    // Resolve all images in parallel
+    const requesterRaw = order.requesterSignature || order.teacherRequestSignature || order.teacherSign || order.teacherSignature || order.signature || order.receiverSignature || '';
+    const issuerRaw = order.authorizedSignature || order.handoverSignatureUrl || order.handoverSignature || order.issuerSign || order.adminSign || order.storekeeperSign || order.issuerSignature || '';
+    const sigSrc = (raw) => { const f = formatSignatureSrc(raw); return f; };
+
+    const [logoData, reqSigData, issSigData, ...itemImgs] = await Promise.all([
+        receiptImageToDataUrl('school.png', { maxSide: 900, asPng: true }).then((d) => d ? _rcptTrim(d) : null),
+        receiptImageToDataUrl(sigSrc(requesterRaw), { maxSide: 420, asPng: true }),
+        receiptImageToDataUrl(sigSrc(issuerRaw), { maxSide: 420, asPng: true }),
+        ...items.map((it) => {
+            const node = _rcptFindInvNode(inv, it);
+            const src = isValidImageUrl(it.imageUrl) ? it.imageUrl : (node && (node.imageUrl || node.image || node.photoUrl));
+            return receiptImageToDataUrl(src, { maxSide: 260, asPng: false });
+        })
+    ]);
+
+    const showSig = (data, rawSigUrl) => {
+        if (data) return `<img src="${data}" alt="signature">`;
+        if (!forExport && formatSignatureSrc(rawSigUrl)) return `<img src="${formatSignatureSrc(rawSigUrl)}" alt="signature" onerror="this.outerHTML='<span class=&quot;rcpt-sigtxt&quot;>✔ Digitally Signed</span>'">`;
+        return rawSigUrl ? `<span class="rcpt-sigtxt">✔ Digitally Signed</span>` : '';
+    };
+
+    let totalReq = 0, totalIssued = 0;
+    const rows = items.map((it, i) => {
+        const node = _rcptFindInvNode(inv, it);
+        const req = parseInt(it.requestQuantity || it.quantity || it.reqQty || 1, 10) || 1;
+        let issued = isDone ? (it.issuedQty !== undefined ? parseInt(it.issuedQty, 10) || 0 : req) : null;
+        totalReq += req; if (issued !== null) totalIssued += issued;
+
+        // ORIGINAL stock (before this order was issued). Older orders fall back to "current + issued".
+        let original = null, after = null, approx = false;
+        if (it.stockBefore !== undefined && it.stockBefore !== null && it.stockBefore !== '') {
+            original = parseInt(it.stockBefore, 10);
+            after = (it.stockAfter !== undefined && it.stockAfter !== null) ? parseInt(it.stockAfter, 10) : Math.max(0, original - (issued || 0));
+        } else {
+            const cur = _rcptNodeQty(node);
+            if (cur !== null) {
+                if (isDone) { original = cur + (issued || 0); after = cur; approx = true; }
+                else { original = cur; }
+            }
+        }
+        const sn = it.serialNumber || it.batchSerialNumber || it.serial || it.sn || it.itemSn || (node && node.serialNumber) || 'N/A';
+        const brand = it.brandName || (node && (node.brand || node.brandName)) || '';
+        const unit = it.unit || (node && node.unit) || 'Pcs';
+        const imgHtml = itemImgs[i] ? `<img class="rcpt-thumb" src="${itemImgs[i]}" alt="">` : `<div class="rcpt-noimg">No Photo</div>`;
+
+        return `<tr>
+            <td>${i + 1}</td>
+            <td>${imgHtml}</td>
+            <td class="l"><div class="rcpt-iname">${escapeHtml(it.itemName || it.name || 'Stationery Item')}</div>${brand ? `<div class="rcpt-isub">Brand: ${escapeHtml(brand)}</div>` : ''}${it.batchInfo ? `<div class="rcpt-isub">Batch: ${escapeHtml(it.batchInfo)}</div>` : ''}</td>
+            <td><span class="rcpt-sn">${escapeHtml(String(sn))}</span></td>
+            <td>${escapeHtml(unit)}</td>
+            <td><b>${req}</b></td>
+            <td class="rcpt-issued">${issued === null ? '—' : issued}</td>
+            <td class="rcpt-stock">${original === null ? '—' : (approx ? '≈ ' : '') + original}<small>${after !== null && isDone ? 'After issue: ' + after : (isDone ? '' : 'Current stock')}</small></td>
+        </tr>`;
+    }).join('');
+
+    const requesterName = order.teacherName || 'N/A';
+    const issuerName = order.issuedBy || order.handedOverBy || (isDone ? 'Authorized Storekeeper' : '—');
+    const completedAt = order.completedAt || order.stockDeductedAt || null;
+    const barcode = _rcptBarcodeSvg(orderId);
+
+    const html = `
+    <div class="rcpt">
+        <div class="rcpt-topbar"></div>
+        <div class="rcpt-head">
+            ${logoData ? `<img class="rcpt-logo" src="${logoData}" alt="Jern Yafoor Charter School">` : `<div><div class="rcpt-title">JERN YAFOOR CHARTER SCHOOL</div><div class="rcpt-sub">Abu Dhabi, United Arab Emirates</div></div>`}
+            <div class="rcpt-title-box">
+                <p class="rcpt-title">STATIONERY REQUISITION &amp; ISSUE VOUCHER</p>
+                <p class="rcpt-sub">Department of Educational Stationery &amp; Supplies</p>
+                <span class="rcpt-status ${stCls}">${stTxt}</span>
+            </div>
+        </div>
+        <div class="rcpt-meta">
+            <div>Voucher No.<b>${escapeHtml(orderId)}</b></div>
+            <div>Requested On<b>${escapeHtml(_rcptFmtDate(order.timestamp || order.requestedAt))}</b></div>
+            <div>${isDone ? 'Issued On' : 'Status Updated'}<b>${escapeHtml(_rcptFmtDate(completedAt || order.approvedAt || order.timestamp))}</b></div>
+            <div>${barcode}</div>
+        </div>
+        <div class="rcpt-cols">
+            <div class="rcpt-box">
+                <h4>Requester Information</h4>
+                <div class="rcpt-row"><span>Staff Name</span><b>${escapeHtml(requesterName)}</b></div>
+                <div class="rcpt-row"><span>Staff / ADEK ID</span><b>${escapeHtml(String(order.teacherUid || order.teacherId || 'N/A'))}</b></div>
+                <div class="rcpt-row"><span>Department</span><b>${escapeHtml(order.department || order.section || 'Educational Staff')}</b></div>
+            </div>
+            <div class="rcpt-box">
+                <h4>Issuance &amp; Store Details</h4>
+                <div class="rcpt-row"><span>Issued By</span><b>${escapeHtml(issuerName)}</b></div>
+                <div class="rcpt-row"><span>Pickup / Dispatch Location</span><b>${escapeHtml(order.pickupLocation && order.pickupLocation !== 'Awaiting Admin Details' ? order.pickupLocation : 'Main Stationery Store')}</b></div>
+                <div class="rcpt-row"><span>Total Items</span><b>${items.length} item(s)</b></div>
+            </div>
+        </div>
+        <div class="rcpt-sec">
+            <h3>Items Issued</h3>
+            <table class="rcpt-table">
+                <thead><tr>
+                    <th style="width:26px">#</th><th style="width:58px">Photo</th><th>Item Description</th>
+                    <th style="width:92px">Serial / Batch</th><th style="width:40px">Unit</th>
+                    <th style="width:48px">Req Qty</th><th style="width:54px">Issued Qty</th><th style="width:92px">Stock Balance (Original)</th>
+                </tr></thead>
+                <tbody>${rows || '<tr><td colspan="8">No items</td></tr>'}
+                    <tr class="rcpt-total"><td colspan="5" style="text-align:right">TOTAL</td><td>${totalReq}</td><td>${isDone ? totalIssued : '—'}</td><td></td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="rcpt-signs">
+            <div class="rcpt-sign">
+                <div class="rcpt-sigimg">${showSig(reqSigData, requesterRaw)}</div>
+                <div class="rcpt-signlbl">REQUESTER SIGNATURE</div>
+                <div class="rcpt-signsub">${escapeHtml(requesterName)}</div>
+            </div>
+            <div class="rcpt-sign">
+                <div class="rcpt-sigimg">${showSig(issSigData, issuerRaw)}</div>
+                <div class="rcpt-signlbl">AUTHORIZED STOREKEEPER</div>
+                <div class="rcpt-signsub">${escapeHtml(issuerName)}</div>
+            </div>
+            <div class="rcpt-sign" style="flex:.6">
+                <div class="rcpt-seal">SCHOOL<br>SEAL</div>
+                <div class="rcpt-signlbl">OFFICIAL STAMP</div>
+            </div>
+        </div>
+        <div class="rcpt-foot">
+            <b>Notice:</b> Issued items are strictly for official educational use within Jern Yafoor Charter School premises.<br>
+            Computer-generated voucher from the Jern Yafoor Stationery Tracking System &bull; Printed on ${escapeHtml(_rcptFmtDate(Date.now()))}
+        </div>
+    </div>`;
+
+    return { order, html };
+}
+
+function _rcptFitZoom() {
+    const avail = Math.min(800, window.innerWidth - 12);
+    return Math.min(1, avail / RECEIPT_WIDTH_PX);
+}
+
+window._currentReceiptOrderId = null;
+
+window.viewOrderReceipt = async function(orderId) {
+    try {
+        window.showGlobalLoader("Preparing voucher...");
+        const { html } = await buildReceiptForOrder(orderId, false);
+        window._currentReceiptOrderId = orderId;
+        const holder = $('receipt-content');
+        if (!holder) throw new Error('Receipt container missing');
+        holder.innerHTML = `<style>${RECEIPT_CSS}</style>${html}`;
+        holder.style.zoom = _rcptFitZoom();
+        bootstrap.Modal.getOrCreateInstance($('receiptModal')).show();
+    } catch (e) {
+        console.error(e);
+        showToast(e.message || 'Could not open voucher', 'error');
+    } finally {
+        window.hideGlobalLoader();
+    }
 };
 
-window.downloadReceiptPDF = function() {
-    const element = document.getElementById('receipt-content');
-    const orderId = document.getElementById('receipt-order-id').innerText;
-    const options = {
-        margin: [10, 10, 10, 10],
-        filename: `Stationery_Receipt_${orderId}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: true },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-    html2pdf().set(options).from(element).save();
+function _rcptResolveId(orderId) { return orderId || window._currentReceiptOrderId; }
+
+window.downloadReceiptPDF = async function(orderId) {
+    const id = _rcptResolveId(orderId);
+    if (!id) return;
+    if (typeof html2pdf === 'undefined') { showToast('PDF library not loaded. Check internet.', 'error'); return; }
+    let host = null;
+    try {
+        window.showGlobalLoader("Creating PDF...");
+        const { html } = await buildReceiptForOrder(id, true); // export mode: only embedded images
+        host = document.createElement('div');
+        host.style.cssText = `position:fixed;left:-10000px;top:0;width:${RECEIPT_WIDTH_PX}px;background:#fff;z-index:-1;`;
+        host.innerHTML = `<style>${RECEIPT_CSS}</style>${html}`;
+        document.body.appendChild(host);
+        await new Promise((r) => setTimeout(r, 150)); // let layout settle
+        await html2pdf().set({
+            margin: 0,
+            filename: `Stationery_Voucher_${id}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, allowTaint: false, backgroundColor: '#ffffff', windowWidth: RECEIPT_WIDTH_PX, scrollX: 0, scrollY: 0 },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.rcpt-signs', '.rcpt-foot'] }
+        }).from(host.querySelector('.rcpt')).save();
+    } catch (e) {
+        console.error('PDF error', e);
+        showToast('PDF failed: ' + (e.message || e), 'error');
+    } finally {
+        if (host) host.remove();
+        window.hideGlobalLoader();
+    }
 };
+
+window.printReceipt = async function(orderId) {
+    const id = _rcptResolveId(orderId);
+    if (!id) return;
+    try {
+        window.showGlobalLoader("Preparing print...");
+        const { html } = await buildReceiptForOrder(id, true);
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+        document.body.appendChild(iframe);
+        const doc = iframe.contentWindow.document;
+        doc.open();
+        doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Voucher ${escapeHtml(id)}</title>
+            <style>@page{size:A4;margin:8mm}html,body{margin:0;padding:0;background:#fff}
+            .rcpt{width:100% !important;max-width:none !important}
+            *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+            ${RECEIPT_CSS.replace(/\.rcpt\{width:\d+px;max-width:\d+px;/, '.rcpt{')}</style></head><body>${html}</body></html>`);
+        doc.close();
+        window.hideGlobalLoader();
+        const go = () => {
+            try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) { showToast('Print failed', 'error'); }
+            setTimeout(() => iframe.remove(), 60000);
+        };
+        if (iframe.contentWindow.document.readyState === 'complete') setTimeout(go, 250);
+        else iframe.onload = () => setTimeout(go, 250);
+    } catch (e) {
+        window.hideGlobalLoader();
+        console.error('Print error', e);
+        showToast('Print failed: ' + (e.message || e), 'error');
+    }
+};
+
+// Direct actions used by the history lists (no need to open the preview first)
+window.downloadOrderReceipt = (orderId) => window.downloadReceiptPDF(orderId);
+window.printOrderReceipt = (orderId) => window.printReceipt(orderId);
+
 
 // ==================== SYSTEM / STAFF ====================
 function fetchStaffList() {
+    if (window.__v230FetchStaff) return window.__v230FetchStaff(); // v2.3.0: search / edit / designation
     addListener(ref(db, 'users'), (snapshot) => {
         const list = $('admin-staff-list'); if (!list) return;
         list.innerHTML = '';
@@ -7211,31 +7927,15 @@ async function processOrderCompletionAndAudit(order) {
                 }
             }
 
-            const currentStock = invItem ? parseInt(invItem.quantity ?? invItem.availableStock ?? invItem.currentStock ?? 0, 10) : 0;
-            const newStock = Math.max(0, currentStock - qtyIssued);
+            // v2.3.0 FIX: stock is ALREADY deducted at handover (executeSingleStockDeduction).
+            // This audit/backfill must only LOG the movement. It used to deduct again on every app load
+            // for completed orders that had no log entry -> admin dashboard showed 70 instead of 80.
+            const liveTotal = invItem ? _rcptNodeQty(invItem) : null;
+            const newStock = (item.stockAfter !== undefined && item.stockAfter !== null && item.stockAfter !== '')
+                ? parseInt(item.stockAfter, 10)
+                : (liveTotal !== null ? liveTotal : 0);
             const itemPhoto = item.imageUrl || item.image || (invItem ? invItem.imageUrl || invItem.image : '') || FALLBACK_IMG;
             const finalSN = targetSN || (invItem ? invItem.serialNumber : null) || itemSN || '3546353';
-
-            // 1. Update /inventory/{serialNumber} stock
-            if (targetSN) {
-                updates[`inventory/${targetSN}/quantity`] = newStock;
-                updates[`inventory/${targetSN}/availableStock`] = newStock;
-                updates[`inventory/${targetSN}/currentStock`] = newStock;
-                updates[`inventory/${targetSN}/stock`] = newStock;
-                updates[`inventory/${targetSN}/lastUpdated`] = timestamp;
-
-                // Handle sub-batch stock update
-                if (invItem && invItem.batches && typeof invItem.batches === 'object') {
-                    const batchKey = item.batchId || Object.keys(invItem.batches)[0];
-                    if (batchKey && invItem.batches[batchKey]) {
-                        const bVal = invItem.batches[batchKey];
-                        const curBStock = parseInt(bVal.currentStock ?? bVal.quantity ?? 0, 10);
-                        const newBStock = Math.max(0, curBStock - qtyIssued);
-                        updates[`inventory/${targetSN}/batches/${batchKey}/currentStock`] = newBStock;
-                        updates[`inventory/${targetSN}/batches/${batchKey}/quantity`] = newBStock;
-                    }
-                }
-            }
 
             // 2. Prepare /stock_movements entry
             const movementKey = push(child(dbRef, 'stock_movements')).key;
@@ -8138,4 +8838,456 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     window.deleteInventoryItem = async function (itemId) {
         if (typeof window.deleteProductWithArchive === 'function') return window.deleteProductWithArchive(itemId);
     };
+})();
+
+
+// =====================================================================================
+// v2.3.0 (additive)
+//   1) AI background removal for product photos (imglyRemoveBackground was never defined)
+//   2) Staff Directory: designation (Vice Principal etc.), Edit button, search + role filter
+//   3) Designation shown in Admin / Teacher dashboard header
+//   4) Announcements: admin publishes -> popup when staff open the app
+//   5) Saved signature: first order = sign, next orders = verify (biometric / password) + auto-attach
+// =====================================================================================
+(function initV230() {
+    'use strict';
+    const esc = (v) => escapeHtml(v == null ? '' : String(v));
+    const safeKey = (v) => String(v || 'GUEST').replace(/[.#$\[\]\/]/g, '_');
+    const isAdminRole = (r) => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String(r || '').toUpperCase());
+    const myUid = () => (currentUser && (currentUser.adecPassNumber || currentUser.uid)) || '';
+
+    // ---------------------------------------------------------------- 1) AI background removal
+    let imglyModule = null;
+    window.imglyRemoveBackground = async function(src) {
+        if (!imglyModule) {
+            imglyModule = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm');
+        }
+        const fn = imglyModule.removeBackground || imglyModule.default;
+        if (typeof fn !== 'function') throw new Error('Background removal library not available');
+        let input = src;
+        if (typeof src === 'string' && src.startsWith('data:')) input = await (await fetch(src)).blob();
+        const job = fn(input, { output: { format: 'image/png' } });
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('Background removal timed out')), 120000));
+        return Promise.race([job, timeout]);
+    };
+
+    // ---------------------------------------------------------------- 2) Designations + staff directory
+    const DESIGNATIONS = ['Teacher', 'Principal', 'Vice Principal', 'Head of Department', 'Coordinator', 'Supervisor', 'Counselor', 'Librarian', 'Admin Staff'];
+    const OTHER = '__other__';
+
+    function fillDesignationSelect(sel, current) {
+        if (!sel) return;
+        const list = DESIGNATIONS.slice();
+        if (current && !list.includes(current)) list.push(current);
+        sel.innerHTML = list.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('') + `<option value="${OTHER}">Other (type manually)…</option>`;
+        sel.value = current || 'Teacher';
+    }
+
+    function readDesignation(sel, custom) {
+        if (!sel) return 'Teacher';
+        if (sel.value === OTHER) return (custom && custom.value.trim()) || 'Teacher';
+        return sel.value || 'Teacher';
+    }
+
+    function bindOtherToggle(sel, custom) {
+        if (!sel || !custom || sel._bound) return;
+        sel._bound = true;
+        sel.addEventListener('change', () => { custom.style.display = sel.value === OTHER ? 'block' : 'none'; if (sel.value === OTHER) custom.focus(); });
+    }
+    window.getProvisionDesignation = () => readDesignation(document.getElementById('admin-designation'), document.getElementById('admin-designation-custom'));
+    window.resetProvisionDesignation = () => {
+        fillDesignationSelect(document.getElementById('admin-designation'), 'Teacher');
+        const c = document.getElementById('admin-designation-custom'); if (c) { c.value = ''; c.style.display = 'none'; }
+    };
+
+    let staffCache = {};
+    let staffListenerOn = false;
+
+    function renderStaffTable() {
+        const list = document.getElementById('admin-staff-list');
+        if (!list) return;
+        const term = (document.getElementById('staff-search')?.value || '').toLowerCase().trim();
+        const filt = document.getElementById('staff-filter-designation')?.value || '';
+
+        // keep the role filter in sync with the data
+        const fsel = document.getElementById('staff-filter-designation');
+        if (fsel) {
+            const all = Array.from(new Set(Object.values(staffCache).map(u => (u && u.designation) || 'Teacher'))).sort();
+            const sig = all.join('|');
+            if (fsel._sig !== sig) {
+                fsel._sig = sig;
+                fsel.innerHTML = '<option value="">All roles</option>' + all.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
+                fsel.value = all.includes(filt) ? filt : '';
+            }
+        }
+
+        const rows = Object.entries(staffCache)
+            .filter(([, u]) => u)
+            .map(([id, u]) => ({ id, u, designation: u.designation || 'Teacher' }))
+            .filter(({ id, u, designation }) => {
+                if (filt && designation !== filt) return false;
+                if (!term) return true;
+                return [id, u.adecPassNumber, u.name, designation, u.role].join(' ').toLowerCase().includes(term);
+            })
+            .sort((a, b) => String(a.u.name || a.id).localeCompare(String(b.u.name || b.id)));
+
+        const total = Object.keys(staffCache).length;
+        const cnt = document.getElementById('staff-count');
+        if (cnt) cnt.textContent = `Showing ${rows.length} of ${total} staff`;
+
+        if (!rows.length) {
+            list.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:26px;opacity:.8;">${total ? 'No staff match your search.' : 'No staff registered yet.'}</td></tr>`;
+            return;
+        }
+
+        list.innerHTML = '';
+        rows.forEach(({ id, u, designation }) => {
+            const tr = document.createElement('tr');
+            const accessBadge = String(u.role || '').toUpperCase() === 'ADMIN' ? ' <span class="badge bg-warning text-dark">ADMIN</span>' : '';
+            tr.innerHTML = `<td><strong>${esc(u.adecPassNumber || id)}</strong></td>
+                <td>${esc(u.name || 'N/A')}</td>
+                <td><span class="badge bg-info">${esc(designation)}</span>${accessBadge}</td>
+                <td><code>••••</code></td>
+                <td><div class="staff-actions"><button type="button" class="edit-staff-btn">✏️ Edit</button><button type="button" class="remove-item-btn">Delete</button></div></td>`;
+            tr.querySelector('.edit-staff-btn').onclick = () => openStaffEditor(id, u);
+            tr.querySelector('.remove-item-btn').onclick = async () => {
+                if (!confirm(`Delete ${u.name || id}?`)) return;
+                try { await remove(ref(db, `users/${id}`)); showToast('Staff deleted'); }
+                catch (err) { showToast('Delete failed: ' + err.message, 'error'); }
+            };
+            list.appendChild(tr);
+        });
+    }
+
+    // used by fetchStaffList() below (the original function name is still called by the existing click handlers)
+    window.__v230FetchStaff = function() {
+        if (staffListenerOn) { renderStaffTable(); return; }
+        staffListenerOn = true;
+        addListener(ref(db, 'users'), (snap) => { staffCache = snap.val() || {}; renderStaffTable(); });
+    };
+
+    function openStaffEditor(id, u) {
+        let el = document.getElementById('staffEditModal');
+        if (el) el.remove();
+        el = document.createElement('div');
+        el.className = 'modal fade';
+        el.id = 'staffEditModal';
+        el.tabIndex = -1;
+        el.innerHTML = `
+        <div class="modal-dialog modal-dialog-centered"><div class="modal-content nc-modal-content">
+            <div class="modal-header"><h5 class="modal-title">✏️ Edit Staff</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body">
+                <div class="mb-3"><label class="form-label fw-bold">ADEK Pass No</label><input class="form-control" value="${esc(u.adecPassNumber || id)}" disabled></div>
+                <div class="mb-3"><label class="form-label fw-bold">Full Name</label><input id="se-name" class="form-control" value="${esc(u.name || '')}"></div>
+                <div class="mb-3"><label class="form-label fw-bold">Role / Designation</label>
+                    <select id="se-des" class="form-select"></select>
+                    <input id="se-des-custom" class="form-control mt-2" placeholder="Type the designation" style="display:none">
+                </div>
+                <div class="mb-1"><label class="form-label fw-bold">New Password <small class="text-muted">(leave empty to keep the current one)</small></label>
+                    <input id="se-pass" type="text" class="form-control" placeholder="••••" autocomplete="off"></div>
+                <div id="se-msg" class="small text-danger mt-2"></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button id="se-save" class="btn btn-primary">Save changes</button></div>
+        </div></div>`;
+        document.body.appendChild(el);
+        const sel = el.querySelector('#se-des'), cust = el.querySelector('#se-des-custom');
+        fillDesignationSelect(sel, u.designation || 'Teacher');
+        bindOtherToggle(sel, cust);
+        const modal = new bootstrap.Modal(el);
+        el.addEventListener('hidden.bs.modal', () => el.remove());
+        el.querySelector('#se-save').onclick = async () => {
+            const name = el.querySelector('#se-name').value.trim();
+            const pass = el.querySelector('#se-pass').value.trim();
+            const msg = el.querySelector('#se-msg');
+            if (!name) { msg.textContent = 'Name cannot be empty.'; return; }
+            if (pass && pass.length < 4) { msg.textContent = 'Password must be at least 4 characters.'; return; }
+            const upd = { name, designation: readDesignation(sel, cust), updatedAt: new Date().toISOString() };
+            if (pass) upd.password = pass;
+            const btn = el.querySelector('#se-save'); btn.disabled = true;
+            try {
+                await update(ref(db, `users/${id}`), upd);
+                showToast('Staff updated');
+                modal.hide();
+            } catch (err) { msg.textContent = 'Could not save: ' + err.message; btn.disabled = false; }
+        };
+        modal.show();
+    }
+
+    // ---------------------------------------------------------------- 3) Designation in dashboards
+    async function applyDesignation() {
+        try {
+            const uid = myUid();
+            if (!uid) return;
+            const snap = await get(ref(db, `users/${uid}`));
+            const d = snap.exists() ? snap.val().designation : null;
+            if (!d) return;
+            currentUser.designation = d;
+            try { localStorage.setItem('currentUser', JSON.stringify(currentUser)); } catch (e) { }
+            const role = String(currentUser.role || '').toUpperCase();
+            if (role === 'TEACHER') {
+                const idEl = document.getElementById('teacher-display-id');
+                if (idEl) idEl.innerText = `${d} · ID: ${uid}`;
+                const dId = document.getElementById('drawer-display-id');
+                if (dId) dId.innerText = `${d} · ${uid}`;
+            } else {
+                const r = document.getElementById('admin-header-role'); if (r) r.textContent = d;
+                const dr = document.getElementById('admin-drawer-role'); if (dr) dr.textContent = d;
+            }
+        } catch (e) { console.warn('designation not applied', e); }
+    }
+    window.applyDesignation = applyDesignation;
+
+    // ---------------------------------------------------------------- 4) Announcements
+    const TYPE_META = {
+        info: { icon: 'ℹ️', label: 'Information', color: '#2563eb' },
+        alert: { icon: '⚠️', label: 'Alert', color: '#f59e0b' },
+        restriction: { icon: '⛔', label: 'Restriction', color: '#dc2626' }
+    };
+    let annListenerOn = false;
+
+    function renderAnnouncementList(data) {
+        const box = document.getElementById('announce-list');
+        if (!box) return;
+        const rows = Object.entries(data || {}).sort((a, b) => String(b[1].createdAt || '').localeCompare(String(a[1].createdAt || '')));
+        if (!rows.length) { box.innerHTML = '<div class="dh-empty">No announcements yet.</div>'; return; }
+        const audLbl = { all: 'Everyone', teachers: 'Teachers / Staff', admins: 'Admins' };
+        box.innerHTML = rows.map(([id, a]) => {
+            const m = TYPE_META[a.type] || TYPE_META.info;
+            const expired = a.expiresAt && new Date(a.expiresAt) < new Date();
+            const live = a.active !== false && !expired;
+            return `<article class="ann-card" style="border-left-color:${m.color}">
+                <div class="ann-card-top"><b>${m.icon} ${esc(a.title)}</b>
+                    <span class="ann-pill ${live ? 'live' : 'off'}">${expired ? 'Expired' : (live ? 'Live' : 'Paused')}</span></div>
+                <div class="ann-card-msg">${esc(a.message)}</div>
+                <div class="ann-card-meta">${m.label} · To: ${esc(audLbl[a.audience] || 'Everyone')} · ${a.repeat === 'always' ? 'Every app open' : 'Once per person'}${a.expiresAt ? ' · Expires ' + esc(new Date(a.expiresAt).toLocaleDateString()) : ''} · ${esc(a.createdAt ? new Date(a.createdAt).toLocaleString() : '')}</div>
+                <div class="ann-card-actions">
+                    <button type="button" class="hist-act pdf" data-ann="toggle" data-id="${esc(id)}" data-active="${a.active !== false}">${a.active !== false ? '⏸ Pause' : '▶ Activate'}</button>
+                    <button type="button" class="hist-act" style="background:#dc2626" data-ann="delete" data-id="${esc(id)}">🗑 Delete</button>
+                </div></article>`;
+        }).join('');
+    }
+
+    function startAnnouncementAdmin() {
+        if (annListenerOn) return;
+        annListenerOn = true;
+        addListener(ref(db, 'announcements'), (snap) => renderAnnouncementList(snap.val() || {}));
+    }
+
+    async function publishAnnouncement(e) {
+        e.preventDefault();
+        const msgEl = document.getElementById('announce-message');
+        const title = document.getElementById('ann-title').value.trim();
+        const message = document.getElementById('ann-message').value.trim();
+        if (!title || !message) return;
+        const exp = document.getElementById('ann-expires').value;
+        const payload = {
+            title, message,
+            type: document.getElementById('ann-type').value,
+            audience: document.getElementById('ann-audience').value,
+            repeat: document.getElementById('ann-repeat').value,
+            expiresAt: exp ? new Date(exp + 'T23:59:59').toISOString() : '',
+            active: true,
+            createdAt: new Date().toISOString(),
+            createdBy: (currentUser && (currentUser.name || currentUser.adecPassNumber)) || 'Admin'
+        };
+        const btn = e.target.querySelector('button[type="submit"]'); if (btn) btn.disabled = true;
+        try {
+            await push(ref(db, 'announcements'), payload);
+            e.target.reset();
+            showToast('Announcement published!');
+            if (msgEl) { msgEl.textContent = '✅ Published. Staff will see it when they open the app.'; msgEl.className = 'message success'; }
+        } catch (err) {
+            showToast('Could not publish: ' + err.message, 'error');
+            if (msgEl) { msgEl.textContent = 'Error: ' + err.message + ' (check Realtime Database rules for "announcements")'; msgEl.className = 'message error'; }
+        } finally { if (btn) btn.disabled = false; }
+    }
+
+    document.addEventListener('click', async (ev) => {
+        const b = ev.target.closest && ev.target.closest('[data-ann]');
+        if (!b) return;
+        const id = b.dataset.id;
+        try {
+            if (b.dataset.ann === 'toggle') await update(ref(db, `announcements/${id}`), { active: b.dataset.active !== 'true' });
+            else if (b.dataset.ann === 'delete' && confirm('Delete this announcement?')) await remove(ref(db, `announcements/${id}`));
+        } catch (err) { showToast('Failed: ' + err.message, 'error'); }
+    });
+
+    function showAnnouncementPopup(a, done) {
+        const m = TYPE_META[a.type] || TYPE_META.info;
+        const ov = document.createElement('div');
+        ov.className = 'ann-ov';
+        ov.innerHTML = `<div class="ann-box" role="dialog" aria-modal="true">
+            <div class="ann-head" style="background:${m.color}"><span class="ann-ico">${m.icon}</span><div><small>${m.label} from Admin</small><b>${esc(a.title)}</b></div></div>
+            <div class="ann-body">${esc(a.message)}</div>
+            <div class="ann-foot"><button type="button" class="ann-ok" style="background:${m.color}">I understand</button></div></div>`;
+        document.body.appendChild(ov);
+        requestAnimationFrame(() => ov.classList.add('show'));
+        try { if (navigator.vibrate) navigator.vibrate([150, 80, 150]); } catch (e) { }
+        ov.querySelector('.ann-ok').onclick = () => { ov.classList.remove('show'); setTimeout(() => { ov.remove(); done(); }, 220); };
+    }
+
+    let annChecking = false;
+    window.checkAnnouncements = async function() {
+        if (annChecking || !currentUser) return;
+        annChecking = true;
+        try {
+            const uid = safeKey(myUid());
+            const admin = isAdminRole(currentUser.role);
+            const snap = await get(ref(db, 'announcements'));
+            const now = new Date();
+            const queue = Object.entries(snap.val() || {})
+                .map(([id, a]) => ({ id, ...a }))
+                .filter(a => a.active !== false)
+                .filter(a => !a.expiresAt || new Date(a.expiresAt) >= now)
+                .filter(a => a.audience === 'all' || !a.audience || (a.audience === 'admins' && admin) || (a.audience === 'teachers' && !admin))
+                .filter(a => a.repeat === 'always'
+                    ? !sessionStorage.getItem(`ann_sess_${uid}_${a.id}`)
+                    : !localStorage.getItem(`ann_seen_${uid}_${a.id}`))
+                .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+
+            const next = () => {
+                const a = queue.shift();
+                if (!a) { annChecking = false; return; }
+                if (a.repeat === 'always') sessionStorage.setItem(`ann_sess_${uid}_${a.id}`, '1');
+                else localStorage.setItem(`ann_seen_${uid}_${a.id}`, '1');
+                try { pushInAppNotification({ key: `ann_${a.id}`, title: `📢 ${a.title}`, body: a.message, popup: false, type: 'system' }); } catch (e) { }
+                showAnnouncementPopup(a, next);
+            };
+            if (queue.length) next(); else annChecking = false;
+        } catch (e) {
+            annChecking = false;
+            console.warn('Announcements not loaded:', e);
+        }
+    };
+
+    // ---------------------------------------------------------------- 5) Saved signature + verification
+    window.getSavedSignature = async function(uid) {
+        try {
+            const s = await get(ref(db, `user_signatures/${safeKey(uid)}`));
+            return s.exists() ? (s.val().dataUrl || null) : null;
+        } catch (e) { console.warn('saved signature unavailable', e); return null; }
+    };
+
+    window.saveUserSignature = async function(uid, dataUrl) {
+        try {
+            // keep the stored copy small (max 600px wide), transparent PNG
+            const small = await new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const scale = Math.min(1, 600 / img.width);
+                    const c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(img.width * scale)); c.height = Math.max(1, Math.round(img.height * scale));
+                    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                    resolve(c.toDataURL('image/png'));
+                };
+                img.onerror = () => resolve(dataUrl);
+                img.src = dataUrl;
+            });
+            await set(ref(db, `user_signatures/${safeKey(uid)}`), { dataUrl: small, updatedAt: new Date().toISOString() });
+        } catch (e) { console.warn('Could not save signature for next time:', e); }
+    };
+
+    async function verifyWithBiometric(uid) {
+        const credIdStr = localStorage.getItem('biometric_cred_id');
+        const enrolledFor = String(localStorage.getItem('biometric_adec') || '').toUpperCase();
+        if (!window.isBiometricEnrolled() || localStorage.getItem('biometricEnabled') !== 'true' || !credIdStr || enrolledFor !== String(uid).toUpperCase()) return null; // not available
+        try {
+            const credId = new Uint8Array(atob(credIdStr).split('').map(c => c.charCodeAt(0)));
+            const a = await navigator.credentials.get({ publicKey: {
+                challenge: window.crypto.getRandomValues(new Uint8Array(32)),
+                allowCredentials: [{ id: credId, type: 'public-key' }],
+                userVerification: 'required', timeout: 60000 } });
+            return !!a;
+        } catch (e) { return false; }
+    }
+
+    window.confirmSavedSignatureUse = function(uid, savedDataUrl, { onUse, onResign }) {
+        const ov = document.createElement('div');
+        ov.className = 'ann-ov sigv';
+        ov.innerHTML = `<div class="ann-box" role="dialog" aria-modal="true">
+            <div class="ann-head" style="background:#0f766e"><span class="ann-ico">🔐</span><div><small>Verification required</small><b>Use your saved signature?</b></div></div>
+            <div class="ann-body">
+                <div class="sigv-prev"><img src="${savedDataUrl}" alt="Saved signature"></div>
+                <p class="sigv-note">Verify it is you and your saved signature will be attached to this request automatically.</p>
+                <div class="sigv-pass" style="display:none"><input type="password" id="sigv-pass" placeholder="Enter your account password" autocomplete="current-password"></div>
+                <div class="sigv-err" id="sigv-err"></div>
+            </div>
+            <div class="ann-foot sigv-foot">
+                <button type="button" class="ann-ok" id="sigv-go" style="background:#0f766e">🔐 Verify &amp; Submit</button>
+                <button type="button" class="sigv-sec" id="sigv-re">✍ Sign again</button>
+                <button type="button" class="sigv-sec" id="sigv-x">Cancel</button>
+            </div></div>`;
+        document.body.appendChild(ov);
+        requestAnimationFrame(() => ov.classList.add('show'));
+        const close = () => { ov.classList.remove('show'); setTimeout(() => ov.remove(), 200); };
+        const err = ov.querySelector('#sigv-err');
+        const passBox = ov.querySelector('.sigv-pass');
+        let passwordMode = false;
+
+        const finish = () => { close(); onUse(); };
+        const checkPassword = async () => {
+            const typed = ov.querySelector('#sigv-pass').value;
+            if (!typed) { err.textContent = 'Please enter your password.'; return; }
+            const s = await get(ref(db, `users/${uid}`));
+            const real = s.exists() ? String(s.val().password || s.val().pass || '').trim() : '';
+            if (real && real === typed.trim()) finish(); else err.textContent = 'Incorrect password.';
+        };
+        const showPasswordMode = (why) => {
+            passwordMode = true; passBox.style.display = 'block';
+            err.textContent = why || '';
+            ov.querySelector('#sigv-pass').focus();
+        };
+
+        ov.querySelector('#sigv-go').onclick = async () => {
+            err.textContent = '';
+            if (passwordMode) return checkPassword();
+            const bio = await verifyWithBiometric(uid);
+            if (bio === true) return finish();
+            if (bio === false) return showPasswordMode('Biometric verification failed or was cancelled. Enter your password instead.');
+            showPasswordMode('Biometric login is not enabled on this device. Please confirm with your password.');
+        };
+        ov.querySelector('#sigv-re').onclick = () => { close(); onResign(); };
+        ov.querySelector('#sigv-x').onclick = close;
+    };
+
+    // ---------------------------------------------------------------- wiring
+    function wire() {
+        // designation selects
+        const sel = document.getElementById('admin-designation'), cust = document.getElementById('admin-designation-custom');
+        fillDesignationSelect(sel, 'Teacher'); bindOtherToggle(sel, cust);
+
+        document.getElementById('staff-search')?.addEventListener('input', renderStaffTable);
+        document.getElementById('staff-filter-designation')?.addEventListener('change', renderStaffTable);
+
+        // 3rd sub tab
+        const bA = document.getElementById('btn-show-announce');
+        const vA = document.getElementById('staff-announce-view');
+        if (bA && vA) {
+            bA.addEventListener('click', () => {
+                ['staff-provision-view', 'staff-list-view'].forEach(id => { const e = document.getElementById(id); if (e) e.style.display = 'none'; });
+                vA.style.display = 'block';
+                ['btn-show-provision', 'btn-show-directory'].forEach(id => document.getElementById(id)?.classList.remove('active'));
+                bA.classList.add('active');
+                startAnnouncementAdmin();
+            });
+            ['btn-show-provision', 'btn-show-directory'].forEach(id => {
+                document.getElementById(id)?.addEventListener('click', () => { vA.style.display = 'none'; bA.classList.remove('active'); });
+            });
+        }
+        document.getElementById('announce-form')?.addEventListener('submit', publishAnnouncement);
+
+        // run once the dashboard is rendered (also when a saved session is restored)
+        const origRender = window.renderDashboardForRole;
+        if (typeof origRender === 'function' && !origRender.__v230) {
+            const wrapped = function() {
+                const r = origRender.apply(this, arguments);
+                setTimeout(applyDesignation, 700);
+                setTimeout(() => window.checkAnnouncements(), 1500);
+                return r;
+            };
+            wrapped.__v230 = true;
+            window.renderDashboardForRole = wrapped;
+        }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire); else wire();
 })();

@@ -1,7 +1,7 @@
 /* Stationery Tracker - single Service Worker (offline cache + background push).
    IMPORTANT: only ONE service worker may control this scope. The old setup registered
    both sw.js and firebase-messaging-sw.js on the same scope, so they replaced each other. */
-const CACHE_NAME = 'stationery-app-v2.1.1';
+const CACHE_NAME = 'stationery-app-v2.3.2';
 
 try {
   importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
@@ -57,6 +57,7 @@ const ASSETS = [
   'login-waterdrop.css',
   'app.js',
   'school.png',
+  'school-logo.png',
   'manifest.json',
   'https://unpkg.com/html5-qrcode',
   'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',
