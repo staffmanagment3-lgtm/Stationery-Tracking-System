@@ -1,42 +1,62 @@
-// REQUIRED - photos + signatures load / reload / receipt PDF all use this.
-// Google Drive blocks direct image links (403 / CORS). This block lets the app fetch the picture
-// THROUGH your Apps Script instead (works even when the file is not public).
+// =====================================================================================
+//  GOOGLE APPS SCRIPT  -  add "getImage" so photos + signatures load in the app
+// =====================================================================================
+//  Console symptom without this:  "Drive getImage failed: ... reading 'split'"
+//  (your OLD script answered the request with its photo-UPLOAD code, which has no "image").
 //
-// !!! IMPORTANT: your Apps Script project must contain exactly ONE  function doPost(e)  !!!
-// Do NOT paste this whole function as a second doPost (the last one silently wins and your photo
-// UPLOAD stops working). Copy ONLY the part between "getImage block" and "end getImage block"
-// and paste it INSIDE your existing doPost(e), at the very top, right after the line that parses
-// the request (var data = ... JSON.parse(e.postData.contents) ...). If your code names that variable
-// something else (e.g. body, payload, req), use that name instead of "data" below.
+//  1. Open your Apps Script project (the one whose URL is saved in the app: Admin Settings -> Drive Connector).
+//  2. Find your existing   function doPost(e) {   (there must be only ONE doPost in the project).
+//  3. Paste the block between "BEGIN getImage" and "END getImage" on the VERY FIRST lines INSIDE doPost,
+//     right after   function doPost(e) {   and before your existing code.
+//     The names used here (__req, __blob, __dataUrl) are unique, so they cannot clash with your own variables.
+//  4. Click Save (disk icon).
+//  5. Deploy -> Manage deployments -> pencil icon -> Version: "New version" -> Deploy.
+//     (Saving alone is NOT enough. Keep the SAME deployment so the URL does not change.)
+//  6. In the app press Ctrl+Shift+R.
 //
-// THEN: Deploy -> Manage deployments -> pencil icon -> Version: "New version" -> Deploy.
-// (Same deployment, so the URL does not change. If you only press Save, the app keeps using the OLD version.)
+//  Your doPost should look like this:
 //
-// QUICK TEST (browser console while the app is open, replace FILE_ID with any photo's Drive id):
-//   fetch(localStorage.getItem('driveScriptUrl'),{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-//     body:JSON.stringify({action:'getImage',fileId:'FILE_ID'})}).then(r=>r.text()).then(t=>console.log(t.slice(0,200)))
-//   -> {"status":"success","data":"data:image/..."}  = working
-//   -> HTML text / "<!DOCTYPE"                       = new version NOT deployed yet
-//   -> {"status":"error","message":"..."}           = script runs, but cannot open that file (read the message)
+//     function doPost(e) {
+//       // ---------- BEGIN getImage ----------
+//       var __req = null;
+//       try { __req = JSON.parse(e.postData.contents); } catch (__x) {}
+//       if (__req && __req.action === 'getImage') {
+//         try {
+//           var __blob = DriveApp.getFileById(__req.fileId).getBlob();
+//           var __dataUrl = 'data:' + __blob.getContentType() + ';base64,' + Utilities.base64Encode(__blob.getBytes());
+//           return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: __dataUrl }))
+//             .setMimeType(ContentService.MimeType.JSON);
+//         } catch (__err) {
+//           return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'getImage: ' + String(__err) }))
+//             .setMimeType(ContentService.MimeType.JSON);
+//         }
+//       }
+//       // ---------- END getImage ----------
+//
+//       ... your existing doPost code continues here, unchanged ...
+//     }
+//
+//  QUICK TEST (browser console while the app is open; replace FILE_ID with the id from any photo URL):
+//     fetch(localStorage.getItem('driveScriptUrl'),{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+//       body:JSON.stringify({action:'getImage',fileId:'FILE_ID'})}).then(r=>r.text()).then(t=>console.log(t.slice(0,150)))
+//     -> {"status":"success","data":"data:image/...   = WORKING
+//     -> message contains "split"                       = block not added / new version not deployed yet
+//     -> "getImage: Exception: ..."                     = script works, but cannot open that file (read the message)
+//
+//  Actual code to paste (copy only these lines):
 
-function doPost(e) {
-  var data = {};
-  try { data = JSON.parse(e.postData.contents); } catch (err) {}
-
-  // ---- getImage block (paste this) ----
-  if (data.action === 'getImage') {
+  // ---------- BEGIN getImage ----------
+  var __req = null;
+  try { __req = JSON.parse(e.postData.contents); } catch (__x) {}
+  if (__req && __req.action === 'getImage') {
     try {
-      var blob = DriveApp.getFileById(data.fileId).getBlob();
-      var dataUrl = 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes());
-      return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: dataUrl }))
+      var __blob = DriveApp.getFileById(__req.fileId).getBlob();
+      var __dataUrl = 'data:' + __blob.getContentType() + ';base64,' + Utilities.base64Encode(__blob.getBytes());
+      return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: __dataUrl }))
         .setMimeType(ContentService.MimeType.JSON);
-    } catch (err) {
-      return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: String(err) }))
+    } catch (__err) {
+      return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'getImage: ' + String(__err) }))
         .setMimeType(ContentService.MimeType.JSON);
     }
   }
-  // ---- end getImage block ----
-
-  // ---- 'delete' block from drive-script-delete-snippet.gs goes here ----
-  // ---- your existing upload code continues here (unchanged) ----
-}
+  // ---------- END getImage ----------

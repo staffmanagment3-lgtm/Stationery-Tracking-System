@@ -65,3 +65,14 @@ Google Drive now blocks direct image links (403 / CORS in the browser console). 
 3. **Photos**: the app now stops waiting after 30 seconds and shows the REAL reason in a red message (script not deployed / file cannot be opened / no internet). Follow `drive-script-getimage-snippet.gs` (paste the block INSIDE the one existing `doPost`, then Deploy -> New version).
 4. **Stock showing 70 instead of 80**: the double-deduct bug is already fixed in the code (v2.3.0). Quantity that was already saved wrong stays wrong until corrected once: Admin -> Master Inventory -> product -> batch -> **Edit** -> type 80. Totals everywhere update automatically.
 
+
+---
+## v2.3.3 - Photos still not loading (Apps Script is the OLD version)
+
+Console showed `Drive getImage failed: ... reading 'split'`. That text comes from INSIDE Google Apps Script: it means your script answered
+the photo request with its old photo-UPLOAD code, so the `getImage` block is not live yet.
+1. Open `drive-script-getimage-snippet.gs` and follow it (paste the block at the top of the ONE existing `doPost`, Save, then **Deploy -> Manage deployments -> New version**).
+2. Upload `app.js, index.html, sw.js` (version 2.3.3) and press Ctrl+Shift+R.
+3. `manifest.json`, `school.png` and `school-logo.png` must be in the SAME folder as `index.html` (the console shows 404 for them).
+4. Announcements: Firebase Console -> Realtime Database -> Rules must show **Published** (no "unpublished changes") and contain the `announcements` rule. Check that the Data tab URL is `stationery-control-system-default-rtdb`.
+

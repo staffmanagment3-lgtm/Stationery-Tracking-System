@@ -5,7 +5,7 @@ import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase
 import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "2.3.2";
+const APP_VERSION = "2.3.3";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -912,7 +912,13 @@ window.driveImageViaScript = function(rawUrl, maxSide = 700) {
                         return data;
                     }
                     if (!j) { warnOnce('Apps Script did not return JSON. Deploy a NEW VERSION of the script that contains the getImage block (see drive-script-getimage-snippet.gs).'); return null; }
-                    warnOnce(j.message ? String(j.message).slice(0, 140) : 'Apps Script returned an error (is the getImage block added?)');
+                    const em = j.message ? String(j.message) : '';
+                    if (!em || /split|undefined|is not defined|Cannot read|not a function/i.test(em)) {
+                        // The old upload code answered (it expects "image"): the getImage block is not live on Google yet.
+                        warnOnce('your Google Apps Script is still the OLD version (it does not know "getImage"). Add the getImage block and Deploy > Manage deployments > New version. [' + em.slice(0, 80) + ']');
+                    } else {
+                        warnOnce(em.slice(0, 140));
+                    }
                     return null;
                 } catch (e) {
                     if (attempt === 1) {
