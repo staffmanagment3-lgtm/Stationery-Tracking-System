@@ -20,7 +20,7 @@ const admin = require('firebase-admin');
 admin.initializeApp();
 
 // Same App ID as in app.js (OneSignal dashboard -> Settings -> Keys & IDs)
-const ONESIGNAL_APP_ID = 'PASTE_YOUR_ONESIGNAL_APP_ID_HERE';
+const ONESIGNAL_APP_ID = '87270c54-9e9d-46de-8070-a0c4b66c7478';
 // REST API Key is a SECRET: set with  firebase functions:secrets:set ONESIGNAL_API_KEY
 const ONESIGNAL_API_KEY = defineSecret('ONESIGNAL_API_KEY');
 

@@ -483,7 +483,7 @@ try { getAnalytics(app); } catch (e) { console.warn("Analytics blocked"); }
 
 // ==================== ONESIGNAL PUSH NOTIFICATIONS (replaces FCM) ====================
 // 1) OneSignal dashboard se "App ID" copy karke yahan paste karein (README-ONESIGNAL-SETUP.md dekhein).
-const ONESIGNAL_APP_ID = "PASTE_YOUR_ONESIGNAL_APP_ID_HERE";
+const ONESIGNAL_APP_ID = "87270c54-9e9d-46de-8070-a0c4b66c7478";
 const ONESIGNAL_READY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ONESIGNAL_APP_ID);
 
 window.OneSignalDeferred = window.OneSignalDeferred || [];
