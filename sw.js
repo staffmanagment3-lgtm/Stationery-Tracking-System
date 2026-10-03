@@ -1,55 +1,7 @@
-/* Stationery Tracker - single Service Worker (offline cache + background push).
-   IMPORTANT: only ONE service worker may control this scope. The old setup registered
-   both sw.js and firebase-messaging-sw.js on the same scope, so they replaced each other. */
-const CACHE_NAME = 'stationery-app-v2.4.2';
+/* Stationery Tracker - offline cache. Loaded by OneSignalSDKWorker.js (the ONE worker for this scope). */
+const CACHE_NAME = 'stationery-app-v2.5.0';
 
-try {
-  importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
-  importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
-
-  firebase.initializeApp({
-    apiKey: "AIzaSyC34JvIlqAC0Rqb9wBIed3kNdvrEpy16P8",
-    authDomain: "stationery-control-system.firebaseapp.com",
-    databaseURL: "https://stationery-control-system-default-rtdb.firebaseio.com",
-    projectId: "stationery-control-system",
-    storageBucket: "stationery-control-system.firebasestorage.app",
-    messagingSenderId: "342613102896",
-    appId: "1:342613102896:web:5ddd185f3d2085661278f5"
-  });
-
-  const messaging = firebase.messaging();
-
-  // Server sends DATA-ONLY messages, so we build the notification here (shown even if app is closed).
-  messaging.onBackgroundMessage((payload) => {
-    if (payload.notification) return; // browser already displays notification-type messages
-    const d = payload.data || {};
-    return self.registration.showNotification(d.title || 'Stationery Tracker', {
-      body: d.body || 'You have a new update.',
-      icon: 'school.png',
-      badge: 'school.png',
-      tag: d.eventKey || undefined,
-      renotify: !!d.eventKey,
-      requireInteraction: true,
-      vibrate: [200, 100, 200],
-      data: { url: d.url || './index.html', eventKey: d.eventKey || '' }
-    });
-  });
-} catch (e) {
-  console.warn('[sw] Firebase messaging not available (offline?):', e);
-}
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const target = new URL((event.notification.data && event.notification.data.url) || './index.html', self.location.origin).href;
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-      for (const client of list) {
-        if ('focus' in client) return client.focus();
-      }
-      return self.clients.openWindow(target);
-    })
-  );
-});
+/* Push notifications are handled by OneSignal (OneSignalSDKWorker.js loads the OneSignal SDK and then this file). */
 
 const ASSETS = [
   'index.html',
