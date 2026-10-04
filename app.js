@@ -2,10 +2,9 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
 import { getDatabase, ref, get, child, set, push, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
-import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
 
 // Define Current App Version
-const APP_VERSION = "2.4.1";
+const APP_VERSION = "2.5.0";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -480,11 +479,83 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const messaging = getMessaging(app);
 try { getAnalytics(app); } catch (e) { console.warn("Analytics blocked"); }
 
-// ==================== FIREBASE CLOUD MESSAGING (FCM) ====================
+// ==================== ONESIGNAL PUSH NOTIFICATIONS (replaces FCM) ====================
+// 1) OneSignal dashboard se "App ID" copy karke yahan paste karein (README-ONESIGNAL-SETUP.md dekhein).
+const ONESIGNAL_APP_ID = "87270c54-9e9d-46de-8070-a0c4b66c7478";
+const ONESIGNAL_READY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ONESIGNAL_APP_ID);
 
+window.OneSignalDeferred = window.OneSignalDeferred || [];
+let osInitPromise = null;
+
+const fcmSafeKey = (v) => String(v || 'GUEST').replace(/[.#$\[\]\/]/g, '_');
+
+// Folder where the app lives (works on GitHub Pages sub-folders too, e.g. /repo-name/)
+function osBasePath() {
+    try { return new URL('./', location.href).pathname; } catch (e) { return '/'; }
+}
+
+// One random id per device so logging out on one phone never stops pushes on another phone.
+function osDeviceId() {
+    let id = localStorage.getItem('os_device_id');
+    if (!id) {
+        id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+        localStorage.setItem('os_device_id', id);
+    }
+    return id;
+}
+
+function loadOneSignal() {
+    if (!ONESIGNAL_READY) return Promise.resolve(null);
+    if (osInitPromise) return osInitPromise;
+    osInitPromise = new Promise((resolve) => {
+        let settled = false;
+        const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+        window.OneSignalDeferred.push(async function(OneSignal) {
+            try {
+                const base = osBasePath();
+                await OneSignal.init({
+                    appId: ONESIGNAL_APP_ID,
+                    serviceWorkerPath: base + 'OneSignalSDKWorker.js',
+                    serviceWorkerParam: { scope: base },
+                    serviceWorkerOverrideForTypical: true, // GitHub Pages sub-folder: use OUR path/scope, not the site root
+                    allowLocalhostAsSecureOrigin: true
+                });
+
+                // App open (foreground): show inside the app (bell list + banner), like WhatsApp.
+                // When the app is closed/hidden, OneSignal shows the normal phone notification.
+                OneSignal.Notifications.addEventListener('foreground', (event) => {
+                    try {
+                        const n = event.notification || {};
+                        const d = n.additionalData || {};
+                        event.preventDefault();
+                        pushInAppNotification({
+                            key: d.eventKey,
+                            title: n.title || d.title || "Stationery Alert",
+                            body: n.body || d.body || "New update received"
+                        });
+                    } catch (e) { console.warn("OneSignal foreground handler:", e); }
+                });
+                OneSignal.User.PushSubscription.addEventListener('change', () => { try { window.updateFcmUIStatus(); } catch (e) { } });
+                finish(OneSignal);
+            } catch (e) {
+                console.warn("OneSignal init failed:", e);
+                finish(null);
+            }
+        });
+        const s = document.createElement('script');
+        s.src = 'https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js';
+        s.defer = true;
+        s.onerror = () => { console.warn("OneSignal SDK could not be loaded (offline?)"); finish(null); };
+        document.head.appendChild(s);
+    });
+    return osInitPromise;
+}
+loadOneSignal();
+
+// Names below (updateFcmUIStatus, enableFcmNotifications, initPushForSession ...) are kept the same
+// so index.html buttons keep working without any change.
 window.updateFcmUIStatus = function() {
     if (!('Notification' in window)) return;
 
@@ -511,37 +582,38 @@ window.updateFcmUIStatus = function() {
     });
 };
 
+// Kept for compatibility: returns the (single) service worker registration.
 window.getPushServiceWorker = async function() {
-    // ONE service worker (sw.js) handles both offline cache and push. Registering a second
-    // worker on the same scope would replace this one.
-    await navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`);
+    await navigator.serviceWorker.register('./OneSignalSDKWorker.js');
     return await navigator.serviceWorker.ready;
 };
 
-const fcmSafeKey = (v) => String(v || 'GUEST').replace(/[.#$\[\]\/]/g, '_');
-
-// Saves this device's push token under the logged-in user so the server can reach it
-// even when the app is closed.
+// Links this device to the logged-in user (OneSignal external id = user id) so the server can reach
+// every device of that user - even when the app is closed.
 window.syncFcmToken = async function() {
-    if (!('Notification' in window) || !('serviceWorker' in navigator)) return null;
-    if (Notification.permission !== 'granted' || !currentUser) return null;
+    if (!('Notification' in window) || !currentUser) return null;
+    if (Notification.permission !== 'granted') return null;
 
-    const swReg = await window.getPushServiceWorker();
-    const token = await getToken(messaging, { serviceWorkerRegistration: swReg });
-    if (!token) return null;
+    const OS = await loadOneSignal();
+    if (!OS) return null;
 
     const uid = fcmSafeKey(currentUser.adecPassNumber || currentUser.uid);
     const role = String(currentUser.role || 'TEACHER').toUpperCase();
 
-    await set(ref(db, `fcm_tokens/${uid}/${token}`), {
+    await OS.login(uid);
+    try { OS.User.addTag('role', role); } catch (e) { }
+    try { await OS.User.PushSubscription.optIn(); } catch (e) { }
+
+    const devKey = 'os_' + osDeviceId();
+    await set(ref(db, `fcm_tokens/${uid}/${devKey}`), {
         role: role,
         name: currentUser.name || uid,
         updatedAt: new Date().toISOString(),
         device: (navigator.userAgent || '').slice(0, 120)
     });
-    localStorage.setItem('fcm_token_current', token);
+    localStorage.setItem('fcm_token_current', devKey);
     localStorage.setItem('fcm_token_uid', uid);
-    return token;
+    return OS.User.PushSubscription.id || devKey;
 };
 
 window.enableFcmNotifications = async function() {
@@ -560,16 +632,28 @@ window.enableFcmNotifications = async function() {
         return;
     }
 
+    if (!ONESIGNAL_READY) {
+        showToast("Notifications are not configured yet (OneSignal App ID missing in app.js).", "error");
+        return;
+    }
+
     try {
         const btnAdmin = document.getElementById('enable-notifications-btn-admin');
         const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
         [btnAdmin, btnTeacher].forEach(b => { if (b) b.textContent = "⏳ Enabling..."; });
 
-        const permission = await Notification.requestPermission();
-        if (permission === 'granted') {
+        const OS = await Promise.race([loadOneSignal(), new Promise(r => setTimeout(() => r(null), 15000))]);
+        if (!OS) {
+            showToast("⚠️ Notification service could not load. Check internet and try again.", "error");
+            window.updateFcmUIStatus();
+            return;
+        }
+
+        await OS.Notifications.requestPermission();
+        if (Notification.permission === 'granted') {
             const token = await window.syncFcmToken();
             if (token) showToast("🎉 Push Notifications Enabled Successfully!", "success");
-            else showToast("⚠️ Could not retrieve notification token.", "error");
+            else showToast("⚠️ Could not register this device for notifications.", "error");
         } else {
             showToast("Notification permission was not granted.", "error");
         }
@@ -577,18 +661,18 @@ window.enableFcmNotifications = async function() {
         if (banner) banner.remove();
         window.updateFcmUIStatus();
     } catch (err) {
-        console.error("FCM Registration Error:", err);
+        console.error("OneSignal Registration Error:", err);
         showToast("Notification error: " + err.message, "error");
         window.updateFcmUIStatus();
     }
 };
 
-// Called after every login: refresh token silently, or gently ask for permission.
+// Called after every login: link device silently, or gently ask for permission.
 window.initPushForSession = function() {
     if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
     window.updateFcmUIStatus();
     if (Notification.permission === 'granted') {
-        window.syncFcmToken().catch(e => console.warn('FCM token sync failed:', e));
+        window.syncFcmToken().catch(e => console.warn('Push sync failed:', e));
         return;
     }
     if (Notification.permission === 'default' && !sessionStorage.getItem('push_banner_dismissed')) {
@@ -610,22 +694,6 @@ function showPushPromptBanner() {
         sessionStorage.setItem('push_banner_dismissed', '1');
         b.remove();
     };
-}
-
-// App is open (foreground): show it in-app. When app is closed/hidden, sw.js shows the system notification.
-try {
-    onMessage(messaging, (payload) => {
-        console.log("🔔 Foreground Push Message Received:", payload);
-        const d = payload.data || {};
-        const n = payload.notification || {};
-        pushInAppNotification({
-            key: d.eventKey,
-            title: d.title || n.title || "Stationery Alert",
-            body: d.body || n.body || "New update received"
-        });
-    });
-} catch (e) {
-    console.warn("FCM Foreground listener exception caught silently:", e);
 }
 
 // ==================== STATIONERY RAIN ANIMATION ====================
@@ -2953,8 +3021,11 @@ window.handleUserLogout = function(event) {
     // Stop pushes for this user on this device after logout (shared phones)
     if (token && tokenUid) {
         Promise.race([
-            remove(ref(db, `fcm_tokens/${tokenUid}/${token}`)).catch(() => {}),
-            new Promise(r => setTimeout(r, 1500))
+            (async () => {
+                try { const OS = osInitPromise ? await osInitPromise : null; if (OS) await OS.logout(); } catch (e) { }
+                await remove(ref(db, `fcm_tokens/${tokenUid}/${token}`)).catch(() => {});
+            })(),
+            new Promise(r => setTimeout(r, 2000))
         ]).finally(finish);
     } else {
         finish();
@@ -3540,7 +3611,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
+            navigator.serviceWorker.register('./OneSignalSDKWorker.js')
                 .then(reg => {
                     console.log('SW Registered successfully:', reg.scope);
                     reg.update();
