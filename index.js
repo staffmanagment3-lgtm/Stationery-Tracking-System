@@ -1,11 +1,10 @@
 /**
- * Stationery Tracker - push notifications via OneSignal (works even when the PWA is closed).
+ * Stationery Tracker - push notifications (works even when the PWA is closed).
  *
- * Triggers on Realtime Database changes and asks OneSignal to deliver the notification to every
- * device of the target user(s). Devices are registered by app.js at fcm_tokens/{userId}/os_{deviceId}
- * = { role, name, updatedAt } and linked in OneSignal with external id = userId.
+ * Triggers on Realtime Database changes and sends FCM data messages to the saved device tokens
+ * (fcm_tokens/{userId}/{token} = { role, name, updatedAt }).
  *
- * Event keys MUST match app.js so the app never shows the same alert twice:
+ * Event keys MUST match the ones used in app.js so the app never shows the same alert twice:
  *   new_<orderId>_admin        teacher submitted an order          -> admin
  *   submitted_<orderId>_teacher                                     -> teacher (confirmation)
  *   approved_<orderId>_teacher admin approved / ready for pickup   -> teacher (with pickup location)
@@ -13,69 +12,55 @@
  *   done_<orderId>_admin       handover finished                    -> admin
  */
 const { onValueCreated, onValueUpdated } = require('firebase-functions/v2/database');
-const { defineSecret } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
 admin.initializeApp();
 
-// Same App ID as in app.js (OneSignal dashboard -> Settings -> Keys & IDs)
-const ONESIGNAL_APP_ID = '87270c54-9e9d-46de-8070-a0c4b66c7478';
-// REST API Key is a SECRET: set with  firebase functions:secrets:set ONESIGNAL_API_KEY
-const ONESIGNAL_API_KEY = defineSecret('ONESIGNAL_API_KEY');
-
 const DB_OPTS = {
+  // Realtime Database in us-central1 (databaseURL without a region suffix). Change both if yours differs.
   region: 'us-central1',
   instance: 'stationery-control-system-default-rtdb',
-  secrets: [ONESIGNAL_API_KEY],
 };
 
-const ADMIN_ROLES = ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'];
 const safeKey = (v) => String(v || 'GUEST').replace(/[.#$\[\]\/]/g, '_');
 
-/** User ids (= OneSignal external ids) that have at least one registered device. */
-async function collectUserIds({ uid, adminsOnly }) {
+/** Collect tokens: pass { uid } for one user, or { role } for everyone with that role. */
+async function collectTokens({ uid, role }) {
   const snap = await admin.database().ref('fcm_tokens').get();
   const all = snap.val() || {};
-  const out = new Set();
-  Object.entries(all).forEach(([userId, devices]) => {
+  const out = [];
+  Object.entries(all).forEach(([userId, tokens]) => {
     if (uid && userId !== safeKey(uid)) return;
-    Object.entries(devices || {}).forEach(([key, meta]) => {
-      if (!key.startsWith('os_')) return; // ignore old FCM tokens
-      if (adminsOnly && !ADMIN_ROLES.includes(String((meta && meta.role) || '').toUpperCase())) return;
-      out.add(userId);
+    Object.entries(tokens || {}).forEach(([token, meta]) => {
+      if (role && String((meta && meta.role) || '').toUpperCase() !== role) return;
+      out.push({ token, userId });
     });
   });
-  return [...out];
+  return out;
 }
 
-async function send(userIds, { title, body, eventKey }) {
-  if (!userIds.length) return;
-  try {
-    const res = await fetch('https://api.onesignal.com/notifications?c=push', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        Authorization: `Key ${ONESIGNAL_API_KEY.value()}`,
-      },
-      body: JSON.stringify({
-        app_id: ONESIGNAL_APP_ID,
-        target_channel: 'push',
-        include_aliases: { external_id: userIds },
-        headings: { en: title },
-        contents: { en: body },
-        data: { eventKey, title, body },
-        collapse_id: eventKey, // same event never stacks twice
-        priority: 10,
-        ttl: 86400,
-      }),
-    });
-    const text = await res.text();
-    if (!res.ok) logger.error(`OneSignal error ${res.status} for "${title}": ${text}`);
-    else logger.info(`Sent "${title}" to ${userIds.length} user(s): ${text}`);
-  } catch (e) {
-    logger.error('OneSignal request failed', e);
-  }
+async function send(targets, { title, body, eventKey }) {
+  if (!targets.length) return;
+  const tokens = targets.map((t) => t.token);
+  const res = await admin.messaging().sendEachForMulticast({
+    tokens,
+    // DATA-ONLY on purpose: sw.js builds the notification, and the open app can dedupe by eventKey.
+    data: { title, body, eventKey, url: './index.html' },
+    webpush: { headers: { Urgency: 'high', TTL: '86400' } },
+    android: { priority: 'high' },
+  });
+
+  // Remove dead tokens
+  const cleanup = [];
+  res.responses.forEach((r, i) => {
+    const code = r.error && r.error.code;
+    if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') {
+      cleanup.push(admin.database().ref(`fcm_tokens/${targets[i].userId}/${targets[i].token}`).remove());
+    }
+  });
+  await Promise.all(cleanup);
+  logger.info(`Sent "${title}" to ${res.successCount}/${tokens.length} devices`);
 }
 
 const isDone = (s) => /done|completed/i.test(s || '');
@@ -89,12 +74,12 @@ exports.onOrderCreated = onValueCreated({ ...DB_OPTS, ref: '/orders/{orderId}' }
 
   const count = Array.isArray(order.items) ? order.items.length : Object.keys(order.items || {}).length;
   await Promise.all([
-    collectUserIds({ adminsOnly: true }).then((u) => send(u, {
+    collectTokens({ role: 'ADMIN' }).then((t) => send(t, {
       title: '🆕 New Order Received',
       body: `Order ${id} from ${order.teacherName || 'a teacher'} (${count} item${count === 1 ? '' : 's'}) is waiting for approval.`,
       eventKey: `new_${id}_admin`,
     })),
-    collectUserIds({ uid: order.teacherUid }).then((u) => send(u, {
+    collectTokens({ uid: order.teacherUid }).then((t) => send(t, {
       title: '✅ Order Submitted',
       body: `Your order ${id} has been submitted. Please wait for admin approval.`,
       eventKey: `submitted_${id}_teacher`,
@@ -111,7 +96,7 @@ exports.onOrderUpdated = onValueUpdated({ ...DB_OPTS, ref: '/orders/{orderId}' }
 
   if (isApproved(after.status) && !isApproved(before.status) && !isDone(before.status)) {
     const where = after.pickupLocation && after.pickupLocation !== 'Awaiting Admin Details' ? after.pickupLocation : 'the stationery store';
-    await collectUserIds({ uid: after.teacherUid }).then((u) => send(u, {
+    await collectTokens({ uid: after.teacherUid }).then((t) => send(t, {
       title: '📦 Your Order is Ready!',
       body: `Your items are ready. Please collect them from: ${where}.`,
       eventKey: `approved_${id}_teacher`,
@@ -120,12 +105,12 @@ exports.onOrderUpdated = onValueUpdated({ ...DB_OPTS, ref: '/orders/{orderId}' }
 
   if (isDone(after.status) && !isDone(before.status)) {
     await Promise.all([
-      collectUserIds({ uid: after.teacherUid }).then((u) => send(u, {
+      collectTokens({ uid: after.teacherUid }).then((t) => send(t, {
         title: '✅ Handover Confirmed',
         body: `Order ${id} was handed over and signed. Thank you!`,
         eventKey: `done_${id}_teacher`,
       })),
-      collectUserIds({ adminsOnly: true }).then((u) => send(u, {
+      collectTokens({ role: 'ADMIN' }).then((t) => send(t, {
         title: '✅ Handover Confirmed',
         body: `Order ${id} was handed over to ${after.teacherName || 'the teacher'} and confirmed.`,
         eventKey: `done_${id}_admin`,
