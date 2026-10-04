@@ -3,7 +3,7 @@
   "name": "Stationery Tracker System",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#0b1329",
+  "background_color": "#ffffff",
   "theme_color": "#0284c7",
   "icons": [
     { "src": "school.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
