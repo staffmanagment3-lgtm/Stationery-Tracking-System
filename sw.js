@@ -1,5 +1,5 @@
 /* Stationery Tracker - offline cache. Loaded by OneSignalSDKWorker.js (the ONE worker for this scope). */
-const CACHE_NAME = 'stationery-app-v2.6.0';
+const CACHE_NAME = 'stationery-app-v2.7.0';
 
 /* Push notifications are handled by OneSignal (OneSignalSDKWorker.js loads the OneSignal SDK and then this file). */
 

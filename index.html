@@ -75,6 +75,7 @@
 
         <!-- Admin Menu -->
         <nav id="admin-menu" class="drawer-nav" style="display: none;">
+            <button id="enable-notifications-btn-admin" class="drawer-item" onclick="window.enableFcmNotifications()">🔔 Enable Notifications</button>
             <button data-target="tab-inventory" class="drawer-item active">📦 Master Inventory</button>
             <button data-target="tab-add-item" class="drawer-item">➕ Add New Item</button>
             <button data-target="tab-audit-ledger" class="drawer-item">📑 Stock Audit Ledger</button>
@@ -89,12 +90,12 @@
                     <input class="form-check-input" type="checkbox" id="biometric-toggle-admin" onclick="window.toggleBiometricAuth(event)">
                 </div>
             </div>
-            <button id="enable-notifications-btn-admin" class="drawer-item" onclick="window.enableFcmNotifications()">🔔 Enable Notifications</button>
             <button id="logout-btn-admin" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null" class="drawer-item logout-item">🚪 Logout</button>
         </nav>
 
         <!-- Teacher Menu -->
         <nav id="teacher-menu" class="drawer-nav" style="display: none;">
+            <button id="enable-notifications-btn-teacher" class="drawer-item" onclick="window.enableFcmNotifications()">🔔 Enable Notifications</button>
             <button class="drawer-item active" onclick="window.showDashboardSection ? window.showDashboardSection('stationery-catalog-section') : null">📦 Stationery Catalog</button>
             <button id="drawer-cart-btn" class="drawer-item">🛒 My Cart</button>
             <button class="drawer-item" onclick="window.showDashboardSection ? window.showDashboardSection('order-history-section') : null">📜 My Order History</button>
@@ -104,7 +105,6 @@
                     <input class="form-check-input" type="checkbox" id="biometric-toggle-drawer" onclick="window.toggleBiometricAuth(event)">
                 </div>
             </div>
-            <button id="enable-notifications-btn-teacher" class="drawer-item" onclick="window.enableFcmNotifications()">🔔 Enable Notifications</button>
             <button id="logout-btn-teacher" onclick="window.handleUserLogout ? window.handleUserLogout(event) : null" class="drawer-item logout-item">🚪 Logout</button>
         </nav>
     </aside>
@@ -820,11 +820,11 @@
 
 <aside class="drawer" id="drawer" aria-label="Menu">
   <div class="dh"><span class="av" id="drawer-avatar-init">AA</span><div><b id="drawer-display-name">Abdulaziz Alali</b><small>Teacher · <span id="drawer-display-id">PASS203011</span></small></div></div>
+  <button class="nav2" id="enable-notifications-btn-teacher2" type="button" onclick="window.enableFcmNotifications && window.enableFcmNotifications()"><em>🔔</em><span>Enable Notifications</span></button>
   <button class="nav on" data-go="cat"><em>📚</em>Catalog</button>
   <button class="nav" data-go="cart"><em>🛒</em>Add to Cart<span class="n" id="dn">0</span></button>
   <button class="nav" data-go="hist"><em>🧾</em>Order History</button>
   <div class="nav2" role="group" aria-label="Biometric login"><em>🔐</em><span>Fingerprint / Face / Phone Lock</span><label class="sw"><input type="checkbox" id="biometric-toggle-teacher" onclick="window.toggleBiometricAuth(event)" aria-label="Enable biometric login"><i></i></label></div>
-  <button class="nav2" type="button" onclick="window.enableFcmNotifications && window.enableFcmNotifications()"><em>🔔</em><span>Enable Notifications</span></button>
   <button class="dlogout" onclick="window.handleUserLogout(event)">Logout</button>
 </aside>
 
@@ -1372,7 +1372,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
-<script type="module" src="app.js?v=2.6.0"></script>
+<script type="module" src="app.js?v=2.7.0"></script>
 <script type="module" src="po-module.js?v=1.2.1"></script>
 <script>
 /* v2.3.1 stale-file guard: shows a red banner if index.html is new but app.js is an OLD copy */

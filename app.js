@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "2.6.0";
+const APP_VERSION = "2.7.0";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -506,6 +506,29 @@ function osDeviceId() {
     return id;
 }
 
+// ---- Free server-side sender: your existing Google Apps Script sends the push through OneSignal ----
+// (no Firebase Blaze plan / Cloud Functions needed). Script URL = same one saved for Google Drive.
+async function relayPush(payload) {
+    const url = window.GOOGLE_SCRIPT_URL || localStorage.getItem('driveScriptUrl');
+    if (!url || !ONESIGNAL_READY) return null;
+    try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 15000);
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), signal: ctrl.signal });
+        clearTimeout(t);
+        const j = await r.json();
+        if (j && j.status === 'error') console.warn('Push relay error:', j.message || j);
+        return j;
+    } catch (e) { console.warn('Push relay failed:', e); return null; }
+}
+function relayPushEvent({ eventKey, title, body, toUser, toAdmins }) {
+    const payload = { action: 'pushNotify', eventKey, title, body, url: location.origin + location.pathname.replace(/[^\/]*$/, '') };
+    if (toAdmins) payload.admins = true;
+    else if (toUser) payload.externalId = fcmSafeKey(toUser);
+    else return;
+    relayPush(payload);
+}
+
 function loadOneSignal() {
     if (!ONESIGNAL_READY) return Promise.resolve(null);
     if (osInitPromise) return osInitPromise;
@@ -587,16 +610,17 @@ let pushActiveUnsub = null;
 })();
 
 window.updateFcmUIStatus = function() {
-    const btns = [document.getElementById('enable-notifications-btn-admin'), document.getElementById('enable-notifications-btn-teacher')];
+    const btns = ['enable-notifications-btn-admin', 'enable-notifications-btn-teacher', 'enable-notifications-btn-teacher2'].map(id => document.getElementById(id));
     if (!pushSupported()) return;
     const on = isPushOnHere();
     const denied = Notification.permission === 'denied';
     let sub = on ? 'ON - this device receives alerts' : 'OFF';
     if (denied) sub = 'Blocked in browser settings';
     else if (!on && currentUser && localStorage.getItem(pushFlag('push_moved')) === '1') sub = 'OFF - active on another device';
+    try { if (typeof renderNotificationList === 'function' && document.querySelector('.nc-pushrow')) renderNotificationList(); } catch (e) { }
     btns.forEach(btn => {
         if (!btn) return;
-        btn.className = 'drawer-item';
+        btn.className = btn.id === 'enable-notifications-btn-teacher2' ? 'nav2' : 'drawer-item';
         btn.innerHTML = '<span class="push-row"><span>🔔 Notifications<small>' + sub + '</small></span>' +
             '<span class="push-sw' + (on ? ' on' : '') + '"><i></i></span></span>';
     });
@@ -630,6 +654,7 @@ async function claimPushDevice() {
     try { await OS.User.PushSubscription.optIn(); } catch (e) { }
     const subId = await waitForSubscriptionId(OS, 6000);
 
+    if (subId) relayPush({ action: 'pushClaim', externalId: uid, keepSubscriptionId: subId }); // server removes this user's other devices
     // Remove every other device of this user (and old FCM tokens), keep only this one.
     let replaced = false;
     try {
@@ -769,7 +794,7 @@ window.initPushForSession = async function() {
             const otherActive = existing && Object.keys(existing).some(k => k.startsWith('os_') && k !== devKey);
             if (otherActive && !(existing && existing[devKey])) {
                 // Another device of this user is active -> stay OFF here until the user switches ON.
-                localStorage.setItem(pushFlag('push_active_here'), '0');
+                await deactivatePushHere(false);
                 localStorage.setItem(pushFlag('push_moved'), '1');
                 window.updateFcmUIStatus();
                 return;
@@ -4245,7 +4270,12 @@ function buildNotificationCenterHTML() {
         });
     }
 
+    const pushOn = (typeof isPushOnHere === 'function') && isPushOnHere();
+    const pushRow = `<button type="button" class="push-row nc-pushrow" data-nc="pushtoggle" style="margin:0 0 10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(128,128,128,.25);background:transparent;color:inherit;text-align:left">
+            <span>🔔 Push notifications on this device<small>${pushOn ? 'ON - alerts arrive even when the app is closed' : 'OFF - tap to turn ON'}</small></span>
+            <span class="push-sw${pushOn ? ' on' : ''}"><i></i></span></button>`;
     return `<div class="nc-wrap">
+        ${pushRow}
         <div class="nc-summary">
             <div><b>${unreadCount}</b><span>Unread</span></div>
             <div><b>${todayCount}</b><span>Today</span></div>
@@ -4281,7 +4311,8 @@ document.addEventListener('click', (ev) => {
     const el = ev.target.closest && ev.target.closest('[data-nc]');
     if (!el) return;
     const act = el.dataset.nc;
-    if (act === 'filter') { notifFilter = el.dataset.v || 'all'; renderNotificationList(); }
+    if (act === 'pushtoggle') { Promise.resolve(window.enableFcmNotifications()).finally(() => { try { renderNotificationList(); } catch (e) { } }); }
+    else if (act === 'filter') { notifFilter = el.dataset.v || 'all'; renderNotificationList(); }
     else if (act === 'markall') { notifFreshIds = new Set(); markAllNotificationsRead(); renderNotificationList(); }
     else if (act === 'clear') { if (confirm('Clear all notifications?')) window.clearAllNotifications(); }
     else if (act === 'dismiss') {
@@ -4324,6 +4355,23 @@ function startOrderEventWatcher() {
             const isDone = /done|completed/i.test(status);
             // On first load only surface actionable items (no flood of old completed orders)
             if (!seeded && isDone) return;
+
+            // Live change -> ask the server (Apps Script + OneSignal) to push to phones even when the app is closed.
+            if (seeded) {
+                const tUid = o.teacherUid;
+                const isMine = String(tUid) === myId;
+                const tName = o.teacherName || 'a teacher';
+                const where = o.pickupLocation && o.pickupLocation !== 'Awaiting Admin Details' ? o.pickupLocation : 'the stationery store';
+                if (isPending && isTeacher && isMine) {
+                    relayPushEvent({ eventKey: `new_${id}_admin`, toAdmins: true, title: '🆕 New Order Received', body: `Order ${id} from ${tName} is waiting for approval.` });
+                    relayPushEvent({ eventKey: `submitted_${id}_teacher`, toUser: tUid, title: '✅ Order Submitted', body: `Your order ${id} has been submitted. Please wait for admin approval.` });
+                } else if (isApproved && !isTeacher) {
+                    relayPushEvent({ eventKey: `approved_${id}_teacher`, toUser: tUid, title: '📦 Your Order is Ready!', body: `Your items are ready. Please collect them from: ${where}.` });
+                } else if (isDone && (!isTeacher || isMine)) {
+                    relayPushEvent({ eventKey: `done_${id}_teacher`, toUser: tUid, title: '✅ Handover Confirmed', body: `Order ${id} was handed over and signed. Thank you!` });
+                    relayPushEvent({ eventKey: `done_${id}_admin`, toAdmins: true, title: '✅ Handover Confirmed', body: `Order ${id} was handed over to ${tName} and confirmed.` });
+                }
+            }
 
             if (isTeacher) {
                 if (String(o.teacherUid) !== myId) return;
