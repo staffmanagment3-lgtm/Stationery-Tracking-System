@@ -35,3 +35,8 @@ iPhone: Safari -> Add to Home Screen -> Home Screen icon se kholo (iOS 16.4+).
 - Approved/Ready: Teacher ko "Your Order is Ready" (pickup location ke saath)
 - Handover done: Teacher + Admin ko "Handover Confirmed"
 App khula ho to in-app banner + bell list (pehle jaisa), band ho to phone notification.
+
+## v2.6.0 update
+- Side menu me Notifications ON/OFF switch. Ek user ka sirf ek device active: dusre phone par switch ON karo to purana device automatic OFF.
+- App khula ho to top par popup + ding + vibration (WhatsApp jaisa). App band ho to phone notification.
+- Files replace karo: `app.js`, `index.html`, `sw.js`, `functions/index.js`. Function dobara deploy karo (section C ka last command).

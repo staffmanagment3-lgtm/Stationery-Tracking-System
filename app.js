@@ -4,7 +4,7 @@ import { getDatabase, ref, get, child, set, push, onValue, update, remove } from
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
-const APP_VERSION = "2.5.0";
+const APP_VERSION = "2.6.0";
 
 // ==================== LOGIN SECURITY: RATE LIMITING (v1.8.87) ====================
 // Locks the login form for a short cooldown after repeated failed attempts.
@@ -537,7 +537,15 @@ function loadOneSignal() {
                         });
                     } catch (e) { console.warn("OneSignal foreground handler:", e); }
                 });
-                OneSignal.User.PushSubscription.addEventListener('change', () => { try { window.updateFcmUIStatus(); } catch (e) { } });
+                OneSignal.User.PushSubscription.addEventListener('change', () => {
+                    try {
+                        window.updateFcmUIStatus();
+                        const sid = OneSignal.User.PushSubscription.id;
+                        if (sid && typeof isPushOnHere === 'function' && isPushOnHere()) {
+                            update(ref(db, `fcm_tokens/${pushUid()}/os_${osDeviceId()}`), { subscriptionId: sid, updatedAt: new Date().toISOString() }).catch(() => { });
+                        }
+                    } catch (e) { }
+                });
                 finish(OneSignal);
             } catch (e) {
                 console.warn("OneSignal init failed:", e);
@@ -556,123 +564,219 @@ loadOneSignal();
 
 // Names below (updateFcmUIStatus, enableFcmNotifications, initPushForSession ...) are kept the same
 // so index.html buttons keep working without any change.
+// ---------- Notification ON/OFF switch + ONE active device per user ----------
+// Rule: a user can have notifications ON on only one phone/PC at a time.
+// Turning ON here automatically turns OFF the user's other devices.
+const pushUid = () => fcmSafeKey(currentUser && (currentUser.adecPassNumber || currentUser.uid));
+const pushFlag = (name) => name + '_' + pushUid();
+const pushSupported = () => ('Notification' in window) && ('serviceWorker' in navigator);
+const isPushOnHere = () => pushSupported() && !!currentUser && Notification.permission === 'granted'
+    && localStorage.getItem(pushFlag('push_active_here')) === '1';
+let pushActiveUnsub = null;
+
+(function injectPushSwitchCss() {
+    if (document.getElementById('push-switch-css')) return;
+    const st = document.createElement('style');
+    st.id = 'push-switch-css';
+    st.textContent = '.push-row{display:flex!important;align-items:center;justify-content:space-between;gap:10px;width:100%}' +
+        '.push-row small{display:block;font-size:.72rem;opacity:.75;font-weight:500}' +
+        '.push-sw{flex:none;width:46px;height:26px;border-radius:999px;background:#475569;position:relative;transition:background .2s}' +
+        '.push-sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s}' +
+        '.push-sw.on{background:#22c55e}.push-sw.on i{transform:translateX(20px)}';
+    document.head.appendChild(st);
+})();
+
 window.updateFcmUIStatus = function() {
-    if (!('Notification' in window)) return;
-
-    const btnAdmin = document.getElementById('enable-notifications-btn-admin');
-    const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
-    const status = Notification.permission;
-
-    let text = "🔔 Enable Notifications";
-    let className = "drawer-item";
-
-    if (status === 'granted') {
-        text = "✅ Push Notifications Active";
-        className = "drawer-item text-success fw-bold";
-    } else if (status === 'denied') {
-        text = "⚠️ Notifications Blocked";
-        className = "drawer-item text-warning";
-    }
-
-    [btnAdmin, btnTeacher].forEach(btn => {
-        if (btn) {
-            btn.textContent = text;
-            btn.className = className;
-        }
+    const btns = [document.getElementById('enable-notifications-btn-admin'), document.getElementById('enable-notifications-btn-teacher')];
+    if (!pushSupported()) return;
+    const on = isPushOnHere();
+    const denied = Notification.permission === 'denied';
+    let sub = on ? 'ON - this device receives alerts' : 'OFF';
+    if (denied) sub = 'Blocked in browser settings';
+    else if (!on && currentUser && localStorage.getItem(pushFlag('push_moved')) === '1') sub = 'OFF - active on another device';
+    btns.forEach(btn => {
+        if (!btn) return;
+        btn.className = 'drawer-item';
+        btn.innerHTML = '<span class="push-row"><span>🔔 Notifications<small>' + sub + '</small></span>' +
+            '<span class="push-sw' + (on ? ' on' : '') + '"><i></i></span></span>';
     });
 };
 
-// Kept for compatibility: returns the (single) service worker registration.
 window.getPushServiceWorker = async function() {
     await navigator.serviceWorker.register('./OneSignalSDKWorker.js');
     return await navigator.serviceWorker.ready;
 };
 
-// Links this device to the logged-in user (OneSignal external id = user id) so the server can reach
-// every device of that user - even when the app is closed.
-window.syncFcmToken = async function() {
-    if (!('Notification' in window) || !currentUser) return null;
-    if (Notification.permission !== 'granted') return null;
+async function waitForSubscriptionId(OS, ms) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        const id = OS.User.PushSubscription.id;
+        if (id) return id;
+        await new Promise(r => setTimeout(r, 300));
+    }
+    return OS.User.PushSubscription.id || null;
+}
 
+// Makes THIS device the only active device of the logged-in user.
+async function claimPushDevice() {
     const OS = await loadOneSignal();
-    if (!OS) return null;
-
-    const uid = fcmSafeKey(currentUser.adecPassNumber || currentUser.uid);
+    if (!OS || !currentUser) return null;
+    const uid = pushUid();
+    const devKey = 'os_' + osDeviceId();
     const role = String(currentUser.role || 'TEACHER').toUpperCase();
 
     await OS.login(uid);
     try { OS.User.addTag('role', role); } catch (e) { }
     try { await OS.User.PushSubscription.optIn(); } catch (e) { }
+    const subId = await waitForSubscriptionId(OS, 6000);
 
-    const devKey = 'os_' + osDeviceId();
+    // Remove every other device of this user (and old FCM tokens), keep only this one.
+    let replaced = false;
+    try {
+        const snap = await get(ref(db, `fcm_tokens/${uid}`));
+        const all = snap.val() || {};
+        for (const k of Object.keys(all)) {
+            if (k === devKey) continue;
+            if (k.startsWith('os_')) replaced = true;
+            await remove(ref(db, `fcm_tokens/${uid}/${k}`)).catch(() => { });
+        }
+    } catch (e) { console.warn('Push cleanup skipped:', e); }
+
     await set(ref(db, `fcm_tokens/${uid}/${devKey}`), {
         role: role,
         name: currentUser.name || uid,
+        subscriptionId: subId || null,
         updatedAt: new Date().toISOString(),
         device: (navigator.userAgent || '').slice(0, 120)
     });
     localStorage.setItem('fcm_token_current', devKey);
     localStorage.setItem('fcm_token_uid', uid);
-    return OS.User.PushSubscription.id || devKey;
+    localStorage.setItem(pushFlag('push_active_here'), '1');
+    localStorage.removeItem(pushFlag('push_user_off'));
+    localStorage.removeItem(pushFlag('push_moved'));
+    watchActivePushDevice();
+    return { id: subId || devKey, replaced };
+}
+window.syncFcmToken = async function() {
+    if (!pushSupported() || !currentUser || Notification.permission !== 'granted') return null;
+    const r = await claimPushDevice();
+    return r ? r.id : null;
 };
 
+async function deactivatePushHere(removeFromDb) {
+    const uid = pushUid();
+    localStorage.setItem(pushFlag('push_active_here'), '0');
+    localStorage.removeItem('fcm_token_current');
+    localStorage.removeItem('fcm_token_uid');
+    if (pushActiveUnsub) { try { pushActiveUnsub(); } catch (e) { } pushActiveUnsub = null; }
+    try {
+        const OS = osInitPromise ? await osInitPromise : null;
+        if (OS) {
+            try { await OS.User.PushSubscription.optOut(); } catch (e) { }
+            try { await OS.logout(); } catch (e) { }
+        }
+    } catch (e) { }
+    if (removeFromDb) await remove(ref(db, `fcm_tokens/${uid}/os_${osDeviceId()}`)).catch(() => { });
+}
+
+// If the same user turns ON on another phone, this phone switches OFF automatically.
+function watchActivePushDevice() {
+    if (pushActiveUnsub || !currentUser) return;
+    const uid = pushUid();
+    const devKey = 'os_' + osDeviceId();
+    try {
+        pushActiveUnsub = onValue(ref(db, `fcm_tokens/${uid}`), async (snap) => {
+            if (!isPushOnHere()) return;
+            const val = snap.val() || {};
+            const otherDevices = Object.keys(val).filter(k => k.startsWith('os_') && k !== devKey);
+            if (otherDevices.length && !val[devKey]) {
+                await deactivatePushHere(false);
+                localStorage.setItem(pushFlag('push_moved'), '1');
+                window.updateFcmUIStatus();
+                showToast("🔕 Notifications were turned ON on another device, so they are OFF here.", "error");
+            }
+        });
+    } catch (e) { console.warn('watchActivePushDevice failed:', e); }
+}
+
+// Side-menu switch: tap = ON/OFF (also used by the "Enable" banner).
 window.enableFcmNotifications = async function() {
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 
-    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+    if (!pushSupported()) {
         alert(isIOS && !standalone
-            ? "On iPhone/iPad: tap Share → 'Add to Home Screen', then open the app from the Home Screen icon and tap Enable Notifications again."
+            ? "On iPhone/iPad: tap Share → 'Add to Home Screen', then open the app from the Home Screen icon and use the Notifications switch again."
             : "This browser does not support Web Push Notifications.");
         return;
     }
 
+    // ---- Switch OFF ----
+    if (isPushOnHere()) {
+        await deactivatePushHere(true);
+        localStorage.setItem(pushFlag('push_user_off'), '1');
+        showToast("🔕 Notifications turned OFF on this device.", "success");
+        window.updateFcmUIStatus();
+        return;
+    }
+
+    // ---- Switch ON ----
     if (Notification.permission === 'denied') {
         alert("⚠️ Notifications are blocked in your browser settings.\n\nTo enable notifications:\n1. Click the lock icon near the website URL bar (or App info → Notifications on the phone).\n2. Set Notifications to 'Allow'.\n3. Reload the app.");
         return;
     }
-
     if (!ONESIGNAL_READY) {
         showToast("Notifications are not configured yet (OneSignal App ID missing in app.js).", "error");
         return;
     }
-
     try {
-        const btnAdmin = document.getElementById('enable-notifications-btn-admin');
-        const btnTeacher = document.getElementById('enable-notifications-btn-teacher');
-        [btnAdmin, btnTeacher].forEach(b => { if (b) b.textContent = "⏳ Enabling..."; });
-
+        window.updateFcmUIStatus();
         const OS = await Promise.race([loadOneSignal(), new Promise(r => setTimeout(() => r(null), 15000))]);
         if (!OS) {
             showToast("⚠️ Notification service could not load. Check internet and try again.", "error");
-            window.updateFcmUIStatus();
             return;
         }
-
-        await OS.Notifications.requestPermission();
+        if (Notification.permission !== 'granted') await OS.Notifications.requestPermission();
         if (Notification.permission === 'granted') {
-            const token = await window.syncFcmToken();
-            if (token) showToast("🎉 Push Notifications Enabled Successfully!", "success");
+            const r = await claimPushDevice();
+            if (r) showToast(r.replaced ? "🔔 Notifications ON here. Your other device was switched OFF." : "🔔 Notifications turned ON!", "success");
             else showToast("⚠️ Could not register this device for notifications.", "error");
         } else {
             showToast("Notification permission was not granted.", "error");
         }
         const banner = document.getElementById('push-prompt-banner');
         if (banner) banner.remove();
-        window.updateFcmUIStatus();
     } catch (err) {
         console.error("OneSignal Registration Error:", err);
         showToast("Notification error: " + err.message, "error");
-        window.updateFcmUIStatus();
     }
+    window.updateFcmUIStatus();
 };
 
-// Called after every login: link device silently, or gently ask for permission.
-window.initPushForSession = function() {
-    if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+// Called after every login.
+window.initPushForSession = async function() {
+    if (!pushSupported() || !currentUser) return;
     window.updateFcmUIStatus();
+    if (Notification.permission === 'denied') return;
+    if (localStorage.getItem(pushFlag('push_user_off')) === '1') return; // user switched it OFF on purpose
+
     if (Notification.permission === 'granted') {
-        window.syncFcmToken().catch(e => console.warn('Push sync failed:', e));
+        try {
+            const uid = pushUid();
+            const devKey = 'os_' + osDeviceId();
+            let existing = null;
+            try { existing = (await get(ref(db, `fcm_tokens/${uid}`))).val(); } catch (e) { }
+            const otherActive = existing && Object.keys(existing).some(k => k.startsWith('os_') && k !== devKey);
+            if (otherActive && !(existing && existing[devKey])) {
+                // Another device of this user is active -> stay OFF here until the user switches ON.
+                localStorage.setItem(pushFlag('push_active_here'), '0');
+                localStorage.setItem(pushFlag('push_moved'), '1');
+                window.updateFcmUIStatus();
+                return;
+            }
+            await claimPushDevice();
+        } catch (e) { console.warn('Push sync failed:', e); }
+        window.updateFcmUIStatus();
         return;
     }
     if (Notification.permission === 'default' && !sessionStorage.getItem('push_banner_dismissed')) {
@@ -3999,6 +4103,17 @@ function showNotificationPopup(title, body, meta) {
     clearTimeout(box._t);
     box._t = setTimeout(() => box.classList.remove('show'), 6500);
     try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { }
+    try { // short WhatsApp-like "ding"
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+            const ctx = new AC(), o = ctx.createOscillator(), g = ctx.createGain();
+            o.type = 'sine'; o.frequency.setValueAtTime(880, ctx.currentTime); o.frequency.setValueAtTime(1175, ctx.currentTime + 0.12);
+            g.gain.setValueAtTime(0.0001, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+            o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.42);
+            setTimeout(() => { try { ctx.close(); } catch (e) { } }, 700);
+        }
+    } catch (e) { }
 }
 
 function pushInAppNotification({ key, title, body, popup = true, type, orderId }) {
