@@ -9785,3 +9785,92 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         if (t) window.openProfileCard();
     });
 })();
+
+// =====================================================================================
+// v2.8.0 (additive) - ADMIN saved signature at HANDOVER (same idea as the teacher's saved signature)
+//   * 1st handover: admin signs in the box as always -> after the order is really 'Done' the signature is saved
+//   * next handovers: saved signature is attached automatically (verify with biometric / password, like teachers)
+//   * "Sign again" lets the admin draw a new one (it replaces the saved one after a successful handover)
+//   * nothing existing is edited: this only WRAPS window.submitHandoverWithSignature. On any problem the
+//     original function runs exactly as before.
+// =====================================================================================
+(function () {
+    'use strict';
+    const orig = window.submitHandoverWithSignature;
+    if (typeof orig !== 'function' || orig.__v280) return;
+
+    const loadImg = (src) => new Promise((res) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => res(null);
+        i.src = src;
+    });
+
+    // draw the saved signature onto the handover pad (centred, fitted) so the original code picks it up
+    const paintSaved = async (canvas, dataUrl) => {
+        const img = await loadImg(dataUrl);
+        if (!img) return false;
+        const cx = canvas.getContext('2d');
+        cx.save();
+        cx.setTransform(1, 0, 0, 1, 0, 0);
+        cx.clearRect(0, 0, canvas.width, canvas.height);
+        const s = Math.min((canvas.width * 0.9) / img.width, (canvas.height * 0.9) / img.height);
+        const w = img.width * s, h = img.height * s;
+        cx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+        cx.restore();
+        return true;
+    };
+
+    // 'use' | 'resign' | 'cancel'
+    const askUseSaved = (uid, saved) => new Promise((resolve) => {
+        let done = false;
+        const finish = (v) => { if (done) return; done = true; clearInterval(timer); resolve(v); };
+        window.confirmSavedSignatureUse(uid, saved, {
+            onUse: () => finish('use'),
+            onResign: () => finish('resign')
+        });
+        const timer = setInterval(() => { if (!document.querySelector('.ann-ov.sigv')) finish('cancel'); }, 300);
+    });
+
+    const wrapped = async function (event) {
+        let uid = null, orderId = null, sigToSave = null;
+        try {
+            if (event && event.preventDefault) { event.preventDefault(); event.stopPropagation(); }
+            if (!window._handoverInProgress) {
+                const canvas = document.getElementById('handover-signature-pad');
+                uid = currentUser && currentUser.uid;
+                orderId = window.activeHandoverRequestId;
+                if (canvas && uid && typeof window.getSavedSignature === 'function') {
+                    if (isCanvasBlank(canvas)) {
+                        const saved = await window.getSavedSignature(uid);
+                        if (saved) {
+                            // verify like teachers do (biometric / password) when this admin has a users/<id> record
+                            let needVerify = false;
+                            try { needVerify = (await get(ref(db, `users/${uid}`))).exists(); } catch (e) { }
+                            let choice = 'use';
+                            if (needVerify && typeof window.confirmSavedSignatureUse === 'function') choice = await askUseSaved(uid, saved);
+                            if (choice === 'cancel') return;
+                            if (choice === 'resign') { showToast('Please sign in the box, then press Complete Handover.', 'info'); return; }
+                            if (!(await paintSaved(canvas, saved))) { showToast('Saved signature could not be loaded. Please sign in the box.', 'error'); return; }
+                        }
+                    } else {
+                        sigToSave = canvas.toDataURL('image/png'); // admin signed by hand -> remember it for next time
+                    }
+                }
+            }
+        } catch (e) { console.warn('Admin saved-signature step skipped:', e); }
+
+        const result = await orig.apply(this, arguments);
+
+        // save only after the handover really finished
+        if (sigToSave && uid && orderId && typeof window.saveUserSignature === 'function') {
+            try {
+                const s = await get(ref(db, `orders/${orderId}`));
+                if (s.exists() && s.val().status === 'Done') await window.saveUserSignature(uid, sigToSave);
+            } catch (e) { console.warn('Could not save admin signature:', e); }
+        }
+        return result;
+    };
+    wrapped.__v280 = true;
+    window.submitHandoverWithSignature = wrapped;
+})();
