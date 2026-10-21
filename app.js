@@ -4806,6 +4806,8 @@ window.initNewTeacherDashboard = function(adecNumber) {
                     if (Object.keys(cart).length === 0) return;
                     const useSaved = window.__useSavedSig || null; window.__useSavedSig = null;
                     const signatureDataUrl = useSaved || pad.toDataURL();
+                    // v2.9.0: no order without a real signature
+                    if (!useSaved && !(window.__sigHasInk ? window.__sigHasInk(pad) : !isCanvasBlank(pad))) { alert("Signature is required to place an order. Please sign first."); return; }
                     const orderId = 'ORD-' + Date.now();
 
                     const items = Object.keys(cart).map(i => {
@@ -9787,27 +9789,173 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
 })();
 
 // =====================================================================================
-// v2.8.0 (additive) - ADMIN saved signature at HANDOVER (same idea as the teacher's saved signature)
-//   * 1st handover: admin signs in the box as always -> after the order is really 'Done' the signature is saved
-//   * next handovers: saved signature is attached automatically (verify with biometric / password, like teachers)
-//   * "Sign again" lets the admin draw a new one (it replaces the saved one after a successful handover)
-//   * nothing existing is edited: this only WRAPS window.submitHandoverWithSignature. On any problem the
-//     original function runs exactly as before.
+// v2.9.0 (additive) - signature rules
+//  A) TEACHER : an order can never be placed without a real signature (blank / tap-only pads and blank
+//               "saved" signatures are rejected). First order = sign once, next orders = saved signature.
+//  B) ADMIN   : - the admin who APPROVES an order is recorded; only that admin can hand it over
+//               - admin signs ONE time. Next handovers show the saved signature photo in the
+//                 "Receiver Signature" box and the same Drive file is re-used (NO new Drive upload).
+//  Nothing existing is rewritten: functions are only WRAPPED. On any problem the original runs as before.
 // =====================================================================================
 (function () {
     'use strict';
-    const orig = window.submitHandoverWithSignature;
-    if (typeof orig !== 'function' || orig.__v280) return;
+    if (window.__sigRulesV290) return;
+    window.__sigRulesV290 = true;
 
-    const loadImg = (src) => new Promise((res) => {
-        const i = new Image();
-        i.onload = () => res(i);
-        i.onerror = () => res(null);
-        i.src = src;
-    });
+    const sigKey = (v) => String(v || 'GUEST').replace(/[.#$\[\]\/]/g, '_');
+    const adminUid = () => (currentUser && currentUser.uid) ? String(currentUser.uid) : '';
+    const adminName = () => sessionStorage.getItem('userName') || (currentUser && currentUser.name) || adminUid() || 'Admin';
+    const loadImg = (src) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
 
-    // draw the saved signature onto the handover pad (centred, fitted) so the original code picks it up
-    const paintSaved = async (canvas, dataUrl) => {
+    // ---------- "is there real ink?" (dark, visible pixels) ----------
+    const MIN_INK = 30;
+    function countInk(ctx, w, h) {
+        const d = ctx.getImageData(0, 0, w, h).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+            if (d[i + 3] > 20 && (d[i] + d[i + 1] + d[i + 2]) / 3 < 200) n++;
+        }
+        return n;
+    }
+    window.__sigHasInk = function (canvas) {                 // live canvas
+        try { return !!canvas && countInk(canvas.getContext('2d'), canvas.width, canvas.height) >= MIN_INK; }
+        catch (e) { return false; }
+    };
+    async function dataUrlHasInk(dataUrl) {                  // saved / exported image
+        try {
+            if (!dataUrl || typeof dataUrl !== 'string') return false;
+            const img = await loadImg(dataUrl);
+            if (!img || !img.width || !img.height) return false;
+            const s = Math.min(1, 400 / img.width);
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(img.width * s)); c.height = Math.max(1, Math.round(img.height * s));
+            const cx = c.getContext('2d');
+            cx.drawImage(img, 0, 0, c.width, c.height);
+            return countInk(cx, c.width, c.height) >= MIN_INK;
+        } catch (e) { return false; }
+    }
+
+    // =================================================================================
+    // A) TEACHER saved signature must be a real signature
+    // =================================================================================
+    const origGetSaved = window.getSavedSignature;
+    if (typeof origGetSaved === 'function') {
+        window.getSavedSignature = async function (uid) {
+            const d = await origGetSaved.apply(this, arguments);
+            if (!d) return d;
+            return (await dataUrlHasInk(d)) ? d : null;     // blank saved signature = ignored -> teacher must sign again
+        };
+    }
+    const origSaveSig = window.saveUserSignature;
+    if (typeof origSaveSig === 'function') {
+        window.saveUserSignature = async function (uid, dataUrl) {
+            if (!(await dataUrlHasInk(dataUrl))) return;    // never store a blank signature
+            return origSaveSig.apply(this, arguments);
+        };
+    }
+
+    // =================================================================================
+    // B1) remember WHICH admin approved the order
+    // =================================================================================
+    const origApprove = window.confirmAdminOrderApproval;
+    if (typeof origApprove === 'function') {
+        window.confirmAdminOrderApproval = async function () {
+            const id = selectedOrderIdForApproval;
+            const result = await origApprove.apply(this, arguments);
+            try {
+                if (id && adminUid()) {
+                    const s = await get(ref(db, `orders/${id}`));
+                    if (s.exists() && /approved/i.test(String(s.val().status || '')) && !s.val().approvedByUid) {
+                        await update(ref(db, `orders/${id}`), { approvedByUid: adminUid(), approvedByName: adminName() });
+                    }
+                }
+            } catch (e) { console.warn('Could not record approving admin:', e); }
+            return result;
+        };
+    }
+
+    // only the approving admin may hand over (orders approved before this update have no approver -> anyone, as before)
+    function approverBlock(order) {
+        const uid = adminUid();
+        if (order && order.approvedByUid && uid && String(order.approvedByUid) !== uid) {
+            return `This order was approved by ${order.approvedByName || order.approvedByUid}.\nOnly that admin can hand it over.`;
+        }
+        return '';
+    }
+
+    // =================================================================================
+    // B2) admin's saved signature (stored once; Drive file re-used)
+    // =================================================================================
+    async function readAdminSig(uid) {
+        try {
+            const s = await get(ref(db, `user_signatures/${sigKey(uid)}`));
+            if (!s.exists()) return null;
+            const v = s.val() || {};
+            if (!(await dataUrlHasInk(v.dataUrl))) return null;
+            return { dataUrl: v.dataUrl, driveUrl: /^https?:/i.test(v.driveUrl || '') ? v.driveUrl : '' };
+        } catch (e) { console.warn('admin signature unavailable', e); return null; }
+    }
+    async function writeAdminSig(uid, dataUrl, driveUrl) {
+        try {
+            const img = await loadImg(dataUrl);
+            let small = dataUrl;
+            if (img) {
+                const sc = Math.min(1, 600 / img.width);
+                const c = document.createElement('canvas');
+                c.width = Math.max(1, Math.round(img.width * sc)); c.height = Math.max(1, Math.round(img.height * sc));
+                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                small = c.toDataURL('image/png');
+            }
+            if (!(await dataUrlHasInk(small))) return;
+            await set(ref(db, `user_signatures/${sigKey(uid)}`), { dataUrl: small, driveUrl: driveUrl || '', updatedAt: new Date().toISOString() });
+        } catch (e) { console.warn('Could not save admin signature:', e); }
+    }
+
+    // re-use the stored Drive file instead of uploading a new copy for every handover
+    if (typeof uploadToGoogleDrive === 'function') {
+        const origUpload = uploadToGoogleDrive;
+        uploadToGoogleDrive = async function (b64, name, type) {
+            if (type === 'admin_sig' && window.__adminSigUrl) return window.__adminSigUrl;
+            return origUpload.apply(this, arguments);
+        };
+    }
+
+    const state = { saved: null, useSaved: false };
+    const BOX_ID = 'admin-saved-sig-box';
+
+    function showWrap(show) {
+        const w = document.getElementById('wrapper-handover-signature-pad');
+        const c = document.getElementById('clear-handover-sig');
+        if (w) w.style.display = show ? '' : 'none';
+        if (c) c.style.display = show ? '' : 'none';
+    }
+
+    async function showSavedPreview() {
+        state.saved = null; state.useSaved = false;
+        const old = document.getElementById(BOX_ID); if (old) old.remove();
+        showWrap(true);
+        const wrap = document.getElementById('wrapper-handover-signature-pad');
+        const uid = adminUid();
+        if (!wrap || !uid) return;
+        const saved = await readAdminSig(uid);
+        if (!saved) return;                                   // first time: normal pad, sign once
+        state.saved = saved; state.useSaved = true;
+        const box = document.createElement('div');
+        box.id = BOX_ID;
+        box.style.cssText = 'border:2px solid #22c55e;background:#f0fdf4;border-radius:14px;padding:12px;margin-bottom:10px;text-align:center;color:#14532d';
+        box.innerHTML =
+            '<div style="font-weight:800;font-size:.9rem;margin-bottom:8px">✅ Your saved signature (' + String(adminName()).replace(/[<>&"]/g, '') + ')</div>' +
+            '<div style="background:#fff;border:1px solid #bbf7d0;border-radius:10px;padding:8px"><img alt="Saved admin signature" style="max-width:100%;max-height:150px;object-fit:contain"></div>' +
+            '<div style="font-size:.78rem;margin-top:8px;color:#166534">Check this is your own signature, then press <b>Complete Handover</b>.</div>' +
+            '<button type="button" data-a="resign" style="margin-top:8px;border:1px solid #16a34a;background:#fff;color:#166534;border-radius:999px;padding:6px 16px;font-weight:700;font-size:.82rem">✍ Sign again</button>';
+        box.querySelector('img').src = saved.dataUrl;
+        box.querySelector('[data-a="resign"]').onclick = () => { state.useSaved = false; box.remove(); showWrap(true); };
+        wrap.parentNode.insertBefore(box, wrap);
+        showWrap(false);
+    }
+
+    // paint saved signature onto the (hidden) handover pad so the original code takes the normal path
+    async function paintSaved(canvas, dataUrl) {
         const img = await loadImg(dataUrl);
         if (!img) return false;
         const cx = canvas.getContext('2d');
@@ -9819,58 +9967,75 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         cx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
         cx.restore();
         return true;
-    };
+    }
 
-    // 'use' | 'resign' | 'cancel'
-    const askUseSaved = (uid, saved) => new Promise((resolve) => {
-        let done = false;
-        const finish = (v) => { if (done) return; done = true; clearInterval(timer); resolve(v); };
-        window.confirmSavedSignatureUse(uid, saved, {
-            onUse: () => finish('use'),
-            onResign: () => finish('resign')
-        });
-        const timer = setInterval(() => { if (!document.querySelector('.ann-ov.sigv')) finish('cancel'); }, 300);
-    });
-
-    const wrapped = async function (event) {
-        let uid = null, orderId = null, sigToSave = null;
-        try {
-            if (event && event.preventDefault) { event.preventDefault(); event.stopPropagation(); }
-            if (!window._handoverInProgress) {
-                const canvas = document.getElementById('handover-signature-pad');
-                uid = currentUser && currentUser.uid;
-                orderId = window.activeHandoverRequestId;
-                if (canvas && uid && typeof window.getSavedSignature === 'function') {
-                    if (isCanvasBlank(canvas)) {
-                        const saved = await window.getSavedSignature(uid);
-                        if (saved) {
-                            // verify like teachers do (biometric / password) when this admin has a users/<id> record
-                            let needVerify = false;
-                            try { needVerify = (await get(ref(db, `users/${uid}`))).exists(); } catch (e) { }
-                            let choice = 'use';
-                            if (needVerify && typeof window.confirmSavedSignatureUse === 'function') choice = await askUseSaved(uid, saved);
-                            if (choice === 'cancel') return;
-                            if (choice === 'resign') { showToast('Please sign in the box, then press Complete Handover.', 'info'); return; }
-                            if (!(await paintSaved(canvas, saved))) { showToast('Saved signature could not be loaded. Please sign in the box.', 'error'); return; }
-                        }
-                    } else {
-                        sigToSave = canvas.toDataURL('image/png'); // admin signed by hand -> remember it for next time
+    // ---------- open handover: approver check + saved-signature preview ----------
+    const origOpen = window.handleFinalHandover;
+    if (typeof origOpen === 'function') {
+        window.handleFinalHandover = async function (event, orderId) {
+            try {
+                if (orderId) {
+                    const s = await get(ref(db, `orders/${orderId}`));
+                    const msg = s.exists() ? approverBlock(s.val()) : '';
+                    if (msg) {
+                        if (event && event.preventDefault) { event.preventDefault(); event.stopPropagation(); }
+                        alert(msg);
+                        return;
                     }
                 }
-            }
-        } catch (e) { console.warn('Admin saved-signature step skipped:', e); }
+            } catch (e) { console.warn('Approver check skipped:', e); }
+            const r = await origOpen.apply(this, arguments);
+            try { await showSavedPreview(); } catch (e) { console.warn('Saved signature preview skipped:', e); }
+            return r;
+        };
+    }
 
-        const result = await orig.apply(this, arguments);
+    // ---------- complete handover ----------
+    const origSubmit = window.submitHandoverWithSignature;
+    if (typeof origSubmit === 'function') {
+        window.submitHandoverWithSignature = async function (event) {
+            if (event && event.preventDefault) { event.preventDefault(); event.stopPropagation(); }
+            if (window._handoverInProgress) return origSubmit.apply(this, arguments);
 
-        // save only after the handover really finished
-        if (sigToSave && uid && orderId && typeof window.saveUserSignature === 'function') {
+            const orderId = window.activeHandoverRequestId;
+            const uid = adminUid();
+            const canvas = document.getElementById('handover-signature-pad');
+            let usingSaved = false, saved = null, sigToSave = null;
+
             try {
-                const s = await get(ref(db, `orders/${orderId}`));
-                if (s.exists() && s.val().status === 'Done') await window.saveUserSignature(uid, sigToSave);
-            } catch (e) { console.warn('Could not save admin signature:', e); }
-        }
-        return result;
-    };
-    wrapped.__v280 = true;
-    window.submitHandoverWithSignature = wrapped;
+                if (orderId) {                                   // fresh re-check at the moment of handover
+                    const s = await get(ref(db, `orders/${orderId}`));
+                    const msg = s.exists() ? approverBlock(s.val()) : '';
+                    if (msg) { alert(msg); return; }
+                }
+                if (canvas && uid) {
+                    if (state.useSaved && state.saved) {
+                        saved = state.saved;
+                        if (!(await paintSaved(canvas, saved.dataUrl))) { alert('Saved signature could not be loaded. Please press "Sign again".'); return; }
+                        usingSaved = true;
+                        if (saved.driveUrl) window.__adminSigUrl = saved.driveUrl;   // no new Drive upload
+                    } else if (window.__sigHasInk(canvas)) {
+                        sigToSave = canvas.toDataURL('image/png');                   // admin signed by hand -> remember
+                    }
+                }
+            } catch (e) { console.warn('Signature step skipped:', e); window.__adminSigUrl = null; }
+
+            let result;
+            try { result = await origSubmit.apply(this, arguments); }
+            finally { window.__adminSigUrl = null; }
+
+            // after a REAL success: keep the signature + its Drive file for next time
+            try {
+                if (orderId && uid && (sigToSave || (usingSaved && saved && !saved.driveUrl))) {
+                    const s = await get(ref(db, `orders/${orderId}`));
+                    const o = s.exists() ? s.val() : null;
+                    if (o && o.status === 'Done') {
+                        const url = /^https?:/i.test(o.adminSign || '') ? o.adminSign : '';
+                        await writeAdminSig(uid, sigToSave || saved.dataUrl, url);
+                    }
+                }
+            } catch (e) { console.warn('Could not keep admin signature:', e); }
+            return result;
+        };
+    }
 })();
