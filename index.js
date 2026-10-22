@@ -121,6 +121,16 @@ exports.onOrderUpdated = onValueUpdated({ ...DB_OPTS, ref: '/orders/{orderId}' }
     }));
   }
 
+  // v2.10.0: admin rejected the order (stored as status Cancelled + rejected:true) -> tell the teacher the reason
+  if (after.rejected === true && !before.rejected && /cancel/i.test(after.status || "")) {
+    const reason = String(after.rejectReason || "Not given").slice(0, 120);
+    await collectSubscriptionIds({ uid: after.teacherUid }).then((u) => send(u, {
+      title: "❌ Order Rejected",
+      body: `Your order ${id} was rejected. Reason: ${reason}`,
+      eventKey: `rejected_${id}_teacher`,
+    }));
+  }
+
   if (isDone(after.status) && !isDone(before.status)) {
     await Promise.all([
       collectSubscriptionIds({ uid: after.teacherUid }).then((u) => send(u, {

@@ -1,6 +1,6 @@
 // Firebase SDK imports
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
-import { getDatabase, ref, get, child, set, push, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+import { getDatabase, ref, get, child, set, push, onValue, update, remove, runTransaction } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 
 // Define Current App Version
@@ -4786,6 +4786,8 @@ window.initNewTeacherDashboard = function(adecNumber) {
                 if (clr) clr.click();
             };
             if (toSign) toSign.onclick = async () => {
+                // v2.10.0: warn when the same item is already in an open order
+                try { if (window.__dupOrderCheck && !(await window.__dupOrderCheck(adec, Object.keys(cart).map(i => ({ itemId: (P[i][7] && P[i][7].id) || P[i][2], itemName: P[i][0], serialNumber: P[i][2] }))))) return; } catch (e) { console.warn('dup check skipped', e); }
                 // v2.3.0: returning staff -> verify (biometric / password) and auto-attach the saved signature
                 try {
                     const saved = await window.getSavedSignature(adec);
@@ -10036,6 +10038,813 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
                 }
             } catch (e) { console.warn('Could not keep admin signature:', e); }
             return result;
+        };
+    }
+})();
+
+// =====================================================================================
+// v2.9.1 (additive) - SAFE STOCK DEDUCTION (Firebase transactions)
+//   1) per-order LOCK (transaction): the same order can never be deducted twice, even from 2 devices
+//   2) per-item deduction runs inside runTransaction on inventory/<item>: FIFO is calculated on the LIVE value
+//      and retried automatically -> two handovers at the same time can no longer overwrite each other
+//   3) failures / short stock are no longer silent: stored on the order (stockDeductionIssues) + shown to the admin
+//  Same FIFO rules and same fields as before. If the lock itself cannot be written, the old behaviour runs.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__stockTxnV291) return;
+    window.__stockTxnV291 = true;
+
+    const LOCK_MS = 2 * 60 * 1000;           // a lock older than this is treated as a crashed attempt
+    let issues = [];                          // filled while ONE order is being deducted
+
+    const qtyOf = (b) => parseInt(b && (b.currentQty ?? b.currentStock ?? b.quantity ?? 0), 10) || 0;
+    const statusOf = (n) => n > 0 ? (n <= 5 ? 'Low Stock' : 'In Stock') : 'Out of Stock';
+
+    // pure FIFO calculation on a copy of the live node (same rules as the old code)
+    function applyFifo(cur, want) {
+        const node = JSON.parse(JSON.stringify(cur));
+        let remaining = want;
+        if (node.batches && typeof node.batches === 'object' && Object.keys(node.batches).length > 0) {
+            const sorted = Object.entries(node.batches)
+                .map(([bId, b]) => ({ bId, receivedDate: b.receivedDate || b.createdAt || '1970-01-01', qty: qtyOf(b) }))
+                .filter(b => b.qty > 0)
+                .sort((a, b) => new Date(a.receivedDate) - new Date(b.receivedDate));
+            for (const b of sorted) {
+                if (remaining <= 0) break;
+                const d = Math.min(b.qty, remaining);
+                const nq = Math.max(0, b.qty - d);
+                const tgt = node.batches[b.bId];
+                tgt.currentQty = nq; tgt.currentStock = nq; tgt.quantity = nq;
+                tgt.status = nq > 0 ? 'In Stock' : 'Depleted';
+                remaining -= d;
+            }
+            let sum = 0;
+            Object.values(node.batches).forEach(b => { sum += Math.max(0, qtyOf(b)); });
+            node.currentQty = sum; node.currentStock = sum; node.quantity = sum; node.availableStock = sum; node.stock = sum;
+            node.status = statusOf(sum);
+        } else {
+            const have = parseInt(node.currentQty ?? node.currentStock ?? node.quantity ?? node.availableStock ?? 0, 10) || 0;
+            const d = Math.min(have, remaining);
+            const nv = Math.max(0, have - remaining);
+            remaining -= d;
+            node.currentQty = nv; node.currentStock = nv; node.quantity = nv; node.availableStock = nv; node.stock = nv;
+            node.status = statusOf(nv);
+        }
+        return { node, shortage: Math.max(0, remaining) };
+    }
+    window.__applyFifo = applyFifo;
+
+    // ---------- 2) per-item deduction inside a transaction ----------
+    if (typeof executeRealtimeStockDeduction === 'function') {
+        executeRealtimeStockDeduction = async function (itemId, orderedQty) {
+            if (!itemId) return;
+            const cleanId = String(itemId).trim();
+            if (!cleanId) return;
+            const want = parseInt(orderedQty, 10) || 0;
+            if (want <= 0) return;
+
+            // find the inventory key exactly like before
+            let targetKey = cleanId;
+            if (inventoryData && !inventoryData[cleanId]) {
+                const low = cleanId.toLowerCase();
+                const found = Object.keys(inventoryData).find(k => {
+                    const n = inventoryData[k];
+                    if (!n) return false;
+                    const sn = (n.serialNumber || n.batchNo || '').toString().trim().toLowerCase();
+                    const nm = (n.itemName || n.name || '').toString().trim().toLowerCase();
+                    return k.toLowerCase() === low || sn === low || nm === low;
+                });
+                if (found) targetKey = found;
+            }
+            const itemRef = ref(db, `inventory/${targetKey}`);
+
+            let shortage = 0;
+            const tx = await runTransaction(itemRef, (cur) => {
+                if (cur === null || typeof cur !== 'object') return cur;   // null first -> Firebase retries with the real value
+                const r = applyFifo(cur, want);
+                shortage = r.shortage;
+                return r.node;
+            });
+            if (!tx.committed) throw new Error('Stock update was not committed for ' + targetKey);
+            if (!tx.snapshot.exists()) { console.warn('executeRealtimeStockDeduction: Item node not found for ID:', targetKey); return; }
+            if (shortage > 0) issues.push({ item: targetKey, type: 'short', requested: want, missing: shortage });
+
+            try {
+                window.masterInventoryList = getFlatInventoryList();
+                if (typeof renderMasterInventory === 'function') renderMasterInventory();
+                if (typeof renderMasterInventoryReport === 'function') renderMasterInventoryReport();
+                if (typeof renderTeacherCatalog === 'function') renderTeacherCatalog();
+            } catch (e) { console.warn('render after deduction skipped:', e); }
+            return { deducted: want - shortage, shortage };
+        };
+        window.executeRealtimeStockDeduction = executeRealtimeStockDeduction;
+    }
+
+    // ---------- 1) + 3) order lock and visible failures ----------
+    if (typeof executeSingleStockDeduction === 'function') {
+        const origDeduct = executeSingleStockDeduction;
+        executeSingleStockDeduction = async function (order) {
+            if (!order || !order.orderId) return origDeduct.apply(this, arguments);
+
+            const lockRef = ref(db, `orders/${order.orderId}/stockDeductionLock`);
+            let claimed = false, lockWorks = true;
+            try {
+                const tx = await runTransaction(lockRef, (cur) => {
+                    if (cur && cur.at && (Date.now() - cur.at) < LOCK_MS) return;          // somebody else is deducting -> abort
+                    return { by: (currentUser && currentUser.uid) || 'unknown', at: Date.now() };
+                });
+                claimed = tx.committed;
+            } catch (e) {
+                lockWorks = false;                                                        // cannot lock -> old behaviour
+                console.warn('Stock lock unavailable, running without it:', e);
+            }
+            if (lockWorks && !claimed) return { success: false, reason: 'another handover for this order is already in progress - please wait a moment and check the order status' };
+
+            issues = [];
+            let result;
+            try {
+                result = await origDeduct.apply(this, arguments);                          // its own idempotency check now runs UNDER the lock
+            } finally {
+                if (lockWorks) { try { await set(lockRef, null); } catch (e) { console.warn('lock release failed:', e); } }
+            }
+
+            try {
+                const failed = ((result && result.results) || []).filter(r => r.status === 'error')
+                    .map(r => ({ item: r.serialNo, type: 'error', requested: r.qtyIssued, message: String(r.error || '').slice(0, 120) }));
+                const all = failed.concat(issues);
+                issues = [];
+                if (all.length && result && result.reason === 'completed') {
+                    await update(ref(db, `orders/${order.orderId}`), { stockDeductionIssues: all });
+                    try { await logActivity('Stock Issue', `Order ${order.orderId}: ` + all.map(i => `${i.item} ${i.type}`).join(', ')); } catch (e) { }
+                    if (failed.length) alert('Warning: stock could NOT be deducted for: ' + failed.map(f => f.item).join(', ') + '.\nThe order was completed - please correct these items in Master Inventory (Edit batch).');
+                    else showToast('Some items had less stock than requested. Details saved on the order.', 'error');
+                }
+            } catch (e) { console.warn('stock issue reporting skipped:', e); }
+            return result;
+        };
+        window.executeSingleStockDeduction = executeSingleStockDeduction;
+    }
+})();
+
+// =====================================================================================
+// v2.10.0 (additive)
+//   1) DUPLICATE ORDER WARNING  - teacher is warned when an item is already in one of his OPEN orders
+//   2) ORDER REJECT WITH REASON - admin "Reject" button on pending requests; teacher sees "Rejected" + reason + push
+//   Nothing existing is rewritten: functions are only WRAPPED / a button is added next to "Approve Order".
+//   A rejected order is stored as status 'Cancelled' (+ rejected:true, rejectReason ...), so every existing list,
+//   badge, receipt and stock rule treats it exactly like a cancelled order (stock is never touched).
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__featV2100) return;
+    window.__featV2100 = true;
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const norm = (s) => String(s ?? '').trim().toLowerCase();
+    const me = () => ({
+        uid: (currentUser && (currentUser.uid || currentUser.adecPassNumber)) || '',
+        name: sessionStorage.getItem('userName') || (currentUser && currentUser.name) || 'Admin'
+    });
+
+    // small modal helper (own overlay, above bootstrap modals and the teacher sheets)
+    function overlay(html) {
+        const ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
+        ov.innerHTML = '<div style="background:#fff;color:#1e293b;border-radius:16px;width:100%;max-width:440px;max-height:90vh;overflow:auto;padding:18px;box-shadow:0 24px 48px rgba(0,0,0,.35)">' + html + '</div>';
+        document.body.appendChild(ov);
+        return ov;
+    }
+    const btn = (bg, fg, border) => `border:1px solid ${border || bg};background:${bg};color:${fg};border-radius:10px;min-height:44px;padding:0 16px;font-weight:700;font-size:14px;cursor:pointer`;
+
+    // =================================================================================
+    // 1) DUPLICATE ORDER WARNING
+    // =================================================================================
+    const isOpen = (st) => {
+        const s = String(st || '');
+        return !/done|completed|cancel|reject|deliver/i.test(s);       // Pending Approval, Approved / Ready for Pickup ...
+    };
+    const keysOf = (it) => {
+        const k = new Set();
+        [it.itemId, it.serialNumber, it.serial, it.sn, it.id].forEach(v => {
+            const n = norm(v); if (n && n !== 'n/a' && n !== '-') k.add('id:' + n);
+        });
+        const nm = norm(it.itemName || it.name); if (nm) k.add('nm:' + nm);
+        return k;
+    };
+
+    async function myOrderEntries(uid) {
+        let entries = (teacherOrdersState && Array.isArray(teacherOrdersState.allItems)) ? teacherOrdersState.allItems : [];
+        entries = entries.filter(([id, o]) => o && String(o.teacherUid) === String(uid));
+        if (entries.length) return entries;
+        try {                                                          // cache empty -> read once
+            const s = await get(ref(db, 'orders'));
+            return Object.entries(s.val() || {}).filter(([id, o]) => o && String(o.teacherUid) === String(uid));
+        } catch (e) { return []; }
+    }
+
+    // returns true = go ahead, false = teacher cancelled
+    window.__dupOrderCheck = async function (uid, newItems) {
+        try {
+            if (!uid || !Array.isArray(newItems) || !newItems.length) return true;
+            const entries = await myOrderEntries(uid);
+            const dups = [];
+            newItems.forEach(ni => {
+                const nk = keysOf(ni);
+                for (const [oid, o] of entries) {
+                    if (!isOpen(o.status)) continue;
+                    const its = Array.isArray(o.items) ? o.items : Object.values(o.items || {});
+                    if (its.some(oi => { const ok = keysOf(oi); for (const x of nk) if (ok.has(x)) return true; return false; })) {
+                        dups.push({ name: ni.itemName || ni.name || 'Item', orderId: oid, status: o.status });
+                        break;
+                    }
+                }
+            });
+            if (!dups.length) return true;
+            return await new Promise((resolve) => {
+                const rows = dups.map(d => `<li style="margin:6px 0"><b>${esc(d.name)}</b><br><small style="color:#64748b">already in order ${esc(d.orderId)} (${esc(d.status)})</small></li>`).join('');
+                const ov = overlay(
+                    '<div style="font-size:2rem;text-align:center">⚠️</div>' +
+                    '<h3 style="margin:6px 0 8px;font-size:1.15rem;font-weight:800;text-align:center">You already ordered this</h3>' +
+                    '<p style="font-size:.9rem;color:#475569;margin:0 0 6px">These items are already in an order that is not completed yet:</p>' +
+                    `<ul style="margin:0 0 12px;padding-left:18px;font-size:.92rem">${rows}</ul>` +
+                    '<p style="font-size:.85rem;color:#64748b;margin:0 0 14px">Do you still want to place a new order?</p>' +
+                    '<div style="display:flex;gap:10px"><button data-a="no" style="flex:1;' + btn('#fff', '#334155', '#cbd5e1') + '">Cancel</button>' +
+                    '<button data-a="yes" style="flex:1;' + btn('#2563eb', '#fff') + '">Order Anyway</button></div>');
+                ov.addEventListener('click', (e) => {
+                    const a = e.target.closest && e.target.closest('[data-a]');
+                    if (!a) return;
+                    ov.remove(); resolve(a.getAttribute('data-a') === 'yes');
+                });
+            });
+        } catch (e) { console.warn('Duplicate check skipped:', e); return true; }
+    };
+
+    // cart-modal flow (window function -> can be wrapped); the catalog-sheet flow calls __dupOrderCheck directly
+    const origCartSubmit = window.submitFinalOrderWithSignature;
+    if (typeof origCartSubmit === 'function') {
+        window.submitFinalOrderWithSignature = async function () {
+            try {
+                if (teacherRequestPad && !teacherRequestPad.isEmpty() && window.stationeryCart && window.stationeryCart.length) {
+                    const uid = currentUser && (currentUser.adecPassNumber || currentUser.uid);
+                    const go = await window.__dupOrderCheck(uid, window.stationeryCart.map(i => ({ itemId: i.id, itemName: i.itemName, serialNumber: i.serialNumber })));
+                    if (!go) return;
+                }
+            } catch (e) { console.warn('Duplicate check skipped:', e); }
+            return origCartSubmit.apply(this, arguments);
+        };
+    }
+
+    // =================================================================================
+    // 2) REJECT ORDER (admin)  +  teacher notification
+    // =================================================================================
+    const REASONS = ['Item out of stock', 'Quantity too high', 'Item not available now', 'Duplicate order', 'Not approved by management'];
+
+    function addRejectButtons() {
+        const list = document.getElementById('admin-requests-list');
+        if (!list) return;
+        list.querySelectorAll('.rq-approve').forEach(a => {
+            const holder = a.parentElement;
+            if (!holder || holder.querySelector('.rq-reject')) return;
+            const m = /handleAdminPrepareClick\(event,\s*'([^']+)'\)/.exec(a.getAttribute('onclick') || '');
+            if (!m) return;
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'rq-btn rq-reject';
+            b.textContent = '❌ Reject Order';
+            b.style.cssText = 'background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;margin-left:8px';
+            b.setAttribute('data-oid', m[1]);
+            a.insertAdjacentElement('afterend', b);
+        });
+    }
+    function watchAdminList() {
+        const list = document.getElementById('admin-requests-list');
+        if (!list || list.__rejObs) return !!list;
+        list.__rejObs = new MutationObserver(addRejectButtons);
+        list.addEventListener('click', (ev) => {            // one delegated listener: survives every re-render
+            const b = ev.target.closest && ev.target.closest('.rq-reject');
+            if (!b) return;
+            ev.preventDefault(); ev.stopPropagation();
+            const oid = b.getAttribute('data-oid');
+            if (oid) window.openRejectOrderModal(oid);
+        });
+        list.__rejObs.observe(list, { childList: true });
+        addRejectButtons();
+        return true;
+    }
+    // the list exists in index.html from the start; retry briefly in case it is created later
+    (function boot(n) { if (!watchAdminList() && n < 40) setTimeout(() => boot(n + 1), 500); })(0);
+
+    window.openRejectOrderModal = function (orderId) {
+        const chips = REASONS.map(r => `<button type="button" data-r="${esc(r)}" style="border:1px solid #cbd5e1;background:#f8fafc;color:#334155;border-radius:999px;padding:6px 12px;font-size:.8rem;font-weight:600;cursor:pointer;margin:0 6px 6px 0">${esc(r)}</button>`).join('');
+        const ov = overlay(
+            '<h3 style="margin:0 0 4px;font-size:1.1rem;font-weight:800">❌ Reject Order</h3>' +
+            `<p style="margin:0 0 10px;font-size:.85rem;color:#64748b">Order ${esc(orderId)} - the teacher will be told the reason.</p>` +
+            `<div>${chips}</div>` +
+            '<textarea id="rej-reason" rows="3" maxlength="200" placeholder="Reason (required)" style="width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:10px;font-size:16px;color:#1e293b;background:#fff;margin:4px 0 12px"></textarea>' +
+            '<div style="display:flex;gap:10px"><button data-a="x" style="flex:1;' + btn('#fff', '#334155', '#cbd5e1') + '">Back</button>' +
+            '<button data-a="ok" style="flex:1;' + btn('#dc2626', '#fff') + '">Reject Order</button></div>');
+        const ta = ov.querySelector('#rej-reason');
+        ov.addEventListener('click', async (e) => {
+            const chip = e.target.closest && e.target.closest('[data-r]');
+            if (chip) { ta.value = chip.getAttribute('data-r'); return; }
+            const a = e.target.closest && e.target.closest('[data-a]');
+            if (!a) return;
+            if (a.getAttribute('data-a') === 'x') { ov.remove(); return; }
+            const reason = ta.value.trim();
+            if (reason.length < 3) { ta.style.borderColor = '#dc2626'; ta.focus(); return; }
+            a.disabled = true; a.textContent = 'Rejecting...';
+            const ok = await window.rejectOrderWithReason(orderId, reason);
+            if (ok) ov.remove(); else { a.disabled = false; a.textContent = 'Reject Order'; }
+        });
+        setTimeout(() => ta.focus(), 50);
+    };
+
+    window.rejectOrderWithReason = async function (orderId, reason) {
+        const who = me();
+        try {
+            const orderRef = ref(db, `orders/${orderId}`);
+            const now = new Date().toISOString();
+            const tx = await runTransaction(orderRef, (cur) => {
+                if (cur === null || typeof cur !== 'object') return cur;
+                if (String(cur.status) !== 'Pending Approval') return;               // already approved / cancelled -> abort
+                const n = JSON.parse(JSON.stringify(cur));                           // work on a copy (handler can run again on retry)
+                n.status = 'Cancelled';
+                n.rejected = true;
+                n.rejectReason = String(reason).slice(0, 200);
+                n.rejectedBy = who.name;
+                n.rejectedByUid = who.uid;
+                n.rejectedAt = now;
+                n.cancelledAt = now;
+                n.cancelledBy = who.name;
+                return n;
+            });
+            if (!tx.committed || !tx.snapshot.exists()) {
+                showToast('This order was already approved or cancelled. Nothing was changed.', 'error');
+                return false;
+            }
+            const o = tx.snapshot.val() || {};
+            try { await logActivity('Order Rejected', `Order ${orderId} rejected by ${who.name}: ${reason}`); } catch (e) { }
+            // push to the teacher's phone (same eventKey is used by the optional Cloud Function, so it never shows twice)
+            try {
+                relayPushEvent({ eventKey: `rejected_${orderId}_teacher`, toUser: o.teacherUid, title: '❌ Order Rejected', body: `Your order ${orderId} was rejected. Reason: ${String(reason).slice(0, 120)}` });
+            } catch (e) { console.warn('Reject push failed:', e); }
+            showToast(`Order ${orderId} rejected.`, 'success');
+            return true;
+        } catch (err) {
+            console.error('Reject failed:', err);
+            showToast('Could not reject order: ' + err.message, 'error');
+            return false;
+        }
+    };
+
+    // ---------- teacher: show "Rejected" + reason in the history lists (after the original render) ----------
+    const origRenderHist = renderTeacherOrderHistory;
+    if (typeof origRenderHist === 'function') {
+        renderTeacherOrderHistory = function () {
+            const r = origRenderHist.apply(this, arguments);
+            try {
+                const rej = new Map();
+                (teacherOrdersState.filtered || []).forEach(([id, o]) => { if (o && o.rejected) rej.set(String(id), o.rejectReason || ''); });
+                if (!rej.size) return r;
+                const note = (reason) => `<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fee2e2;color:#991b1b;font-size:.8rem;font-weight:600">Reason: ${esc(reason || 'Not given')}</div>`;
+                // mobile catalog app: <div class="hist"><b>Order ID: X (Cancelled)</b> ...
+                document.querySelectorAll('#histList .hist').forEach(h => {
+                    const b = h.querySelector('b'); if (!b) return;
+                    const m = /Order ID:\s*(\S+)\s*\(/.exec(b.textContent);
+                    if (m && rej.has(m[1]) && !h.querySelector('.rej-note')) {
+                        b.textContent = b.textContent.replace('(Cancelled)', '(Rejected)');
+                        h.insertAdjacentHTML('beforeend', '<div class="rej-note">' + note(rej.get(m[1])) + '</div>');
+                    }
+                });
+                // table + cards
+                document.querySelectorAll('#teacher-history-list tr').forEach(tr => {
+                    const t = tr.textContent;
+                    for (const [id, reason] of rej) {
+                        if (t.includes('ID: ' + id + ' ') || t.includes('ID: ' + id + '|')) {
+                            const badge = tr.querySelector('.badge'); if (badge) badge.textContent = 'Rejected';
+                            const td = tr.querySelector('td'); if (td && !td.querySelector('.rej-note')) td.insertAdjacentHTML('beforeend', '<div class="rej-note">' + note(reason) + '</div>');
+                        }
+                    }
+                });
+                document.querySelectorAll('#teacher-history-cards .order-mobile-card').forEach(c => {
+                    const idEl = c.querySelector('.omc-id'); const id = idEl && idEl.textContent.trim();
+                    if (id && rej.has(id) && !c.querySelector('.rej-note')) {
+                        const badge = c.querySelector('.badge'); if (badge) badge.textContent = 'Rejected';
+                        const body = c.querySelector('.omc-body'); if (body) body.insertAdjacentHTML('beforeend', '<div class="rej-note">' + note(rej.get(id)) + '</div>');
+                    }
+                });
+            } catch (e) { console.warn('Rejected labels skipped:', e); }
+            return r;
+        };
+    }
+
+    // ---------- teacher: in-app popup + bell entry when HIS order is rejected (app open) ----------
+    let rejUnsub = null;
+    function startRejectWatcher() {
+        try {
+            if (!currentUser || String(currentUser.role || '').toUpperCase() !== 'TEACHER') return;
+            const myId = String(currentUser.adecPassNumber || currentUser.uid || '');
+            let seeded = false;
+            if (rejUnsub) { try { rejUnsub(); } catch (e) { } }
+            rejUnsub = addListener(ref(db, 'orders'), (snap) => {
+                const data = snap.val() || {};
+                Object.entries(data).forEach(([id, o]) => {
+                    if (!o || !o.rejected || String(o.teacherUid) !== myId) return;
+                    if (typeof pushInAppNotification === 'function') {
+                        pushInAppNotification({ key: `rejected_${id}_teacher`, popup: seeded,
+                            title: 'Order Rejected', body: `Your order ${id} was rejected. Reason: ${o.rejectReason || 'Not given'}` });
+                    }
+                });
+                seeded = true;
+            });
+        } catch (e) { console.warn('Reject watcher skipped:', e); }
+    }
+    const origRender = window.renderDashboardForRole;
+    if (typeof origRender === 'function') {
+        window.renderDashboardForRole = function () {
+            const r = origRender.apply(this, arguments);
+            setTimeout(startRejectWatcher, 800);
+            return r;
+        };
+    }
+})();
+
+// =====================================================================================
+// v2.11.0 (additive)
+//   A) MONTHLY VOUCHER  - the monthly report as a printable voucher (same look as the teacher voucher: school logo,
+//      header, boxes) with Date, Time, Photo, Serial No, Quantity - and NO signature area. View / PDF / Print use
+//      the existing voucher viewer, so nothing new to learn.
+//   B) REJECT ONE ITEM  - admin can reject a single wrong item (e.g. wrong stapler-pin size) with a reason and the
+//      correct item needed. The item is moved from `items` to `rejectedItems`, so handover / stock / voucher keep
+//      working on the remaining items without any change. Teacher gets push + in-app message + note in history.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__v2110) return;
+    window.__v2110 = true;
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const norm = (s) => String(s ?? '').trim().toLowerCase();
+    const me = () => ({
+        uid: (currentUser && (currentUser.uid || currentUser.adecPassNumber)) || '',
+        name: sessionStorage.getItem('userName') || (currentUser && currentUser.name) || 'Admin'
+    });
+
+    // =================================================================================
+    // A) MONTHLY VOUCHER
+    // =================================================================================
+    window.__monthlyVouchers = {};
+
+    const fmtDate = (ms) => new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const fmtTime = (ms) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+    async function buildMonthlyVoucherHtml(data, key) {
+        const meta = data.meta || {};
+        // new format: data.sections = [{mode:'teacher'|'dept'|'item', id, info, rows}]   (old format: data.rows = one 'all' page)
+        const sections = (data.sections && data.sections.length) ? data.sections
+            : [{ mode: 'all', id: key, info: { staff: meta.staff || null, scopeLabel: meta.scopeLabel }, rows: data.rows || [] }];
+        const inv = await _rcptEnsureInventory();
+
+        // photos: found automatically from the Realtime Database inventory, each distinct item loaded once
+        const rawOf = (r) => r.raw || { itemName: r.item, serialNumber: r.serial };
+        const nodeOf = (r) => _rcptFindInvNode(inv, rawOf(r));
+        const srcOf = (r) => {
+            const raw = rawOf(r), node = nodeOf(r);
+            return (isValidImageUrl(raw.imageUrl) ? raw.imageUrl : (node && (node.imageUrl || node.image || node.photoUrl))) || '';
+        };
+        const uniq = new Map();
+        sections.forEach((sec) => (sec.rows || []).forEach((r) => { const s = srcOf(r); const k = s || ('n:' + norm(r.item)); r._pk = k; if (!uniq.has(k)) uniq.set(k, s); }));
+        const keys = [...uniq.keys()];
+        const [logoData, ...imgs] = await Promise.all([
+            receiptImageToDataUrl('school.png', { maxSide: 900, asPng: true }).then((d) => d ? _rcptTrim(d) : null),
+            ...keys.map((k) => uniq.get(k) ? receiptImageToDataUrl(uniq.get(k), { maxSide: 260, asPng: false }) : Promise.resolve(null))
+        ]);
+        const imgByKey = new Map(keys.map((k, i) => [k, imgs[i]]));
+        const thumb = (r) => { const im = imgByKey.get(r._pk); return im ? `<img class="rcpt-thumb" src="${im}" alt="">` : '<div class="rcpt-noimg">No Photo</div>'; };
+        const nameCell = (r) => {
+            const node = nodeOf(r);
+            const brand = (r.raw && r.raw.brandName) || (node && (node.brand || node.brandName)) || '';
+            return `<td class="l"><div class="rcpt-iname">${esc(r.item)}</div>${brand ? `<div class="rcpt-isub">Brand: ${esc(brand)}</div>` : ''}</td>`;
+        };
+        const snOf = (r) => r.serial || (nodeOf(r) && nodeOf(r).serialNumber) || 'N/A';
+        const unitOf = (r) => r.unit || (nodeOf(r) && nodeOf(r).unit) || 'Pcs';
+        const staffCell = (r) => `<td class="l"><div class="rcpt-iname">${esc(r.teacher)}</div><div class="rcpt-isub">ADEK: ${esc(r.uid || '-')}</div></td>`;
+        const th = (l, w) => `<th${w ? ` style="width:${w}px"` : ''}>${l}</th>`;
+        const box = (title, rowsArr) => `<div class="rcpt-box"><h4>${title}</h4>${rowsArr.map(([k, v]) => `<div class="rcpt-row"><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
+
+        const page = (sec, idx) => {
+            const rows = (sec.rows || []).slice().sort((a, b) => a.date - b.date);
+            const info = sec.info || {};
+            const totalQty = rows.reduce((s, r) => s + r.qty, 0);
+            const orders = new Set(rows.map((r) => r.orderId)).size;
+            const staff = new Set(rows.map((r) => r.uid || r.teacher)).size;
+            const vno = sec.voucherNo || (sections.length === 1 ? key : `${key}-${String(sec.id || idx + 1).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 14)}`);
+            const D = (r) => `<td>${esc(fmtDate(r.date))}</td><td>${esc(fmtTime(r.date))}</td>`;
+            let sub = 'Department of Educational Stationery &amp; Supplies', left, right, head, body, totalRow;
+
+            if (sec.mode === 'teacher') {
+                sub = 'Staff-wise issue report';
+                left = box('Staff Information', [['Staff Name', info.name || ''], ['Staff / ADEK Pass No.', info.uid || ''], ['Department / Designation', info.dept || 'Educational Staff'], ['Period', meta.monthLabel || '']]);
+                right = box('Summary', [['Item Lines', rows.length], ['Orders Completed', orders], ['Total Quantity Issued', totalQty]]);
+                head = th('#', 24) + th('Date', 66) + th('Time', 40) + th('Order No.', 82) + th('Photo', 54) + th('Item Description') + th('Serial / Batch', 80) + th('Unit', 36) + th('Quantity', 50);
+                body = rows.map((r, i) => `<tr><td>${i + 1}</td>${D(r)}<td><span class="rcpt-sn">${esc(r.orderId)}</span></td><td>${thumb(r)}</td>${nameCell(r)}<td><span class="rcpt-sn">${esc(String(snOf(r)))}</span></td><td>${esc(unitOf(r))}</td><td><b>${r.qty}</b></td></tr>`).join('');
+                totalRow = `<tr class="rcpt-total"><td colspan="8" style="text-align:right">TOTAL QUANTITY</td><td>${totalQty}</td></tr>`;
+            } else if (sec.mode === 'dept') {
+                sub = 'Department-wise issue report';
+                left = box('Department Information', [['Department / Designation', info.dept || ''], ['Staff Included', staff], ['Period', meta.monthLabel || '']]);
+                right = box('Summary', [['Item Lines', rows.length], ['Orders Completed', orders], ['Total Quantity Issued', totalQty]]);
+                head = th('#', 24) + th('Date', 66) + th('Time', 40) + th('Staff / ADEK Pass No.', 130) + th('Photo', 54) + th('Item Description') + th('Serial / Batch', 80) + th('Unit', 36) + th('Quantity', 50);
+                body = rows.map((r, i) => `<tr><td>${i + 1}</td>${D(r)}${staffCell(r)}<td>${thumb(r)}</td>${nameCell(r)}<td><span class="rcpt-sn">${esc(String(snOf(r)))}</span></td><td>${esc(unitOf(r))}</td><td><b>${r.qty}</b></td></tr>`).join('');
+                totalRow = `<tr class="rcpt-total"><td colspan="8" style="text-align:right">TOTAL QUANTITY</td><td>${totalQty}</td></tr>`;
+            } else if (sec.mode === 'item') {
+                sub = 'Item-wise issue report';
+                const r0 = rows[0] || {};
+                const node = r0.item ? nodeOf(r0) : null;
+                const brand = (r0.raw && r0.raw.brandName) || (node && (node.brand || node.brandName)) || '';
+                const itemBox = box('Item Information', [['Item Name', info.item || r0.item || ''], ['Serial / Batch', snOf(r0)], ['Unit', unitOf(r0)]].concat(brand ? [['Brand', brand]] : []));
+                left = itemBox.replace('</div></div>', '</div><div style="text-align:center;padding:8px">' + thumb(r0).replace('class="rcpt-thumb"', 'class="rcpt-thumb" style="width:84px;height:84px"') + '</div></div>');
+                if (left === itemBox) left = itemBox;
+                right = box('Summary', [['Staff Received', staff], ['Orders Completed', orders], ['Total Quantity Issued', totalQty], ['Period', meta.monthLabel || '']]);
+                head = th('#', 24) + th('Date', 66) + th('Time', 40) + th('Staff Name') + th('ADEK Pass No.', 96) + th('Department', 110) + th('Order No.', 86) + th('Quantity', 54);
+                body = rows.map((r, i) => `<tr><td>${i + 1}</td>${D(r)}<td class="l"><div class="rcpt-iname">${esc(r.teacher)}</div></td><td><span class="rcpt-sn">${esc(r.uid || '-')}</span></td><td>${esc(r.dept || '')}</td><td><span class="rcpt-sn">${esc(r.orderId)}</span></td><td><b>${r.qty}</b></td></tr>`).join('');
+                totalRow = `<tr class="rcpt-total"><td colspan="7" style="text-align:right">TOTAL QUANTITY</td><td>${totalQty}</td></tr>`;
+            } else {                                                                    // 'all' (old format)
+                const s = info.staff || null;
+                left = s ? box('Staff Information', [['Staff Name', s.name], ['Staff / ADEK ID', s.uid], ['Department', s.dept || 'Educational Staff']])
+                    : box('Report Scope', [['Scope', info.scopeLabel || 'All staff'], ['Staff Included', staff], ['Period', meta.monthLabel || '']]);
+                right = box('Summary', [['Item Lines', rows.length], ['Orders Completed', orders], ['Total Quantity Issued', totalQty]]);
+                head = th('#', 26) + th('Date', 70) + th('Time', 42) + th('Photo', 58) + th('Item Description') + th('Serial / Batch', 92) + th('Unit', 40) + th('Quantity', 54);
+                body = rows.map((r, i) => `<tr><td>${i + 1}</td>${D(r)}<td>${thumb(r)}</td>${nameCell(r)}<td><span class="rcpt-sn">${esc(String(snOf(r)))}</span></td><td>${esc(unitOf(r))}</td><td><b>${r.qty}</b></td></tr>`).join('');
+                totalRow = `<tr class="rcpt-total"><td colspan="7" style="text-align:right">TOTAL QUANTITY</td><td>${totalQty}</td></tr>`;
+            }
+            const cols = head.split('</th>').length - 1;
+            return `
+        <div class="mv-page">
+        <div class="rcpt-topbar"></div>
+        <div class="rcpt-head">
+            ${logoData ? `<img class="rcpt-logo" src="${logoData}" alt="Jern Yafoor Charter School">` : '<div><div class="rcpt-title">JERN YAFOOR CHARTER SCHOOL</div><div class="rcpt-sub">Abu Dhabi, United Arab Emirates</div></div>'}
+            <div class="rcpt-title-box">
+                <p class="rcpt-title">MONTHLY STATIONERY ISSUE VOUCHER</p>
+                <p class="rcpt-sub">${sub}</p>
+                <span class="rcpt-status rcpt-st-done">ISSUED ITEMS - ${esc(String(meta.monthLabel || '').toUpperCase())}</span>
+            </div>
+        </div>
+        <div class="rcpt-meta">
+            <div>Voucher No.<b>${esc(vno)}</b></div>
+            <div>Period<b>${esc(meta.monthLabel || '')}</b></div>
+            <div>Generated On<b>${esc(_rcptFmtDate(Date.now()))}</b></div>
+            <div>${_rcptBarcodeSvg(vno)}</div>
+        </div>
+        <div class="rcpt-cols">${left}${right}</div>
+        <div class="rcpt-sec">
+            <h3>Items Issued</h3>
+            <table class="rcpt-table">
+                <thead><tr>${head}</tr></thead>
+                <tbody>${body || `<tr><td colspan="${cols}">No items</td></tr>`}${totalRow}</tbody>
+            </table>
+        </div>
+        <div class="rcpt-foot">
+            <b>Notice:</b> Issued items are strictly for official educational use within Jern Yafoor Charter School premises.<br>
+            Computer-generated report from the Jern Yafoor Stationery Tracking System &bull; Printed on ${esc(_rcptFmtDate(Date.now()))}
+        </div>
+        </div>`;
+        };
+
+        return `<style>.mv-page+.mv-page{page-break-before:always;break-before:page}@media screen{.mv-page+.mv-page{margin-top:18px;border-top:3px dashed #cbd5e1;padding-top:14px}}</style><div class="rcpt">${sections.map(page).join('')}</div>`;
+    }
+    // new API: one voucher page per section (teacher / department / item); several sections = one document, one page each
+    window.openMonthlyVoucherSections = async function (sections, meta) {
+        if (!sections || !sections.length || !sections.some((s) => s.rows && s.rows.length)) { showToast('No items to show in the voucher.', 'error'); return; }
+        const clean = (v) => String(v || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
+        const idPart = sections.length === 1 ? clean(sections[0].id) : 'ALL';
+        const key = `MONTHLY-${meta.month}-${String(meta.mode || 'x').toUpperCase()}-${idPart}`;
+        window.__monthlyVouchers[key] = { sections, meta };
+        return window.viewOrderReceipt(key);
+    };
+    window.__buildMonthlyVoucherHtml = buildMonthlyVoucherHtml;
+
+    // the existing viewer / PDF / print all go through buildReceiptForOrder -> teach it the monthly key
+    const origBuild = buildReceiptForOrder;
+    buildReceiptForOrder = async function (orderId, forExport) {
+        const key = String(orderId || '');
+        if (key.startsWith('MONTHLY-') && window.__monthlyVouchers[key]) {
+            return { order: {}, html: await buildMonthlyVoucherHtml(window.__monthlyVouchers[key], key) };
+        }
+        const res = await origBuild.apply(this, arguments);
+        // normal voucher: list the items the admin did NOT approve (so the paper record is complete)
+        try {
+            const rj = res && res.order && res.order.rejectedItems;
+            const list = Array.isArray(rj) ? rj : Object.values(rj || {});
+            if (list.length && typeof res.html === 'string') {
+                const rows = list.map((it, i) => `<tr><td>${i + 1}</td><td class="l"><div class="rcpt-iname">${esc(it.itemName || it.name || 'Item')}</div></td><td>${esc(String(it.serialNumber || it.serial || 'N/A'))}</td><td><b>${esc(it.requestQuantity || '')}</b></td><td class="l">${esc(it.rejectReason || '')}${it.correctItem ? '<br><b>Needed: ' + esc(it.correctItem) + '</b>' : ''}</td></tr>`).join('');
+                const sec = `<div class="rcpt-sec"><h3>Items Not Approved</h3><table class="rcpt-table"><thead><tr><th style="width:26px">#</th><th>Item</th><th style="width:92px">Serial</th><th style="width:48px">Req Qty</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+                const mark = '<div class="rcpt-signs">';
+                if (res.html.includes(mark)) res.html = res.html.replace(mark, sec + mark);
+            }
+        } catch (e) { console.warn('rejected-items note skipped:', e); }
+        return res;
+    };
+
+    // called by monthly-report.js:  rows = [{date(ms), item, serial, unit, qty, orderId, uid, teacher, raw}]
+    window.openMonthlyVoucher = async function (rows, meta) {
+        if (!rows || !rows.length) { showToast('No items to show in the voucher.', 'error'); return; }
+        const key = `MONTHLY-${meta.month}${meta.uid ? '-' + String(meta.uid).replace(/[^A-Za-z0-9_-]/g, '') : ''}${meta.dept ? '-' + String(meta.dept).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) : ''}`;
+        window.__monthlyVouchers[key] = { rows, meta };
+        return window.viewOrderReceipt(key);
+    };
+
+    // =================================================================================
+    // B) REJECT ONE ITEM (admin)
+    // =================================================================================
+    const ITEM_REASONS = ['Wrong size', 'Wrong item', 'Item not available', 'Out of stock', 'Quantity too high'];
+
+    function overlay(html) {
+        const ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
+        ov.innerHTML = '<div style="background:#fff;color:#1e293b;border-radius:16px;width:100%;max-width:440px;max-height:90vh;overflow:auto;padding:18px;box-shadow:0 24px 48px rgba(0,0,0,.35)">' + html + '</div>';
+        document.body.appendChild(ov);
+        return ov;
+    }
+    const inputCss = 'width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:10px;font-size:16px;color:#1e293b;background:#fff;margin:4px 0 10px';
+
+    function addItemRejectButtons() {
+        const list = document.getElementById('admin-requests-list');
+        if (!list) return;
+        list.querySelectorAll('.request-card').forEach(card => {
+            const act = card.querySelector('.rq-approve, .rq-handover');
+            if (!act) return;                                                    // only pending / approved orders
+            const m = /\(event,\s*'([^']+)'\)/.exec(act.getAttribute('onclick') || '');
+            if (!m) return;
+            card.querySelectorAll('.req-item').forEach((d, idx) => {
+                if (d.querySelector('.rq-item-reject')) return;
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'rq-item-reject';
+                b.textContent = '✖ Reject';
+                b.title = 'Reject only this item';
+                b.setAttribute('data-oid', m[1]);
+                b.setAttribute('data-idx', String(idx));
+                b.setAttribute('data-nm', (d.querySelector('.req-nm') || {}).textContent || '');
+                b.style.cssText = 'margin-left:8px;background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;font-size:.72rem;font-weight:700;padding:4px 8px;cursor:pointer;white-space:nowrap';
+                d.appendChild(b);
+            });
+        });
+    }
+    function watchItemList() {
+        const list = document.getElementById('admin-requests-list');
+        if (!list || list.__itemObs) return !!list;
+        list.__itemObs = new MutationObserver(addItemRejectButtons);
+        list.__itemObs.observe(list, { childList: true });
+        list.addEventListener('click', (ev) => {
+            const b = ev.target.closest && ev.target.closest('.rq-item-reject');
+            if (!b) return;
+            ev.preventDefault(); ev.stopPropagation();
+            window.openRejectItemModal(b.getAttribute('data-oid'), parseInt(b.getAttribute('data-idx'), 10), b.getAttribute('data-nm'));
+        });
+        addItemRejectButtons();
+        return true;
+    }
+    (function boot(n) { if (!watchItemList() && n < 40) setTimeout(() => boot(n + 1), 500); })(0);
+
+    window.openRejectItemModal = function (orderId, idx, itemName) {
+        const chips = ITEM_REASONS.map(r => `<button type="button" data-r="${esc(r)}" style="border:1px solid #cbd5e1;background:#f8fafc;color:#334155;border-radius:999px;padding:6px 12px;font-size:.8rem;font-weight:600;cursor:pointer;margin:0 6px 6px 0">${esc(r)}</button>`).join('');
+        const ov = overlay(
+            '<h3 style="margin:0 0 4px;font-size:1.1rem;font-weight:800">✖ Reject this item</h3>' +
+            `<p style="margin:0 0 10px;font-size:.88rem;color:#475569"><b>${esc(itemName)}</b><br><small style="color:#64748b">Order ${esc(orderId)} - the other items stay in the order.</small></p>` +
+            `<div>${chips}</div>` +
+            `<textarea id="ri-reason" rows="2" maxlength="200" placeholder="Reason (required)" style="${inputCss}"></textarea>` +
+            `<input id="ri-correct" maxlength="120" placeholder="Correct item needed (optional) e.g. Stapler Pin 26/6" style="${inputCss}">` +
+            '<div style="display:flex;gap:10px"><button data-a="x" style="flex:1;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:10px;min-height:44px;font-weight:700;cursor:pointer">Back</button>' +
+            '<button data-a="ok" style="flex:1;border:1px solid #dc2626;background:#dc2626;color:#fff;border-radius:10px;min-height:44px;font-weight:700;cursor:pointer">Reject Item</button></div>');
+        const ta = ov.querySelector('#ri-reason'), cor = ov.querySelector('#ri-correct');
+        ov.addEventListener('click', async (e) => {
+            const chip = e.target.closest && e.target.closest('[data-r]');
+            if (chip) { ta.value = chip.getAttribute('data-r'); return; }
+            const a = e.target.closest && e.target.closest('[data-a]');
+            if (!a) return;
+            if (a.getAttribute('data-a') === 'x') { ov.remove(); return; }
+            const reason = ta.value.trim();
+            if (reason.length < 3) { ta.style.borderColor = '#dc2626'; ta.focus(); return; }
+            a.disabled = true; a.textContent = 'Rejecting...';
+            const ok = await window.rejectOrderItem(orderId, idx, itemName, reason, cor.value.trim());
+            if (ok) ov.remove(); else { a.disabled = false; a.textContent = 'Reject Item'; }
+        });
+        setTimeout(() => ta.focus(), 50);
+    };
+
+    window.rejectOrderItem = async function (orderId, idx, expectName, reason, correctItem) {
+        const who = me();
+        let removed = null, allGone = false, count = 0, problem = '';
+        try {
+            const now = new Date().toISOString();
+            const tx = await runTransaction(ref(db, `orders/${orderId}`), (cur) => {
+                if (cur === null || typeof cur !== 'object') return cur;
+                if (!/^(pending approval|approved)/i.test(String(cur.status || ''))) { problem = 'status'; return; }     // done / cancelled -> abort
+                const n = JSON.parse(JSON.stringify(cur));
+                const its = Array.isArray(n.items) ? n.items : Object.values(n.items || {});
+                const it = its[idx];
+                if (!it || norm(it.itemName) !== norm(expectName)) { problem = 'changed'; return; }
+                its.splice(idx, 1);
+                const rj = Array.isArray(n.rejectedItems) ? n.rejectedItems : Object.values(n.rejectedItems || {});
+                rj.push(Object.assign({}, it, { rejectReason: String(reason).slice(0, 200), correctItem: String(correctItem || '').slice(0, 120), rejectedBy: who.name, rejectedByUid: who.uid, rejectedAt: now }));
+                n.items = its; n.rejectedItems = rj;
+                removed = it; count = rj.length; allGone = its.length === 0;
+                if (allGone) {                                          // nothing left -> same as rejecting the whole order
+                    n.status = 'Cancelled'; n.rejected = true;
+                    n.rejectReason = ('Item rejected: ' + String(reason)).slice(0, 200);
+                    n.rejectedBy = who.name; n.rejectedByUid = who.uid; n.rejectedAt = now; n.cancelledAt = now; n.cancelledBy = who.name;
+                }
+                return n;
+            });
+            if (!tx.committed || !tx.snapshot.exists() || !removed) {
+                showToast(problem === 'changed' ? 'This order was changed by someone else. Please refresh and try again.' : 'This order is already completed or cancelled. Nothing was changed.', 'error');
+                return false;
+            }
+            const o = tx.snapshot.val() || {};
+            try { await logActivity('Item Rejected', `Order ${orderId}: ${removed.itemName} rejected by ${who.name} (${reason})`); } catch (e) { }
+            try {
+                const need = correctItem ? ` Please order: ${correctItem}.` : '';
+                relayPushEvent({
+                    eventKey: allGone ? `rejected_${orderId}_teacher` : `itemrej_${orderId}_${count}_teacher`, toUser: o.teacherUid,
+                    title: allGone ? '❌ Order Rejected' : '⚠️ Item Rejected',
+                    body: `${removed.itemName} (order ${orderId}) was rejected: ${String(reason).slice(0, 80)}.${need}`
+                });
+            } catch (e) { console.warn('Item reject push failed:', e); }
+            showToast(allGone ? `Last item rejected - order ${orderId} cancelled.` : `${removed.itemName} rejected. Other items continue.`, 'success');
+            return true;
+        } catch (err) {
+            console.error('Item reject failed:', err);
+            showToast('Could not reject item: ' + err.message, 'error');
+            return false;
+        }
+    };
+
+    // ---------- teacher: see the rejected items inside the order history ----------
+    const prevRenderHist = renderTeacherOrderHistory;
+    if (typeof prevRenderHist === 'function') {
+        renderTeacherOrderHistory = function () {
+            const r = prevRenderHist.apply(this, arguments);
+            try {
+                const map = new Map();
+                (teacherOrdersState.filtered || []).forEach(([id, o]) => {
+                    const rj = o && o.rejectedItems; const list = Array.isArray(rj) ? rj : Object.values(rj || {});
+                    if (list.length) map.set(String(id), list);
+                });
+                if (!map.size) return r;
+                const note = (list) => '<div class="rej-item-note" style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fef3c7;color:#92400e;font-size:.8rem;font-weight:600">' +
+                    list.map(it => `⚠ ${esc(it.itemName || 'Item')} rejected: ${esc(it.rejectReason || '')}${it.correctItem ? '<br>👉 Please order: <b>' + esc(it.correctItem) + '</b>' : ''}`).join('<br>') + '</div>';
+                document.querySelectorAll('#histList .hist').forEach(h => {
+                    const b = h.querySelector('b'); const m = b && /Order ID:\s*(\S+)\s*\(/.exec(b.textContent);
+                    if (m && map.has(m[1]) && !h.querySelector('.rej-item-note')) h.insertAdjacentHTML('beforeend', note(map.get(m[1])));
+                });
+                document.querySelectorAll('#teacher-history-list tr').forEach(tr => {
+                    const t = tr.textContent;
+                    for (const [id, list] of map) {
+                        if ((t.includes('ID: ' + id + ' ') || t.includes('ID: ' + id + '|')) && !tr.querySelector('.rej-item-note')) {
+                            const td = tr.querySelector('td'); if (td) td.insertAdjacentHTML('beforeend', note(list));
+                        }
+                    }
+                });
+                document.querySelectorAll('#teacher-history-cards .order-mobile-card').forEach(c => {
+                    const idEl = c.querySelector('.omc-id'); const id = idEl && idEl.textContent.trim();
+                    const body = c.querySelector('.omc-body');
+                    if (id && map.has(id) && body && !c.querySelector('.rej-item-note')) body.insertAdjacentHTML('beforeend', note(map.get(id)));
+                });
+            } catch (e) { console.warn('Rejected-item notes skipped:', e); }
+            return r;
+        };
+    }
+
+    // ---------- teacher: in-app popup when one of his items is rejected ----------
+    let itemUnsub = null;
+    function startItemRejectWatcher() {
+        try {
+            if (!currentUser || String(currentUser.role || '').toUpperCase() !== 'TEACHER') return;
+            const myId = String(currentUser.adecPassNumber || currentUser.uid || '');
+            let seeded = false;
+            if (itemUnsub) { try { itemUnsub(); } catch (e) { } }
+            itemUnsub = addListener(ref(db, 'orders'), (snap) => {
+                const data = snap.val() || {};
+                Object.entries(data).forEach(([id, o]) => {
+                    if (!o || String(o.teacherUid) !== myId || !o.rejectedItems || o.rejected) return;
+                    const list = Array.isArray(o.rejectedItems) ? o.rejectedItems : Object.values(o.rejectedItems);
+                    list.forEach((it, i) => {
+                        if (typeof pushInAppNotification !== 'function') return;
+                        pushInAppNotification({ key: `itemrej_${id}_${i + 1}_teacher`, popup: seeded, title: 'Item Rejected',
+                            body: `${it.itemName} (order ${id}) was rejected: ${it.rejectReason || ''}${it.correctItem ? '. Please order: ' + it.correctItem : ''}` });
+                    });
+                });
+                seeded = true;
+            });
+        } catch (e) { console.warn('Item reject watcher skipped:', e); }
+    }
+    const prevRender = window.renderDashboardForRole;
+    if (typeof prevRender === 'function') {
+        window.renderDashboardForRole = function () {
+            const r = prevRender.apply(this, arguments);
+            setTimeout(startItemRejectWatcher, 900);
+            return r;
         };
     }
 })();
