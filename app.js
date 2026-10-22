@@ -2595,6 +2595,7 @@ window.handleFinalHandover = async function(event, orderId) {
                         ? fullInventory[itemSN]
                         : Object.values(fullInventory).find(v => v && String(v.itemName || v.name || '').trim().toLowerCase() === itemNameLower);
 
+                    const unitTxt = escapeHtml(window.__unitLabel ? window.__unitLabel(item, matchedItem) : 'Pcs');   // v2.13.0: real unit
                     const { isFullyCovered, unfulfilledQty, splitPlan } = calculateBatchDispatchSplit(matchedItem || {}, reqQty);
 
                     window.currentHandoverSplitPlans.push({
@@ -2610,7 +2611,7 @@ window.handleFinalHandover = async function(event, orderId) {
                         <div class="item-dispatch-card mb-3 p-3 border rounded bg-white shadow-sm text-start">
                             <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
                                 <span class="fw-bold text-dark fs-6">${index + 1}. ${escapeHtml(item.itemName || item.name)}</span>
-                                <span class="badge bg-primary fs-6">Req: ${reqQty} Pcs</span>
+                                <span class="badge bg-primary fs-6">Req: ${reqQty} ${unitTxt}</span>
                             </div>
                             <div class="dispatch-breakdown bg-light p-2.5 rounded border mb-2">
                                 <div class="fw-bold text-muted small mb-2 d-flex align-items-center gap-1">
@@ -2622,7 +2623,7 @@ window.handleFinalHandover = async function(event, orderId) {
                             html += `
                                 <div class="d-flex justify-content-between text-sm py-1 border-bottom border-light">
                                     <span class="text-dark small"><i class="bi bi-tag-fill me-1 text-secondary"></i>Batch: <strong>${escapeHtml(sp.brand)}</strong> (SN: <code>${escapeHtml(sp.serialNumber)}</code>)</span>
-                                    <span class="fw-bold text-danger text-sm">-${sp.deductQty} Pcs <small class="text-muted fw-normal">(Remaining: ${sp.remainingQtyAfter})</small></span>
+                                    <span class="fw-bold text-danger text-sm">-${sp.deductQty} ${unitTxt} <small class="text-muted fw-normal">(Remaining: ${sp.remainingQtyAfter})</small></span>
                                 </div>`;
                         });
                     } else {
@@ -2632,7 +2633,7 @@ window.handleFinalHandover = async function(event, orderId) {
                     html += `</div>`;
 
                     if (!isFullyCovered) {
-                        html += `<div class="alert alert-warning py-1 px-2 mb-0 small text-danger fw-bold"><i class="bi bi-exclamation-circle-fill me-1"></i> Warning: Stock short by ${unfulfilledQty} Pcs! Insufficient inventory to fully cover request.</div>`;
+                        html += `<div class="alert alert-warning py-1 px-2 mb-0 small text-danger fw-bold"><i class="bi bi-exclamation-circle-fill me-1"></i> Warning: Stock short by ${unfulfilledQty} ${unitTxt}! Insufficient inventory to fully cover request.</div>`;
                     }
 
                     html += `</div>`;
@@ -6043,7 +6044,7 @@ function fetchAuditLedger() {
 
                 if (!itemSn || itemSn === 'N/A') itemSn = '3546353';
                 if (stockBalance === null || stockBalance === undefined || stockBalance === 'N/A') stockBalance = 'In Stock';
-                else if (typeof stockBalance === 'number') stockBalance = `${stockBalance} Pcs`;
+                else if (typeof stockBalance === 'number') stockBalance = `${stockBalance} ${window.__unitLabel ? window.__unitLabel(item) : 'Pcs'}`;
 
                 ledgerData.push({
                     orderId: id,
@@ -6462,7 +6463,7 @@ function fetchAdminOrders() {
                             <h6 class="req-nm">${escapeHtml(it.itemName)}</h6>
                             <small class="req-sn">SN: ${escapeHtml(String(it.serial || it.serialNumber || '-'))}</small>
                         </div>
-                        <span class="req-qty">x${it.requestQuantity}</span>
+                        ${window.__qtyPill ? window.__qtyPill(it) : `<span class="req-qty">x${it.requestQuantity}</span>`}
                     `;
                     wrap.appendChild(d);
                 });
@@ -6553,7 +6554,7 @@ function renderTeacherOrderHistory() {
         } else {
             histList.innerHTML = teacherOrdersState.filtered.map(([id, order]) => {
                 const dateStr = new Date(order.timestamp).toLocaleString();
-                const itemsSummary = order.items ? order.items.map(i => `${i.itemName} ×${i.requestQuantity || 1}`).join(', ') : 'Stationery';
+                const itemsSummary = order.items ? order.items.map(i => `${i.itemName} ×${i.requestQuantity || 1}${i.unit ? ' ' + escapeHtml(i.unit) : ''}`).join(', ') : 'Stationery';
                 return `
                     <div class="hist">
                         <b>Order ID: ${id} (${order.status})</b>
@@ -8276,7 +8277,7 @@ async function loadStockMovementAuditSheet() {
             }
 
             if (!snDisplay || snDisplay === 'N/A') snDisplay = '3546353';
-            const formattedStock = (typeof stockVal === 'number') ? `${stockVal} Pcs` : (stockVal || 'In Stock');
+            const formattedStock = (typeof stockVal === 'number') ? `${stockVal} ${window.__unitLabel ? window.__unitLabel({ itemName: row.itemName, serialNumber: snDisplay }) : 'Pcs'}` : (stockVal || 'In Stock');
 
             const photoHtml = row.itemPhoto ? window.createReloadableImgHtml(row.itemPhoto, row.itemName, 'width: 40px; height: 40px;', true) : '-';
             const teacherSignHtml = window.renderTableSignature(row.teacherSign || row.teacherSignatureUrl);
@@ -10847,4 +10848,58 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             return r;
         };
     }
+})();
+
+// =====================================================================================
+// v2.13.0 (additive) - SHOW THE REAL UNIT (Box / Pcs / Ream ...) NEXT TO EVERY ORDER QUANTITY
+//   Order items already carry `unit` (saved from the inventory when the teacher orders). The admin card and the
+//   handover screen only ever showed "x2" or a hard-coded "Pcs". These helpers give the right unit:
+//   1) the unit saved in the order item   2) else the unit of the matching inventory item   3) else "Pcs".
+//   If the inventory has not finished loading yet, the pill is fixed automatically a moment later.
+//   Display only: no quantity, stock or status logic is touched.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__unitLabel) return;
+    window.__APP_BUILD = '2.13.0';
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function unitInfo(item, node) {
+        try {
+            const u = clean(item && item.unit);
+            if (u) return { unit: u, known: true };
+            let n = node || null;
+            if (!n && typeof _rcptFindInvNode === 'function' && typeof inventoryData === 'object' && inventoryData) n = _rcptFindInvNode(inventoryData, item || {});
+            const nu = clean(n && n.unit);
+            return nu ? { unit: nu, known: true } : { unit: 'Pcs', known: false };
+        } catch (e) { return { unit: 'Pcs', known: false }; }
+    }
+    window.__unitLabel = (item, node) => unitInfo(item, node).unit;
+
+    // big-pack units get an amber pill, everything else keeps the normal blue pill
+    const isPack = (u) => /box|carton|pack|bundle|dozen|ream|set|roll|bottle/i.test(u) && !/^pcs?$|^piece/i.test(u);
+    window.__qtyPill = function (item, node) {
+        const { unit, known } = unitInfo(item, node);
+        const qty = (item && (item.requestQuantity ?? item.quantity ?? item.reqQty)) ?? 1;
+        const style = isPack(unit) ? ' style="background:#b45309"' : '';
+        const pend = known ? '' : ` data-pending="1" data-nm="${esc(item && (item.itemName || item.name))}" data-sn="${esc(item && (item.serialNumber || item.serial || item.itemId))}" data-q="${esc(qty)}"`;
+        return `<span class="req-qty"${style}${pend} title="Give in ${esc(unit)}">x${esc(qty)} ${esc(unit)}</span>`;
+    };
+
+    // inventory arrived after the orders were drawn -> correct the pills that had to guess "Pcs"
+    function refreshPills() {
+        try {
+            document.querySelectorAll('.req-qty[data-pending]').forEach((el) => {
+                const info = unitInfo({ itemName: el.dataset.nm, serialNumber: el.dataset.sn });
+                if (!info.known) return;
+                el.textContent = `x${el.dataset.q} ${info.unit}`;
+                el.title = 'Give in ' + info.unit;
+                if (isPack(info.unit)) el.style.background = '#b45309';
+                el.removeAttribute('data-pending');
+            });
+        } catch (e) { /* display only */ }
+    }
+    window.__refreshUnitPills = refreshPills;
+    setInterval(refreshPills, 1500);
 })();
