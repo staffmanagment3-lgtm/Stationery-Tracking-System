@@ -4788,7 +4788,7 @@ window.initNewTeacherDashboard = function(adecNumber) {
             };
             if (toSign) toSign.onclick = async () => {
                 // v2.10.0: warn when the same item is already in an open order
-                try { if (window.__dupOrderCheck && !(await window.__dupOrderCheck(adec, Object.keys(cart).map(i => ({ itemId: (P[i][7] && P[i][7].id) || P[i][2], itemName: P[i][0], serialNumber: P[i][2] }))))) return; } catch (e) { console.warn('dup check skipped', e); }
+                try { if (window.__dupOrderCheck && !(await window.__dupOrderCheck(adec, Object.keys(cart).map(i => ({ itemId: (P[i][7] && P[i][7].id) || P[i][2], itemName: P[i][0], serialNumber: P[i][2], requestQuantity: cart[i] }))))) return; } catch (e) { console.warn('dup check skipped', e); }
                 // v2.3.0: returning staff -> verify (biometric / password) and auto-attach the saved signature
                 try {
                     const saved = await window.getSavedSignature(adec);
@@ -10288,7 +10288,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             try {
                 if (teacherRequestPad && !teacherRequestPad.isEmpty() && window.stationeryCart && window.stationeryCart.length) {
                     const uid = currentUser && (currentUser.adecPassNumber || currentUser.uid);
-                    const go = await window.__dupOrderCheck(uid, window.stationeryCart.map(i => ({ itemId: i.id, itemName: i.itemName, serialNumber: i.serialNumber })));
+                    const go = await window.__dupOrderCheck(uid, window.stationeryCart.map(i => ({ itemId: i.id, itemName: i.itemName, serialNumber: i.serialNumber, requestQuantity: i.requestQuantity })));
                     if (!go) return;
                 }
             } catch (e) { console.warn('Duplicate check skipped:', e); }
@@ -10902,4 +10902,508 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     }
     window.__refreshUnitPills = refreshPills;
     setInterval(refreshPills, 1500);
+})();
+
+// =====================================================================================
+// v2.14.0 (additive) - LOW STOCK ALERT FOR ADMINS
+//   1) A "Low Stock Alert" card at the top of the admin Inventory tab: Out of stock / Emergency (<=5) / Low (<20).
+//      Same limits as the badges the app already shows (getStatusBadge), so nothing new to learn.
+//   2) A push to all admins when an item NEWLY drops to Emergency (<=5) or Out of stock. One push per drop (even if
+//      several admins are online), several items dropping together = ONE combined push.
+//      Memory of what was already alerted: Firebase  lowStockAlerts/<item>  (+ lowStockMeta/baselineAt).
+//      The very first run only records what is ALREADY low (no push burst); later drops notify.
+//   Read-only on stock: this block never changes inventory, orders or any existing function.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__lowStockV2140) return;
+    window.__lowStockV2140 = true;
+    window.__APP_BUILD = '2.14.0';
+
+    const EMERGENCY_MAX = 5;   // same as the existing "Emergency Reorder" badge
+    const LOW_BELOW = 20;      // same as the existing "Low Stock" badge
+    const PUSH_RANK = { out: 2, emergency: 1 };
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const safeKey = (v) => clean(v).replace(/[.#$\[\]\/]/g, '_').slice(0, 120);
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+
+    // ---------- 1) work out which items are low (reads inventoryData only) ----------
+    function computeList() {
+        const res = [];
+        const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
+        Object.entries(inv).forEach(([id, node]) => {
+            if (!node || typeof node !== 'object') return;
+            const stock = getItemTotalAvailableStock(node);
+            let level = 'ok';
+            if (stock <= 0) level = 'out';
+            else if (stock <= EMERGENCY_MAX) level = 'emergency';
+            else if (stock < LOW_BELOW) level = 'low';
+            if (level === 'ok') return;
+            let unit = clean(node.unit);
+            if (!unit && node.batches && typeof node.batches === 'object') {
+                const b = Object.values(node.batches).find((x) => x && clean(x.unit));
+                if (b) unit = clean(b.unit);
+            }
+            res.push({ key: safeKey(id), name: clean(node.itemName || node.name) || String(id), stock, unit: unit || 'Pcs', level });
+        });
+        const sev = { out: 0, emergency: 1, low: 2 };
+        res.sort((a, b) => (sev[a.level] - sev[b.level]) || (a.stock - b.stock) || a.name.localeCompare(b.name));
+        return res;
+    }
+    window.__lowStockList = computeList;
+
+    // ---------- 2) the card ----------
+    function addStyle() {
+        if (document.getElementById('lsaStyle')) return;
+        const st = document.createElement('style');
+        st.id = 'lsaStyle';
+        st.textContent = `
+        #lowStockAlertCard{margin:0 0 18px;padding:14px 16px;border-radius:14px;border:1px solid rgba(220,38,38,.35);border-left:6px solid #dc2626;background:rgba(220,38,38,.07);color:inherit}
+        #lowStockAlertCard.lsa-soft{border-color:rgba(245,158,11,.4);border-left-color:#f59e0b;background:rgba(245,158,11,.07)}
+        #lowStockAlertCard .lsa-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+        #lowStockAlertCard .lsa-title{font-weight:800;font-size:1.05rem}
+        #lowStockAlertCard .lsa-chip{padding:3px 10px;border-radius:999px;font-size:.78rem;font-weight:700;background:rgba(127,127,127,.15)}
+        #lowStockAlertCard .lsa-toggle{margin-left:auto;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:8px;padding:4px 12px;font-weight:700;font-size:.82rem;cursor:pointer}
+        #lowStockAlertCard .lsa-list{margin-top:10px;display:grid;gap:6px}
+        #lowStockAlertCard .lsa-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;background:rgba(127,127,127,.10)}
+        #lowStockAlertCard .lsa-name{flex:1;font-weight:700;word-break:break-word}
+        #lowStockAlertCard .lsa-qty{font-weight:800;white-space:nowrap}
+        #lowStockAlertCard .lsa-badge{padding:2px 9px;border-radius:999px;font-size:.72rem;font-weight:800;color:#fff;white-space:nowrap}
+        #lowStockAlertCard .lsa-b-out{background:#6b7280}
+        #lowStockAlertCard .lsa-b-emergency{background:#dc2626}
+        #lowStockAlertCard .lsa-b-low{background:#d97706}
+        #lowStockAlertCard .lsa-more{font-size:.8rem;opacity:.75;padding:2px 4px}`;
+        document.head.appendChild(st);
+    }
+    let lastSig = null;
+    let userOpen = null;   // null = automatic (open when something is urgent)
+
+    function renderCard(list) {
+        const host = document.getElementById('tab-inventory');
+        if (!host) return;
+        let card = document.getElementById('lowStockAlertCard');
+        if (!list.length) { if (card) card.remove(); return; }
+        addStyle();
+        if (!card) {
+            card = document.createElement('div');
+            card.id = 'lowStockAlertCard';
+            host.insertBefore(card, host.firstChild);
+        }
+        const nOut = list.filter((x) => x.level === 'out').length;
+        const nEm = list.filter((x) => x.level === 'emergency').length;
+        const nLow = list.filter((x) => x.level === 'low').length;
+        const urgent = nOut + nEm > 0;
+        const open = userOpen === null ? urgent : userOpen;
+        card.classList.toggle('lsa-soft', !urgent);
+        const label = { out: 'Out of stock', emergency: 'Emergency reorder', low: 'Low stock' };
+        const MAX_ROWS = 40;
+        const rows = list.slice(0, MAX_ROWS).map((x) =>
+            `<div class="lsa-row"><span class="lsa-name">${esc(x.name)}</span><span class="lsa-qty">${esc(x.stock)} ${esc(x.unit)}</span><span class="lsa-badge lsa-b-${x.level}">${label[x.level]}</span></div>`
+        ).join('');
+        const more = list.length > MAX_ROWS ? `<div class="lsa-more">+ ${list.length - MAX_ROWS} more items</div>` : '';
+        card.innerHTML =
+            `<div class="lsa-head"><span class="lsa-title">⚠️ Low Stock Alert</span>` +
+            (nOut ? `<span class="lsa-chip">🚫 Out: ${nOut}</span>` : '') +
+            (nEm ? `<span class="lsa-chip">🔴 Emergency (≤${EMERGENCY_MAX}): ${nEm}</span>` : '') +
+            (nLow ? `<span class="lsa-chip">🟠 Low (&lt;${LOW_BELOW}): ${nLow}</span>` : '') +
+            `<button type="button" class="lsa-toggle">${open ? 'Hide list' : 'Show list'}</button></div>` +
+            (open ? `<div class="lsa-list">${rows}${more}</div>` : '');
+        const btn = card.querySelector('.lsa-toggle');
+        if (btn) btn.addEventListener('click', () => { userOpen = !open; lastSig = null; tick(); });
+    }
+
+    // ---------- 3) push to admins when an item NEWLY drops to Emergency / Out ----------
+    function sendPush(items) {
+        try {
+            const parts = items.map((x) => x.level === 'out' ? `${x.name} (OUT of stock)` : `${x.name} (${x.stock} ${x.unit} left)`);
+            let body = parts.join(', ');
+            if (body.length > 140) body = body.slice(0, 137) + '…';
+            const title = items.length === 1
+                ? (items[0].level === 'out' ? '🚫 Out of stock' : '⚠️ Low stock - reorder needed')
+                : `⚠️ ${items.length} items need reorder`;
+            relayPushEvent({ eventKey: 'lowstock_' + Date.now(), title, body, toAdmins: true });
+        } catch (e) { console.warn('low-stock push skipped:', e); }
+    }
+
+    let pushBusy = false;
+    async function pushCheck() {
+        if (pushBusy) return;
+        pushBusy = true;
+        try {
+            if (!isAdmin()) return;
+            const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
+            if (!Object.keys(inv).length) return;                         // inventory not loaded yet
+            const list = computeList().filter((x) => x.level === 'out' || x.level === 'emergency');
+            const now = new Date().toISOString();
+
+            const metaSnap = await get(ref(db, 'lowStockMeta/baselineAt'));
+            if (!metaSnap.exists()) {                                       // first ever run: remember, don't notify
+                const base = {};
+                list.forEach((x) => { base[x.key] = { level: x.level, name: x.name, stock: x.stock, at: now, baseline: true }; });
+                if (Object.keys(base).length) await update(ref(db, 'lowStockAlerts'), base);
+                await set(ref(db, 'lowStockMeta/baselineAt'), now);
+                return;
+            }
+
+            const flags = (await get(ref(db, 'lowStockAlerts'))).val() || {};
+            const won = [];
+            for (const x of list) {
+                const f = flags[x.key];
+                if (f && PUSH_RANK[f.level] >= PUSH_RANK[x.level]) {
+                    // already alerted. If it got better but is still low, lower the memory so a later drop alerts again.
+                    if (PUSH_RANK[f.level] > PUSH_RANK[x.level]) await update(ref(db, 'lowStockAlerts/' + x.key), { level: x.level, stock: x.stock, name: x.name });
+                    continue;
+                }
+                // claim the alert: if two admins are online only ONE transaction commits, so only one push goes out
+                const tx = await runTransaction(ref(db, 'lowStockAlerts/' + x.key), (cur) => {
+                    if (cur && PUSH_RANK[cur.level] >= PUSH_RANK[x.level]) return;   // someone else already claimed it
+                    return { level: x.level, name: x.name, stock: x.stock, at: now };
+                });
+                if (tx && tx.committed) won.push(x);
+            }
+
+            // stock is back above the limit -> forget it, so the next drop alerts again
+            const stillLow = new Set(list.map((x) => x.key));
+            for (const k of Object.keys(flags)) {
+                if (stillLow.has(k)) continue;
+                const hit = Object.entries(inv).find(([id]) => safeKey(id) === k);
+                if (hit && getItemTotalAvailableStock(hit[1]) > EMERGENCY_MAX) await remove(ref(db, 'lowStockAlerts/' + k));
+            }
+
+            if (won.length) sendPush(won);
+        } catch (e) {
+            console.warn('low-stock check skipped:', e);                  // card still works; only the push is skipped
+        } finally { pushBusy = false; }
+    }
+    window.__lowStockCheckNow = pushCheck;
+
+    // ---------- 4) light watcher (no change to the existing inventory listeners) ----------
+    let lastInv = null, debounce = null;
+    function tick() {
+        try {
+            if (!isAdmin()) {
+                const c = document.getElementById('lowStockAlertCard');
+                if (c) c.remove();
+                lastSig = null;
+                return;
+            }
+            if (!inventoryData || !Object.keys(inventoryData).length) return;
+            const list = computeList();
+            const sig = userOpen + '|' + list.map((x) => x.key + ':' + x.stock + ':' + x.level).join(',');
+            if (sig !== lastSig || (list.length && !document.getElementById('lowStockAlertCard'))) {
+                lastSig = sig;
+                renderCard(list);
+            }
+            if (inventoryData !== lastInv) {                                // inventory snapshot changed
+                lastInv = inventoryData;
+                clearTimeout(debounce);
+                debounce = setTimeout(pushCheck, 2500);                     // wait: a handover can drop many items together
+            }
+        } catch (e) { /* display only */ }
+    }
+    setInterval(tick, 2000);
+})();
+
+// =====================================================================================
+// v2.15.0 (additive) - MONTHLY LIMIT PER ITEM, PER TEACHER
+//   * Admin (Inventory tab -> "Item Monthly Limits"): set a monthly limit for ANY item, one by one (empty = no limit).
+//     Saved in Firebase  itemLimits/<inventory item id> = {limit, name, unit}.  Admin also picks what happens when a
+//     teacher crosses it (settings/limitMode):  'request' (default) = teacher may send an "extra" request that the admin
+//     sees flagged "Over limit" and approves/rejects as usual,   'block' = the order cannot be placed.
+//   * Teacher: limit + "left this month" shown on the product card; a popup when an order would cross the limit.
+//   * Used this month = this teacher's non-cancelled / non-rejected orders of that item in the current calendar month.
+//   This block only READS orders and inventory. It hooks the pre-order check (window.__dupOrderCheck) and never
+//   changes an order, stock, approval or handover.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__monthlyLimitsV2150) return;
+    window.__monthlyLimitsV2150 = true;
+    window.__APP_BUILD = '2.15.0';
+
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const safeKey = (v) => clean(v).replace(/[.#$\[\]\/]/g, '_').slice(0, 120);
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const myUid = () => (currentUser && (currentUser.adecPassNumber || currentUser.uid)) || '';
+
+    let limits = {};            // safeKey(inventory id) -> {limit, name, unit}
+    let mode = 'request';       // 'request' | 'block'
+    let adminCache = {};        // all orders (admin only; same listener data the app already downloads)
+    let startedFor = null;
+
+    // ---------- inventory + usage helpers ----------
+    function findInvEntry(item) {
+        const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
+        const sn = clean(item && (item.serialNumber || item.batchSerialNumber || item.serial || item.sn || item.itemId));
+        if (sn && inv[sn] && typeof inv[sn] === 'object') return [sn, inv[sn]];
+        const snL = sn.toLowerCase();
+        const nameL = clean(item && (item.itemName || item.name)).toLowerCase();
+        return Object.entries(inv).find(([id, n]) => n && typeof n === 'object' && (
+            (snL && clean(n.serialNumber || n.batchNo).toLowerCase() === snL) ||
+            (nameL && clean(n.itemName || n.name).toLowerCase() === nameL)
+        )) || null;
+    }
+    const itemsOf = (o) => Array.isArray(o && o.items) ? o.items : Object.values((o && o.items) || {});
+    function countsThisMonth(o) {
+        if (!o || o.rejected === true) return false;
+        const st = clean(o.status).toLowerCase();
+        if (st.includes('cancel') || st.includes('reject')) return false;
+        const d = new Date(o.timestamp || o.requestedAt);
+        if (isNaN(d)) return false;
+        const n = new Date();
+        return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth();
+    }
+    function usedFor(entries, uid, limKey) {
+        let used = 0;
+        entries.forEach(([id, o]) => {
+            if (!o || String(o.teacherUid) !== String(uid) || !countsThisMonth(o)) return;
+            itemsOf(o).forEach((it) => {
+                const e = findInvEntry(it);
+                if (e && safeKey(e[0]) === limKey) used += Math.max(0, Number(it.requestQuantity ?? it.quantity ?? 0) || 0);
+            });
+        });
+        return used;
+    }
+    function myEntriesSync() {
+        const a = (typeof teacherOrdersState === 'object' && teacherOrdersState && Array.isArray(teacherOrdersState.allItems)) ? teacherOrdersState.allItems : [];
+        return a.filter(([id, o]) => o && String(o.teacherUid) === String(myUid()));
+    }
+    async function myEntries(uid) {
+        const e = myEntriesSync().filter(([id, o]) => String(o.teacherUid) === String(uid));
+        if (e.length) return e;
+        try {
+            const s = await get(ref(db, 'orders'));
+            return Object.entries(s.val() || {}).filter(([id, o]) => o && String(o.teacherUid) === String(uid));
+        } catch (x) { return []; }
+    }
+    const unitOf = (node) => clean(node && node.unit) || 'Pcs';
+    window.__limitUsedFor = usedFor;
+
+    // ---------- small popup ----------
+    function popup(html, buttons) {
+        return new Promise((resolve) => {
+            const ov = document.createElement('div');
+            ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:16px';
+            const bx = document.createElement('div');
+            bx.style.cssText = 'background:#fff;color:#0f172a;border-radius:16px;max-width:420px;width:100%;max-height:88vh;overflow:auto;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.35);font-family:inherit';
+            bx.innerHTML = html + '<div style="display:flex;gap:10px;margin-top:14px">' + buttons.map((b) =>
+                `<button type="button" data-a="${b.id}" style="flex:1;padding:11px 12px;border-radius:10px;font-weight:800;border:1px solid ${b.border || 'transparent'};background:${b.bg};color:${b.color};cursor:pointer">${b.label}</button>`).join('') + '</div>';
+            ov.appendChild(bx);
+            ov.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('[data-a]'); if (!a) return; ov.remove(); resolve(a.getAttribute('data-a')); });
+            document.body.appendChild(ov);
+        });
+    }
+
+    // ---------- 1) the check at order time (teacher) ----------
+    async function limitCheck(uid, newItems) {
+        if (!uid || !Array.isArray(newItems) || !newItems.length || !Object.keys(limits).length) return true;
+        const need = {}, nodes = {};
+        newItems.forEach((ni) => {
+            const e = findInvEntry(ni);
+            if (!e) return;
+            const k = safeKey(e[0]);
+            if (!limits[k]) return;
+            need[k] = (need[k] || 0) + (Math.max(0, Number(ni.requestQuantity)) || 1);
+            nodes[k] = e[1];
+        });
+        const keys = Object.keys(need);
+        if (!keys.length) return true;
+        const entries = await myEntries(uid);
+        const over = [];
+        keys.forEach((k) => {
+            const lim = limits[k].limit, used = usedFor(entries, uid, k);
+            if (used + need[k] > lim) over.push({ name: limits[k].name || clean(nodes[k].itemName || nodes[k].name), unit: unitOf(nodes[k]), lim, used, ask: need[k] });
+        });
+        if (!over.length) return true;
+        const rows = over.map((o) => `<li style="margin:7px 0"><b>${esc(o.name)}</b><br><small style="color:#64748b">Monthly limit ${o.lim} ${esc(o.unit)} · already ordered ${o.used} · you asked ${o.ask}</small></li>`).join('');
+        if (mode === 'block') {
+            await popup('<div style="font-size:2rem;text-align:center">⛔</div><h3 style="margin:6px 0 8px;font-size:1.15rem;font-weight:800;text-align:center">Monthly limit reached</h3>' +
+                '<p style="font-size:.9rem;color:#475569;margin:0 0 6px">This order would cross the monthly limit, so it cannot be placed:</p>' +
+                `<ul style="margin:0;padding-left:18px;font-size:.92rem">${rows}</ul><p style="font-size:.85rem;color:#64748b;margin:10px 0 0">Please reduce the quantity or contact the admin.</p>`,
+                [{ id: 'ok', label: 'OK', bg: '#2563eb', color: '#fff' }]);
+            return false;
+        }
+        const a = await popup('<div style="font-size:2rem;text-align:center">📏</div><h3 style="margin:6px 0 8px;font-size:1.15rem;font-weight:800;text-align:center">Monthly limit reached</h3>' +
+            '<p style="font-size:.9rem;color:#475569;margin:0 0 6px">This order is more than your monthly limit for:</p>' +
+            `<ul style="margin:0;padding-left:18px;font-size:.92rem">${rows}</ul>` +
+            '<p style="font-size:.85rem;color:#64748b;margin:10px 0 0">You can still send it as an <b>extra request</b>. The admin will see it marked "Over limit" and decide.</p>',
+            [{ id: 'no', label: 'Cancel', bg: '#fff', color: '#334155', border: '#cbd5e1' }, { id: 'yes', label: 'Request Extra', bg: '#d97706', color: '#fff' }]);
+        return a === 'yes';
+    }
+    window.__limitCheck = limitCheck;
+
+    // hook into the existing pre-order check (both order flows already call it); then run the original duplicate check
+    const origDup = window.__dupOrderCheck;
+    window.__dupOrderCheck = async function (uid, newItems) {
+        try { if ((await limitCheck(uid, newItems)) === false) return false; }
+        catch (e) { console.warn('Limit check skipped:', e); }
+        return typeof origDup === 'function' ? origDup.apply(this, arguments) : true;
+    };
+
+    // ---------- 2) teacher: limit + "left" on product cards ----------
+    function addStyle() {
+        if (document.getElementById('mlimStyle')) return;
+        const st = document.createElement('style'); st.id = 'mlimStyle';
+        st.textContent = `.mlim{margin:6px 0;padding:4px 9px;border-radius:8px;font-size:.78rem;font-weight:700;background:rgba(217,119,6,.14);color:#b45309}
+        .mlim.mlim-zero{background:rgba(220,38,38,.14);color:#b91c1c}
+        .lim-flag{display:inline-block;margin-top:4px;padding:2px 8px;border-radius:8px;font-size:.74rem;font-weight:800;background:#dc2626;color:#fff}
+        #itemLimitsBar{margin:0 0 14px}
+        #itemLimitsBar button{border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:10px;padding:8px 14px;font-weight:800;cursor:pointer}`;
+        document.head.appendChild(st);
+    }
+    function annotateTeacher() {
+        const grid = document.getElementById('grid');
+        if (!grid || !Object.keys(limits).length) return;
+        const entries = myEntriesSync();
+        grid.querySelectorAll('article.p').forEach((card) => {
+            const e = findInvEntry({ serialNumber: card.getAttribute('data-sn'), itemName: card.getAttribute('data-name') });
+            const k = e && safeKey(e[0]);
+            let chip = card.querySelector('.mlim');
+            if (!k || !limits[k]) { if (chip) chip.remove(); return; }
+            const lim = limits[k].limit, left = Math.max(0, lim - usedFor(entries, myUid(), k)), u = unitOf(e[1]);
+            if (!chip) {
+                chip = document.createElement('div'); chip.className = 'mlim';
+                const add = card.querySelector('.add');
+                if (add && add.parentElement) add.parentElement.insertBefore(chip, add); else card.appendChild(chip);
+            }
+            chip.classList.toggle('mlim-zero', left === 0);
+            chip.textContent = `📏 Monthly limit ${lim} ${u} · Left this month: ${left}`;
+        });
+    }
+
+    // ---------- 3) admin: flag pending requests that are over the limit ----------
+    function annotateAdmin() {
+        const list = document.getElementById('admin-requests-list');
+        if (!list || !isAdmin() || !Object.keys(limits).length) return;
+        const entries = Object.entries(adminCache || {});
+        list.querySelectorAll('.request-card').forEach((card) => {
+            const ap = card.querySelector('.rq-approve');
+            const m = ap && /handleAdminPrepareClick\(event,\s*'([^']+)'\)/.exec(ap.getAttribute('onclick') || '');
+            const order = m && adminCache && adminCache[m[1]];
+            if (!order) return;
+            const its = itemsOf(order);
+            card.querySelectorAll('.req-item').forEach((row, i) => {
+                const it = its[i]; if (!it) return;
+                const e = findInvEntry(it); const k = e && safeKey(e[0]);
+                const old = row.querySelector('.lim-flag'); if (old) old.remove();
+                if (!k || !limits[k]) return;
+                const used = usedFor(entries, order.teacherUid, k);
+                if (used <= limits[k].limit) return;
+                const holder = (row.querySelector('.req-nm') || {}).parentElement || row;
+                const f = document.createElement('div'); f.className = 'lim-flag';
+                f.textContent = `⚠ Over monthly limit: ${used} of ${limits[k].limit} ${unitOf(e[1])} this month`;
+                holder.appendChild(f);
+            });
+        });
+    }
+
+    // ---------- 4) admin: Item Monthly Limits editor ----------
+    function openEditor() {
+        addStyle();
+        const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
+        const rows = Object.entries(inv).filter(([id, n]) => n && typeof n === 'object')
+            .map(([id, n]) => ({ k: safeKey(id), name: clean(n.itemName || n.name) || id, unit: unitOf(n), cat: clean(n.category), sn: clean(n.serialNumber), stock: getItemTotalAvailableStock(n) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        const ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.65);display:flex;align-items:center;justify-content:center;padding:12px';
+        ov.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:16px;width:100%;max-width:640px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.4)">
+          <div style="padding:16px 18px 8px"><div style="font-size:1.15rem;font-weight:800">📏 Item Monthly Limits</div>
+            <div style="font-size:.82rem;color:#64748b;margin-top:2px">Max quantity ONE teacher can order per month. Leave empty = no limit.</div>
+            <div style="margin-top:10px;font-size:.85rem;font-weight:700">When a teacher crosses the limit:</div>
+            <label style="display:block;font-size:.85rem;margin:4px 0"><input type="radio" name="lmMode" value="request"> Let teacher send an <b>extra request</b> (admin sees "Over limit" and decides)</label>
+            <label style="display:block;font-size:.85rem;margin:4px 0"><input type="radio" name="lmMode" value="block"> <b>Block</b> the order</label>
+            <div style="display:flex;gap:8px;margin-top:10px"><input id="lmSearch" type="search" placeholder="Search item / serial / category" style="flex:1;padding:9px 10px;border:1px solid #cbd5e1;border-radius:10px;color:#0f172a;background:#fff">
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:center"><span style="font-size:.8rem;color:#475569">Fill empty shown items with</span><input id="lmBulk" type="number" min="1" max="9999" style="width:80px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;color:#0f172a;background:#fff"><button type="button" id="lmBulkGo" style="padding:6px 10px;border-radius:8px;border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;font-weight:700;cursor:pointer">Apply</button></div>
+          </div>
+          <div id="lmList" style="overflow:auto;padding:4px 18px;flex:1"></div>
+          <div style="display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid #e2e8f0"><button type="button" id="lmClose" style="flex:1;padding:11px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:800;cursor:pointer">Close</button><button type="button" id="lmSave" style="flex:1;padding:11px;border-radius:10px;border:0;background:#2563eb;color:#fff;font-weight:800;cursor:pointer">Save</button></div></div>`;
+        document.body.appendChild(ov);
+        ov.querySelector(`input[name="lmMode"][value="${mode}"]`).checked = true;
+        const listEl = ov.querySelector('#lmList');
+        const typed = {};     // key -> text the admin typed (survives searching)
+        rows.forEach((r) => { typed[r.k] = limits[r.k] ? String(limits[r.k].limit) : ''; });
+        function draw() {
+            const q = clean(ov.querySelector('#lmSearch').value).toLowerCase();
+            const shown = rows.filter((r) => !q || (r.name + ' ' + r.sn + ' ' + r.cat).toLowerCase().includes(q));
+            listEl.innerHTML = shown.length ? shown.map((r) =>
+                `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9"><div style="flex:1;min-width:0"><div style="font-weight:700;word-break:break-word">${esc(r.name)}</div><div style="font-size:.74rem;color:#64748b">${esc(r.cat)}${r.sn ? ' · SN ' + esc(r.sn) : ''} · in stock ${r.stock} ${esc(r.unit)}</div></div>` +
+                `<input data-k="${esc(r.k)}" type="number" min="1" max="9999" inputmode="numeric" placeholder="No limit" value="${esc(typed[r.k])}" style="width:92px;padding:7px 8px;border:1px solid #cbd5e1;border-radius:8px;color:#0f172a;background:#fff"><span style="font-size:.78rem;color:#475569;width:38px">${esc(r.unit)}</span></div>`).join('')
+                : '<div style="padding:18px;color:#64748b;text-align:center">No items match.</div>';
+        }
+        draw();
+        listEl.addEventListener('input', (e) => { const k = e.target && e.target.getAttribute && e.target.getAttribute('data-k'); if (k) typed[k] = e.target.value; });
+        ov.querySelector('#lmSearch').addEventListener('input', draw);
+        ov.querySelector('#lmBulkGo').addEventListener('click', () => {
+            const n = Math.floor(Number(ov.querySelector('#lmBulk').value));
+            if (!(n >= 1)) return;
+            const q = clean(ov.querySelector('#lmSearch').value).toLowerCase();
+            rows.filter((r) => !q || (r.name + ' ' + r.sn + ' ' + r.cat).toLowerCase().includes(q)).forEach((r) => { if (!clean(typed[r.k])) typed[r.k] = String(n); });
+            draw();
+        });
+        ov.querySelector('#lmClose').addEventListener('click', () => ov.remove());
+        ov.querySelector('#lmSave').addEventListener('click', async () => {
+            const btn = ov.querySelector('#lmSave'); btn.disabled = true; btn.textContent = 'Saving...';
+            try {
+                const upd = {}; let changed = 0;
+                rows.forEach((r) => {
+                    const t = clean(typed[r.k]); const n = Math.floor(Number(t));
+                    const cur = limits[r.k] ? limits[r.k].limit : null;
+                    if (t && n >= 1 && n <= 9999) { if (cur !== n) { upd[r.k] = { limit: n, name: r.name, unit: r.unit, by: clean(currentUser && currentUser.name), at: new Date().toISOString() }; changed++; } }
+                    else if (!t && cur !== null) { upd[r.k] = null; changed++; }
+                });
+                if (Object.keys(upd).length) await update(ref(db, 'itemLimits'), upd);
+                const m = ov.querySelector('input[name="lmMode"]:checked').value;
+                if (m !== mode) { await set(ref(db, 'settings/limitMode'), m); mode = m; changed++; }
+                if (typeof showToast === 'function') showToast(changed ? 'Limits saved' : 'Nothing changed');
+                ov.remove(); lastSig = null; tick();
+            } catch (e) { console.warn('Saving limits failed:', e); btn.disabled = false; btn.textContent = 'Save'; alert('Could not save limits. Please try again.'); }
+        });
+    }
+    window.__openItemLimits = openEditor;
+
+    let lastSig = null;
+    function ensureBar() {
+        const host = document.getElementById('tab-inventory');
+        if (!host || !isAdmin()) { const b = document.getElementById('itemLimitsBar'); if (b && !isAdmin()) b.remove(); return; }
+        addStyle();
+        let bar = document.getElementById('itemLimitsBar');
+        if (!bar) {
+            bar = document.createElement('div'); bar.id = 'itemLimitsBar';
+            bar.innerHTML = '<button type="button">📏 Item Monthly Limits</button>';
+            bar.firstChild.addEventListener('click', openEditor);
+            host.insertBefore(bar, host.firstChild);
+        }
+        const n = Object.keys(limits).length;
+        const label = `📏 Item Monthly Limits${n ? ' (' + n + ' set)' : ''}`;
+        if (bar.firstChild.textContent !== label) bar.firstChild.textContent = label;
+    }
+
+    // ---------- 5) wiring (no change to existing listeners) ----------
+    function ensureListeners() {
+        const uid = myUid();
+        if (!uid) { startedFor = null; return; }
+        if (startedFor === uid) return;
+        startedFor = uid;
+        try {
+            addListener(ref(db, 'itemLimits'), (s) => {
+                const v = s.val() || {}; const out = {};
+                Object.entries(v).forEach(([k, x]) => { const n = Math.floor(Number(x && x.limit)); if (n >= 1) out[k] = { limit: n, name: clean(x.name), unit: clean(x.unit) }; });
+                limits = out; lastSig = null; tick();
+            });
+            addListener(ref(db, 'settings/limitMode'), (s) => { mode = s.val() === 'block' ? 'block' : 'request'; });
+            if (isAdmin()) addListener(ref(db, 'orders'), (s) => { adminCache = s.val() || {}; annotateAdmin(); });
+        } catch (e) { console.warn('Limit listeners skipped:', e); }
+    }
+    function tick() {
+        try {
+            ensureListeners();
+            if (!currentUser) return;
+            if (isAdmin()) { ensureBar(); annotateAdmin(); }
+            else annotateTeacher();
+        } catch (e) { /* display only */ }
+    }
+    setInterval(tick, 2000);
 })();
