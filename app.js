@@ -11073,7 +11073,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
 
             if (won.length) sendPush(won);
         } catch (e) {
-            console.warn('low-stock check skipped:', e);                  // card still works; only the push is skipped
+            console.warn('low-stock check skipped (if this says PERMISSION_DENIED, add Firebase rules for lowStockAlerts + lowStockMeta):', e);   // card still works; only the push is skipped
         } finally { pushBusy = false; }
     }
     window.__lowStockCheckNow = pushCheck;
@@ -11106,31 +11106,40 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
 })();
 
 // =====================================================================================
-// v2.15.0 (additive) - MONTHLY LIMIT PER ITEM, PER TEACHER
-//   * Admin (Inventory tab -> "Item Monthly Limits"): set a monthly limit for ANY item, one by one (empty = no limit).
-//     Saved in Firebase  itemLimits/<inventory item id> = {limit, name, unit}.  Admin also picks what happens when a
-//     teacher crosses it (settings/limitMode):  'request' (default) = teacher may send an "extra" request that the admin
-//     sees flagged "Over limit" and approves/rejects as usual,   'block' = the order cannot be placed.
-//   * Teacher: limit + "left this month" shown on the product card; a popup when an order would cross the limit.
-//   * Used this month = this teacher's non-cancelled / non-rejected orders of that item in the current calendar month.
-//   This block only READS orders and inventory. It hooks the pre-order check (window.__dupOrderCheck) and never
-//   changes an order, stock, approval or handover.
+// v2.16.0 (additive) - MONTHLY LIMIT PER ITEM  (default  ->  per GROUP/designation  ->  per STAFF member)
+//   Admin (Inventory tab -> "Item Monthly Limits") picks WHO the limits apply to:
+//       Everyone (default)  |  a Group = designation (Teacher, Admin Staff, Doctor ...)  |  one particular staff member
+//   and types a limit next to each item.  Priority when a teacher orders:  that staff's own limit  >  his group's limit
+//   >  the default limit.   In a group/staff box:  number = limit,  0 = NOT allowed,  U = unlimited,  empty = follow the next level.
+//   Firebase:  itemLimits/<item> (default, unchanged)   itemLimitRules/group/<group>/<item>   itemLimitRules/staff/<uid>/<item>
+//   settings/limitMode: 'request' (teacher may send an "extra request" the admin sees flagged) or 'block'.
+//   Used this month = this teacher's non-cancelled / non-rejected orders of that item in the current calendar month.
+//   This block only READS orders / inventory / users(designation). It hooks the existing pre-order check
+//   (window.__dupOrderCheck) and never changes an order, stock, approval or handover.
 // =====================================================================================
 (function () {
     'use strict';
-    if (window.__monthlyLimitsV2150) return;
-    window.__monthlyLimitsV2150 = true;
-    window.__APP_BUILD = '2.15.0';
+    if (window.__monthlyLimitsV2160) return;
+    window.__monthlyLimitsV2160 = true;
+    window.__APP_BUILD = '2.16.3';
 
+    const STD_GROUPS = ['Teacher', 'Principal', 'Vice Principal', 'Head of Department', 'Coordinator', 'Supervisor', 'Counselor', 'Librarian', 'Admin Staff'];
     const clean = (v) => String(v == null ? '' : v).trim();
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const safeKey = (v) => clean(v).replace(/[.#$\[\]\/]/g, '_').slice(0, 120);
-    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const groupName = (d) => clean(d) || 'Teacher';
+    const gKey = (d) => safeKey(groupName(d).toLowerCase());
+    const isAdminRole = (r) => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String(r || '').toUpperCase());
+    const isAdmin = () => isAdminRole(currentUser && currentUser.role);
     const myUid = () => (currentUser && (currentUser.adecPassNumber || currentUser.uid)) || '';
 
-    let limits = {};            // safeKey(inventory id) -> {limit, name, unit}
-    let mode = 'request';       // 'request' | 'block'
-    let adminCache = {};        // all orders (admin only; same listener data the app already downloads)
+    let limits = {};                       // default: safeKey(inventory id) -> {limit,name,unit}
+    let rules = { group: {}, staff: {} };  // overrides: group[gKey][item] / staff[uid][item] = {limit} | {unlimited:true}
+    let mode = 'request';                  // 'request' | 'block'
+    let adminCache = {};                   // all orders (admin; same listener data the app already downloads)
+    let desigCache = {};                   // uid -> designation
+    let desigLoading = {};
+    let myDesig;                           // my own designation (teacher)
     let startedFor = null;
 
     // ---------- inventory + usage helpers ----------
@@ -11155,13 +11164,13 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         const n = new Date();
         return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth();
     }
-    function usedFor(entries, uid, limKey) {
+    function usedFor(entries, uid, itemKey) {
         let used = 0;
         entries.forEach(([id, o]) => {
             if (!o || String(o.teacherUid) !== String(uid) || !countsThisMonth(o)) return;
             itemsOf(o).forEach((it) => {
                 const e = findInvEntry(it);
-                if (e && safeKey(e[0]) === limKey) used += Math.max(0, Number(it.requestQuantity ?? it.quantity ?? 0) || 0);
+                if (e && safeKey(e[0]) === itemKey) used += Math.max(0, Number(it.requestQuantity ?? it.quantity ?? 0) || 0);
             });
         });
         return used;
@@ -11181,6 +11190,31 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     const unitOf = (node) => clean(node && node.unit) || 'Pcs';
     window.__limitUsedFor = usedFor;
 
+    // ---------- WHO gets which limit:  staff  >  group  >  default ----------
+    // returns null (no limit)  or  {limit:n, scope:'staff'|'group'|'default', who}
+    function effective(itemKey, uid, desig) {
+        const sRule = rules.staff[safeKey(uid)] && rules.staff[safeKey(uid)][itemKey];
+        if (sRule) return sRule.unlimited ? null : { limit: Math.max(0, Math.floor(Number(sRule.limit)) || 0), scope: 'staff', who: '' };
+        if (desig !== undefined) {
+            const gRule = rules.group[gKey(desig)] && rules.group[gKey(desig)][itemKey];
+            if (gRule) return gRule.unlimited ? null : { limit: Math.max(0, Math.floor(Number(gRule.limit)) || 0), scope: 'group', who: groupName(desig) };
+        }
+        if (limits[itemKey]) return { limit: limits[itemKey].limit, scope: 'default', who: '' };
+        return null;
+    }
+    window.__effectiveLimit = effective;
+    const scopeNote = (e) => e.scope === 'staff' ? ' (special limit for this staff)' : e.scope === 'group' ? ` (${e.who} limit)` : '';
+
+    async function desigOf(uid) {
+        if (String(uid) === String(myUid()) && myDesig !== undefined) return myDesig;
+        if (desigCache[uid] !== undefined) return desigCache[uid];
+        try {
+            const s = await get(ref(db, 'users/' + uid + '/designation'));
+            desigCache[uid] = groupName(s.val());
+        } catch (e) { desigCache[uid] = 'Teacher'; }
+        return desigCache[uid];
+    }
+
     // ---------- small popup ----------
     function popup(html, buttons) {
         return new Promise((resolve) => {
@@ -11196,28 +11230,32 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         });
     }
 
-    // ---------- 1) the check at order time (teacher) ----------
+    // ---------- 1) the check at order time ----------
     async function limitCheck(uid, newItems) {
-        if (!uid || !Array.isArray(newItems) || !newItems.length || !Object.keys(limits).length) return true;
+        if (!uid || !Array.isArray(newItems) || !newItems.length) return true;
+        const noRules = !Object.keys(limits).length && !Object.keys(rules.group).length && !Object.keys(rules.staff).length;
+        if (noRules) return true;
         const need = {}, nodes = {};
         newItems.forEach((ni) => {
             const e = findInvEntry(ni);
             if (!e) return;
             const k = safeKey(e[0]);
-            if (!limits[k]) return;
             need[k] = (need[k] || 0) + (Math.max(0, Number(ni.requestQuantity)) || 1);
             nodes[k] = e[1];
         });
         const keys = Object.keys(need);
         if (!keys.length) return true;
+        const desig = await desigOf(uid);
+        const act = keys.map((k) => [k, effective(k, uid, desig)]).filter(([k, ef]) => ef);
+        if (!act.length) return true;
         const entries = await myEntries(uid);
         const over = [];
-        keys.forEach((k) => {
-            const lim = limits[k].limit, used = usedFor(entries, uid, k);
-            if (used + need[k] > lim) over.push({ name: limits[k].name || clean(nodes[k].itemName || nodes[k].name), unit: unitOf(nodes[k]), lim, used, ask: need[k] });
+        act.forEach(([k, ef]) => {
+            const used = usedFor(entries, uid, k);
+            if (used + need[k] > ef.limit) over.push({ name: clean(nodes[k].itemName || nodes[k].name), unit: unitOf(nodes[k]), lim: ef.limit, used, ask: need[k], ef });
         });
         if (!over.length) return true;
-        const rows = over.map((o) => `<li style="margin:7px 0"><b>${esc(o.name)}</b><br><small style="color:#64748b">Monthly limit ${o.lim} ${esc(o.unit)} · already ordered ${o.used} · you asked ${o.ask}</small></li>`).join('');
+        const rows = over.map((o) => `<li style="margin:7px 0"><b>${esc(o.name)}</b><br><small style="color:#64748b">${o.lim === 0 ? 'Not allowed for you' : `Monthly limit ${o.lim} ${esc(o.unit)} · already ordered ${o.used}`} · you asked ${o.ask}${esc(scopeNote(o.ef))}</small></li>`).join('');
         if (mode === 'block') {
             await popup('<div style="font-size:2rem;text-align:center">⛔</div><h3 style="margin:6px 0 8px;font-size:1.15rem;font-weight:800;text-align:center">Monthly limit reached</h3>' +
                 '<p style="font-size:.9rem;color:#475569;margin:0 0 6px">This order would cross the monthly limit, so it cannot be placed:</p>' +
@@ -11249,122 +11287,220 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         st.textContent = `.mlim{margin:6px 0;padding:4px 9px;border-radius:8px;font-size:.78rem;font-weight:700;background:rgba(217,119,6,.14);color:#b45309}
         .mlim.mlim-zero{background:rgba(220,38,38,.14);color:#b91c1c}
         .lim-flag{display:inline-block;margin-top:4px;padding:2px 8px;border-radius:8px;font-size:.74rem;font-weight:800;background:#dc2626;color:#fff}
+        @media (max-height:720px){.lm-desc{display:none!important}}
         #itemLimitsBar{margin:0 0 14px}
         #itemLimitsBar button{border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:10px;padding:8px 14px;font-weight:800;cursor:pointer}`;
         document.head.appendChild(st);
     }
     function annotateTeacher() {
         const grid = document.getElementById('grid');
-        if (!grid || !Object.keys(limits).length) return;
+        if (!grid || myDesig === undefined) return;
         const entries = myEntriesSync();
         grid.querySelectorAll('article.p').forEach((card) => {
             const e = findInvEntry({ serialNumber: card.getAttribute('data-sn'), itemName: card.getAttribute('data-name') });
             const k = e && safeKey(e[0]);
+            const ef = k ? effective(k, myUid(), myDesig) : null;
             let chip = card.querySelector('.mlim');
-            if (!k || !limits[k]) { if (chip) chip.remove(); return; }
-            const lim = limits[k].limit, left = Math.max(0, lim - usedFor(entries, myUid(), k)), u = unitOf(e[1]);
+            if (!ef) { if (chip) chip.remove(); return; }
+            const left = Math.max(0, ef.limit - usedFor(entries, myUid(), k)), u = unitOf(e[1]);
             if (!chip) {
                 chip = document.createElement('div'); chip.className = 'mlim';
                 const add = card.querySelector('.add');
                 if (add && add.parentElement) add.parentElement.insertBefore(chip, add); else card.appendChild(chip);
             }
             chip.classList.toggle('mlim-zero', left === 0);
-            chip.textContent = `📏 Monthly limit ${lim} ${u} · Left this month: ${left}`;
+            chip.textContent = ef.limit === 0 ? '🚫 Not allowed for you' : `📏 Monthly limit ${ef.limit} ${u} · Left this month: ${left}`;
         });
     }
 
     // ---------- 3) admin: flag pending requests that are over the limit ----------
     function annotateAdmin() {
         const list = document.getElementById('admin-requests-list');
-        if (!list || !isAdmin() || !Object.keys(limits).length) return;
+        if (!list || !isAdmin()) return;
         const entries = Object.entries(adminCache || {});
         list.querySelectorAll('.request-card').forEach((card) => {
             const ap = card.querySelector('.rq-approve');
             const m = ap && /handleAdminPrepareClick\(event,\s*'([^']+)'\)/.exec(ap.getAttribute('onclick') || '');
             const order = m && adminCache && adminCache[m[1]];
             if (!order) return;
+            const uid = order.teacherUid;
+            if (desigCache[uid] === undefined && !desigLoading[uid]) { desigLoading[uid] = true; desigOf(uid).then(() => { desigLoading[uid] = false; annotateAdmin(); }); }
             const its = itemsOf(order);
             card.querySelectorAll('.req-item').forEach((row, i) => {
                 const it = its[i]; if (!it) return;
                 const e = findInvEntry(it); const k = e && safeKey(e[0]);
                 const old = row.querySelector('.lim-flag'); if (old) old.remove();
-                if (!k || !limits[k]) return;
-                const used = usedFor(entries, order.teacherUid, k);
-                if (used <= limits[k].limit) return;
+                if (!k) return;
+                const ef = effective(k, uid, desigCache[uid]);
+                if (!ef) return;
+                const used = usedFor(entries, uid, k);
+                if (used <= ef.limit) return;
                 const holder = (row.querySelector('.req-nm') || {}).parentElement || row;
                 const f = document.createElement('div'); f.className = 'lim-flag';
-                f.textContent = `⚠ Over monthly limit: ${used} of ${limits[k].limit} ${unitOf(e[1])} this month`;
+                f.textContent = `⚠ Over monthly limit${ef.limit === 0 ? ' (not allowed)' : ''}: ${used} of ${ef.limit} ${unitOf(e[1])} this month${scopeNote(ef)}`;
                 holder.appendChild(f);
             });
         });
     }
 
-    // ---------- 4) admin: Item Monthly Limits editor ----------
-    function openEditor() {
+    // ---------- 4) admin: Item Monthly Limits editor (Everyone / Group / One staff) ----------
+    const textOf = (en) => !en ? '' : (en.unlimited ? 'U' : String(en.limit));
+    function parseText(t, scopeType) {          // -> {ok, entry|null}
+        t = clean(t);
+        if (!t) return { ok: true, entry: null };
+        if (scopeType !== 'all' && /^(u|unl|unlimited|no limit|nolimit|∞)$/i.test(t)) return { ok: true, entry: { unlimited: true } };
+        if (/^\d{1,4}$/.test(t)) {
+            const n = parseInt(t, 10);
+            if (n >= (scopeType === 'all' ? 1 : 0)) return { ok: true, entry: { limit: n } };
+        }
+        return { ok: false };
+    }
+
+    async function openEditor() {
         addStyle();
         const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
         const rows = Object.entries(inv).filter(([id, n]) => n && typeof n === 'object')
             .map(([id, n]) => ({ k: safeKey(id), name: clean(n.itemName || n.name) || id, unit: unitOf(n), cat: clean(n.category), sn: clean(n.serialNumber), stock: getItemTotalAvailableStock(n) }))
             .sort((a, b) => a.name.localeCompare(b.name));
+        // staff list (name + designation only)
+        let staff = [];
+        try {
+            const us = (await get(ref(db, 'users'))).val() || {};
+            staff = Object.entries(us).filter(([id, u]) => u && typeof u === 'object' && !isAdminRole(u.role))
+                .map(([id, u]) => ({ uid: clean(u.adecPassNumber) || id, name: clean(u.name) || id, desig: groupName(u.designation) }))
+                .sort((a, b) => a.name.localeCompare(b.name));
+        } catch (e) { staff = []; }
+        const groups = Array.from(new Set(STD_GROUPS.concat(staff.map((s) => s.desig)))).sort((a, b) => a.localeCompare(b));
+        const cnt = (g) => staff.filter((s) => s.desig === g).length;
+
         const ov = document.createElement('div');
         ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.65);display:flex;align-items:center;justify-content:center;padding:12px';
-        ov.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:16px;width:100%;max-width:640px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.4)">
-          <div style="padding:16px 18px 8px"><div style="font-size:1.15rem;font-weight:800">📏 Item Monthly Limits</div>
-            <div style="font-size:.82rem;color:#64748b;margin-top:2px">Max quantity ONE teacher can order per month. Leave empty = no limit.</div>
-            <div style="margin-top:10px;font-size:.85rem;font-weight:700">When a teacher crosses the limit:</div>
-            <label style="display:block;font-size:.85rem;margin:4px 0"><input type="radio" name="lmMode" value="request"> Let teacher send an <b>extra request</b> (admin sees "Over limit" and decides)</label>
-            <label style="display:block;font-size:.85rem;margin:4px 0"><input type="radio" name="lmMode" value="block"> <b>Block</b> the order</label>
-            <div style="display:flex;gap:8px;margin-top:10px"><input id="lmSearch" type="search" placeholder="Search item / serial / category" style="flex:1;padding:9px 10px;border:1px solid #cbd5e1;border-radius:10px;color:#0f172a;background:#fff">
-            </div>
-            <div style="display:flex;gap:8px;margin-top:8px;align-items:center"><span style="font-size:.8rem;color:#475569">Fill empty shown items with</span><input id="lmBulk" type="number" min="1" max="9999" style="width:80px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;color:#0f172a;background:#fff"><button type="button" id="lmBulkGo" style="padding:6px 10px;border-radius:8px;border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;font-weight:700;cursor:pointer">Apply</button></div>
+        const SEL = 'width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:10px;color:#0f172a;background:#fff;margin-top:6px';
+        ov.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:16px;width:100%;max-width:660px;max-height:94vh;overflow:auto;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.4)">
+          <div style="padding:16px 18px 8px;flex:none">
+            <div style="font-size:1.15rem;font-weight:800">📏 Item Monthly Limits</div>
+            <div class="lm-desc" style="font-size:.82rem;color:#64748b;margin-top:2px">Max quantity ONE teacher can order per month. Priority: <b>that staff</b> &gt; <b>his group</b> &gt; <b>default</b>.</div>
+            <div style="margin-top:10px;font-size:.85rem;font-weight:700">These limits are for:</div>
+            <select id="lmScope" style="${SEL}"><option value="all">Everyone (default limit)</option><option value="group">A group / designation (Teacher, Admin Staff, Doctor ...)</option><option value="staff">One particular staff member</option></select>
+            <select id="lmWho" style="${SEL};display:none"></select>
+            <div id="lmHint" style="font-size:.78rem;color:#475569;margin-top:6px"></div>
+            <details id="lmModeBox" style="margin-top:10px"><summary style="font-size:.85rem;font-weight:700;cursor:pointer">When a teacher crosses a limit: <span id="lmModeTxt" style="color:#2563eb"></span></summary>
+            <label style="display:block;font-size:.85rem;margin:6px 0 4px"><input type="radio" name="lmMode" value="request"> Let teacher send an <b>extra request</b> (admin sees "Over limit" and decides)</label>
+            <label style="display:block;font-size:.85rem;margin:4px 0"><input type="radio" name="lmMode" value="block"> <b>Block</b> the order</label></details>
           </div>
-          <div id="lmList" style="overflow:auto;padding:4px 18px;flex:1"></div>
-          <div style="display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid #e2e8f0"><button type="button" id="lmClose" style="flex:1;padding:11px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:800;cursor:pointer">Close</button><button type="button" id="lmSave" style="flex:1;padding:11px;border-radius:10px;border:0;background:#2563eb;color:#fff;font-weight:800;cursor:pointer">Save</button></div></div>`;
+          <div style="padding:0 18px;flex:none"><input id="lmSearch" type="search" placeholder="Search item / serial / category" style="${SEL}">
+            <div style="display:flex;gap:8px;margin:8px 0;align-items:center"><span style="font-size:.8rem;color:#475569">Fill empty shown items with</span><input id="lmBulk" type="text" style="width:70px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;color:#0f172a;background:#fff"><button type="button" id="lmBulkGo" style="padding:6px 10px;border-radius:8px;border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;font-weight:700;cursor:pointer">Apply</button></div></div>
+          <div id="lmList" style="overflow:auto;padding:0 18px;flex:1 1 auto;min-height:170px"></div>
+          <div style="display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid #e2e8f0;flex:none;position:sticky;bottom:0;background:#fff;border-radius:0 0 16px 16px"><button type="button" id="lmClose" style="flex:1;padding:11px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:800;cursor:pointer">Close</button><button type="button" id="lmSave" style="flex:1;padding:11px;border-radius:10px;border:0;background:#2563eb;color:#fff;font-weight:800;cursor:pointer">Save</button></div></div>`;
         document.body.appendChild(ov);
         ov.querySelector(`input[name="lmMode"][value="${mode}"]`).checked = true;
-        const listEl = ov.querySelector('#lmList');
-        const typed = {};     // key -> text the admin typed (survives searching)
-        rows.forEach((r) => { typed[r.k] = limits[r.k] ? String(limits[r.k].limit) : ''; });
-        function draw() {
-            const q = clean(ov.querySelector('#lmSearch').value).toLowerCase();
-            const shown = rows.filter((r) => !q || (r.name + ' ' + r.sn + ' ' + r.cat).toLowerCase().includes(q));
-            listEl.innerHTML = shown.length ? shown.map((r) =>
-                `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9"><div style="flex:1;min-width:0"><div style="font-weight:700;word-break:break-word">${esc(r.name)}</div><div style="font-size:.74rem;color:#64748b">${esc(r.cat)}${r.sn ? ' · SN ' + esc(r.sn) : ''} · in stock ${r.stock} ${esc(r.unit)}</div></div>` +
-                `<input data-k="${esc(r.k)}" type="number" min="1" max="9999" inputmode="numeric" placeholder="No limit" value="${esc(typed[r.k])}" style="width:92px;padding:7px 8px;border:1px solid #cbd5e1;border-radius:8px;color:#0f172a;background:#fff"><span style="font-size:.78rem;color:#475569;width:38px">${esc(r.unit)}</span></div>`).join('')
-                : '<div style="padding:18px;color:#64748b;text-align:center">No items match.</div>';
+        const $s = (q) => ov.querySelector(q);
+        const modeTxt = () => { $s('#lmModeTxt').textContent = $s('input[name="lmMode"]:checked').value === 'block' ? 'Block the order' : 'Extra request allowed'; };
+        modeTxt(); ov.querySelectorAll('input[name="lmMode"]').forEach((r) => r.addEventListener('change', modeTxt));
+        const listEl = $s('#lmList');
+
+        // every scope the admin touched keeps its own typed values until Save
+        const scopes = {};
+        const cur = () => {
+            const t = $s('#lmScope').value;
+            if (t === 'all') return { type: 'all', sk: 'all', id: '', label: 'Everyone' };
+            const w = $s('#lmWho').value;
+            return t === 'group' ? { type: 'group', sk: 'g:' + gKey(w), id: gKey(w), label: w, desig: w } : { type: 'staff', sk: 's:' + safeKey(w), id: safeKey(w), label: (staff.find((s) => s.uid === w) || {}).name || w, desig: (staff.find((s) => s.uid === w) || {}).desig };
+        };
+        function sourceMap(c) {
+            if (c.type === 'all') { const m = {}; Object.entries(limits).forEach(([k, v]) => { m[k] = { limit: v.limit }; }); return m; }
+            return (c.type === 'group' ? rules.group[c.id] : rules.staff[c.id]) || {};
         }
-        draw();
-        listEl.addEventListener('input', (e) => { const k = e.target && e.target.getAttribute && e.target.getAttribute('data-k'); if (k) typed[k] = e.target.value; });
-        ov.querySelector('#lmSearch').addEventListener('input', draw);
-        ov.querySelector('#lmBulkGo').addEventListener('click', () => {
-            const n = Math.floor(Number(ov.querySelector('#lmBulk').value));
-            if (!(n >= 1)) return;
-            const q = clean(ov.querySelector('#lmSearch').value).toLowerCase();
-            rows.filter((r) => !q || (r.name + ' ' + r.sn + ' ' + r.cat).toLowerCase().includes(q)).forEach((r) => { if (!clean(typed[r.k])) typed[r.k] = String(n); });
+        function scopeState(c) {
+            if (!scopes[c.sk]) {
+                const src = sourceMap(c), orig = {};
+                rows.forEach((r) => { orig[r.k] = textOf(src[r.k]); });
+                scopes[c.sk] = { c, orig, typed: Object.assign({}, orig) };
+            }
+            return scopes[c.sk];
+        }
+        function placeholder(c, k) {
+            if (c.type === 'all') return 'No limit';
+            const def = limits[k] ? 'Default ' + limits[k].limit : 'Default: none';
+            if (c.type === 'staff' && c.desig !== undefined) {
+                const g = rules.group[gKey(c.desig)] && rules.group[gKey(c.desig)][k];
+                if (g) return g.unlimited ? 'Group: unlimited' : 'Group ' + g.limit;
+            }
+            return def;
+        }
+        function fillWho() {
+            const t = $s('#lmScope').value, who = $s('#lmWho');
+            who.style.display = t === 'all' ? 'none' : '';
+            if (t === 'group') who.innerHTML = groups.map((g) => `<option value="${esc(g)}">${esc(g)} (${cnt(g)} staff)</option>`).join('');
+            if (t === 'staff') who.innerHTML = staff.length ? staff.map((s) => `<option value="${esc(s.uid)}">${esc(s.name)} · ${esc(s.uid)} · ${esc(s.desig)}</option>`).join('') : '<option value="">(no staff found)</option>';
+            $s('#lmHint').textContent = t === 'all' ? 'Default for every teacher. Number = max per month. Empty = no limit.'
+                : t === 'group' ? 'Applies to everyone in this group. Number = limit · 0 = NOT allowed · U = unlimited · empty = follow the default.'
+                    : 'Applies only to this person and beats group + default. Number = limit · 0 = NOT allowed · U = unlimited · empty = follow group/default.';
+        }
+        function draw() {
+            const c = cur();
+            if (c.type !== 'all' && !$s('#lmWho').value) { listEl.innerHTML = '<div style="padding:18px;color:#64748b;text-align:center">Nothing to choose here yet.</div>'; return; }
+            const st = scopeState(c);
+            const q = clean($s('#lmSearch').value).toLowerCase();
+            const shown = rows.filter((r) => !q || (r.name + ' ' + r.sn + ' ' + r.cat).toLowerCase().includes(q));
+            listEl.innerHTML = shown.length ? shown.map((r) => {
+                const bad = !parseText(st.typed[r.k], c.type).ok;
+                return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9"><div style="flex:1;min-width:0"><div style="font-weight:700;word-break:break-word">${esc(r.name)}</div><div style="font-size:.74rem;color:#64748b">${esc(r.cat)}${r.sn ? ' · SN ' + esc(r.sn) : ''} · in stock ${r.stock} ${esc(r.unit)}</div></div>` +
+                    `<input data-k="${esc(r.k)}" type="text" inputmode="text" placeholder="${esc(placeholder(c, r.k))}" value="${esc(st.typed[r.k])}" style="width:104px;padding:7px 8px;border:1px solid ${bad ? '#dc2626' : '#cbd5e1'};border-radius:8px;color:#0f172a;background:#fff"><span style="font-size:.78rem;color:#475569;width:38px">${esc(r.unit)}</span></div>`;
+            }).join('') : '<div style="padding:18px;color:#64748b;text-align:center">No items match.</div>';
+        }
+        fillWho(); draw();
+        $s('#lmScope').addEventListener('change', () => { fillWho(); draw(); });
+        $s('#lmWho').addEventListener('change', draw);
+        $s('#lmSearch').addEventListener('input', draw);
+        listEl.addEventListener('input', (e) => {
+            const k = e.target && e.target.getAttribute && e.target.getAttribute('data-k'); if (!k) return;
+            const c = cur(); scopeState(c).typed[k] = e.target.value;
+            e.target.style.borderColor = parseText(e.target.value, c.type).ok ? '#cbd5e1' : '#dc2626';
+        });
+        $s('#lmBulkGo').addEventListener('click', () => {
+            const c = cur(); if (c.type !== 'all' && !$s('#lmWho').value) return;
+            const v = clean($s('#lmBulk').value); if (!parseText(v, c.type).ok || !v) return;
+            const st = scopeState(c), q = clean($s('#lmSearch').value).toLowerCase();
+            rows.filter((r) => !q || (r.name + ' ' + r.sn + ' ' + r.cat).toLowerCase().includes(q)).forEach((r) => { if (!clean(st.typed[r.k])) st.typed[r.k] = v; });
             draw();
         });
-        ov.querySelector('#lmClose').addEventListener('click', () => ov.remove());
-        ov.querySelector('#lmSave').addEventListener('click', async () => {
-            const btn = ov.querySelector('#lmSave'); btn.disabled = true; btn.textContent = 'Saving...';
+        $s('#lmClose').addEventListener('click', () => ov.remove());
+        $s('#lmSave').addEventListener('click', async () => {
+            const btn = $s('#lmSave');
+            // 1) validate everything first, nothing is written if any box is wrong
+            const bad = [];
+            Object.values(scopes).forEach((st) => rows.forEach((r) => { if (!parseText(st.typed[r.k], st.c.type).ok) bad.push(`${st.c.label}: ${r.name} ("${clean(st.typed[r.k])}")`); }));
+            if (bad.length) { alert('Please fix these boxes (number, 0, U or empty):\n' + bad.slice(0, 6).join('\n')); return; }
+            btn.disabled = true; btn.textContent = 'Saving...';
             try {
-                const upd = {}; let changed = 0;
-                rows.forEach((r) => {
-                    const t = clean(typed[r.k]); const n = Math.floor(Number(t));
-                    const cur = limits[r.k] ? limits[r.k].limit : null;
-                    if (t && n >= 1 && n <= 9999) { if (cur !== n) { upd[r.k] = { limit: n, name: r.name, unit: r.unit, by: clean(currentUser && currentUser.name), at: new Date().toISOString() }; changed++; } }
-                    else if (!t && cur !== null) { upd[r.k] = null; changed++; }
-                });
-                if (Object.keys(upd).length) await update(ref(db, 'itemLimits'), upd);
-                const m = ov.querySelector('input[name="lmMode"]:checked').value;
+                let changed = 0;
+                for (const st of Object.values(scopes)) {
+                    const upd = {};
+                    rows.forEach((r) => {
+                        const t = clean(st.typed[r.k]);
+                        if (t === st.orig[r.k]) return;
+                        const p = parseText(t, st.c.type).entry;
+                        upd[r.k] = p ? Object.assign({}, p, { name: r.name, unit: r.unit, by: clean(currentUser && currentUser.name), at: new Date().toISOString() }, st.c.type === 'group' ? { group: st.c.label } : st.c.type === 'staff' ? { staff: st.c.label } : {}) : null;
+                        changed++;
+                    });
+                    if (Object.keys(upd).length) await update(ref(db, st.c.type === 'all' ? 'itemLimits' : st.c.type === 'group' ? 'itemLimitRules/group/' + st.c.id : 'itemLimitRules/staff/' + st.c.id), upd);
+                }
+                const m = $s('input[name="lmMode"]:checked').value;
                 if (m !== mode) { await set(ref(db, 'settings/limitMode'), m); mode = m; changed++; }
                 if (typeof showToast === 'function') showToast(changed ? 'Limits saved' : 'Nothing changed');
-                ov.remove(); lastSig = null; tick();
-            } catch (e) { console.warn('Saving limits failed:', e); btn.disabled = false; btn.textContent = 'Save'; alert('Could not save limits. Please try again.'); }
+                ov.remove(); tick();
+            } catch (e) {
+                console.warn('Saving limits failed:', e); btn.disabled = false; btn.textContent = 'Save';
+                const denied = /permission[_ ]denied/i.test(String((e && (e.code || e.message)) || ''));
+                alert(denied
+                    ? 'Firebase rules is save ko rok rahe hain.\n\nFirebase Console -> Realtime Database -> Rules me "itemLimits" aur "itemLimitRules" ka block add karo (bilkul "orders" jaisa rule), phir Publish dabao. Uske baad dobara Save karo.'
+                    : 'Could not save limits. Please try again.');
+            }
         });
     }
     window.__openItemLimits = openEditor;
 
-    let lastSig = null;
     function ensureBar() {
         const host = document.getElementById('tab-inventory');
         if (!host || !isAdmin()) { const b = document.getElementById('itemLimitsBar'); if (b && !isAdmin()) b.remove(); return; }
@@ -11377,7 +11513,8 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             host.insertBefore(bar, host.firstChild);
         }
         const n = Object.keys(limits).length;
-        const label = `📏 Item Monthly Limits${n ? ' (' + n + ' set)' : ''}`;
+        const extra = Object.values(rules.group).reduce((a, g) => a + Object.keys(g || {}).length, 0) + Object.values(rules.staff).reduce((a, g) => a + Object.keys(g || {}).length, 0);
+        const label = `📏 Item Monthly Limits${(n || extra) ? ' (' + n + ' default' + (extra ? ' + ' + extra + ' special' : '') + ')' : ''}`;
         if (bar.firstChild.textContent !== label) bar.firstChild.textContent = label;
     }
 
@@ -11391,10 +11528,21 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             addListener(ref(db, 'itemLimits'), (s) => {
                 const v = s.val() || {}; const out = {};
                 Object.entries(v).forEach(([k, x]) => { const n = Math.floor(Number(x && x.limit)); if (n >= 1) out[k] = { limit: n, name: clean(x.name), unit: clean(x.unit) }; });
-                limits = out; lastSig = null; tick();
+                limits = out; tick();
             });
             addListener(ref(db, 'settings/limitMode'), (s) => { mode = s.val() === 'block' ? 'block' : 'request'; });
-            if (isAdmin()) addListener(ref(db, 'orders'), (s) => { adminCache = s.val() || {}; annotateAdmin(); });
+            if (isAdmin()) {
+                addListener(ref(db, 'itemLimitRules'), (s) => { const v = s.val() || {}; rules = { group: v.group || {}, staff: v.staff || {} }; tick(); });
+                addListener(ref(db, 'orders'), (s) => { adminCache = s.val() || {}; annotateAdmin(); });
+            } else {
+                // a teacher only needs the rules that apply to HIM (his group + himself)
+                get(ref(db, 'users/' + uid + '/designation')).then((s) => {
+                    if (startedFor !== uid) return;
+                    myDesig = groupName(s.val()); desigCache[uid] = myDesig;
+                    addListener(ref(db, 'itemLimitRules/group/' + gKey(myDesig)), (x) => { rules.group[gKey(myDesig)] = x.val() || {}; tick(); });
+                    addListener(ref(db, 'itemLimitRules/staff/' + safeKey(uid)), (x) => { rules.staff[safeKey(uid)] = x.val() || {}; tick(); });
+                }).catch(() => { myDesig = 'Teacher'; });
+            }
         } catch (e) { console.warn('Limit listeners skipped:', e); }
     }
     function tick() {
@@ -11406,4 +11554,783 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         } catch (e) { /* display only */ }
     }
     setInterval(tick, 2000);
+})();
+
+// =====================================================================================
+// v2.17.0 (additive) - (1) MOBILE FIX for the request item rows, (2) CANCELLED / REJECTED orders in their own section
+//   (1) On phones the item row held: photo + name + qty pill (now with unit) + "Reject" button. The name block had
+//       overflow:hidden, so it shrank to ~30px and the item name broke letter by letter (rows 300-900px tall).
+//       Now (phones only): line 1 = photo + full name, line 2 = qty pill (left) + Reject button (right).
+//   (2) Orders with status Cancelled / Rejected are moved out of "Live Requisition Requests" into a collapsible
+//       "Cancelled / Rejected Orders" section right below it (count badge, who rejected + the reason when known).
+//       If nothing is active, the live section says so instead of staying blank.
+//   Display only: the app still draws every card exactly as before; this block just moves the cancelled cards.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__adminCancelledV2170) return;
+    window.__adminCancelledV2170 = true;
+    window.__APP_BUILD = '2.17.0';
+
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+
+    // ---------- styles ----------
+    (function addStyle() {
+        if (document.getElementById('cxStyle')) return;
+        const st = document.createElement('style'); st.id = 'cxStyle';
+        st.textContent = `
+        @media (max-width:640px){
+          .request-card .req-item{flex-wrap:wrap;row-gap:8px}
+          .request-card .req-item > div{flex:1 1 calc(100% - 66px) !important;min-width:0}
+          .request-card .req-item > .req-qty{margin-left:64px}
+          .request-card .req-item > .rq-item-reject{margin-left:auto !important}
+          .request-card .request-header{flex-wrap:wrap;row-gap:8px}
+          .request-card .request-header .rq-who{flex:1 1 100%}
+          .request-card .request-header .rq-who h4{white-space:normal;overflow-wrap:anywhere}
+          .request-card .request-header .rq-status{max-width:100%}
+        }
+        #admin-live-empty{display:none;margin-top:12px;padding:18px 16px;border-radius:14px;border:1px dashed rgba(148,163,184,.45);text-align:center;font-weight:700;color:#94a3b8}
+        #admin-cancelled-area{display:none;margin-top:18px;padding:14px 16px;border-radius:18px;border:1px solid var(--a-line,#27324f);background:var(--a-deep,#0f1730);min-width:0;max-width:100%;box-sizing:border-box}
+        #admin-cancelled-area > details > summary{cursor:pointer;font-weight:800;font-size:1.05rem;display:flex;align-items:center;gap:10px;list-style:none}
+        #admin-cancelled-area > details > summary::-webkit-details-marker{display:none}
+        #admin-cancelled-area > details > summary::before{content:'▸';transition:transform .15s}
+        #admin-cancelled-area > details[open] > summary::before{transform:rotate(90deg)}
+        #admin-cancelled-area .cx-count{background:#dc2626;color:#fff;border-radius:999px;padding:2px 10px;font-size:.78rem}
+        #admin-cancelled-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,470px),1fr));gap:16px;margin-top:14px}
+        #admin-cancelled-list > *{min-width:0;max-width:100%}
+        #admin-cancelled-list .request-card{border-left-color:#ef4444 !important;opacity:.95}
+        #admin-cancelled-list .rq-status{background:rgba(239,68,68,.15) !important;color:#fca5a5 !important;border:1px solid rgba(239,68,68,.45) !important}
+        #admin-cancelled-list .cx-reason{margin:8px 0;padding:8px 12px;border-radius:10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);font-size:.85rem;line-height:1.4;overflow-wrap:anywhere}`;
+        document.head.appendChild(st);
+    })();
+
+    // ---------- orders cache (only to show the reject reason; same listener data the app already downloads) ----------
+    let ordersCache = {};
+    const isCancelledText = (t) => { t = clean(t).toLowerCase(); return t.includes('cancel') || t.includes('reject'); };
+    const isCancelledCard = (c) => isCancelledText((c.querySelector('.rq-status') || {}).textContent);
+    const fmt = (ts) => { try { if (!ts) return ''; const d = new Date(ts); if (isNaN(d)) return ''; return d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return ''; } };
+    let cacheLoaded = false;
+    function cardKey(card) {
+        const sp = [...card.querySelectorAll('.rq-meta span')].map((s) => s.textContent);
+        const adek = clean((sp.find((t) => t.includes('ADEK:')) || '').split('ADEK:')[1]);
+        const ts = clean((sp.find((t) => t.includes('🕒')) || '').replace('🕒', ''));
+        return adek + '|' + ts;
+    }
+
+    function ensureSection() {
+        let sec = document.getElementById('admin-cancelled-area');
+        if (sec) return sec;
+        const area = document.getElementById('admin-requests-area');
+        if (!area || !area.parentNode) return null;
+        sec = document.createElement('div'); sec.id = 'admin-cancelled-area';
+        sec.innerHTML = '<details><summary>🚫 Cancelled / Rejected Orders <span class="cx-count">0</span></summary><div id="admin-cancelled-list"></div></details>';
+        area.parentNode.insertBefore(sec, area.nextSibling);
+        const em = document.createElement('div'); em.id = 'admin-live-empty';
+        em.textContent = '✅ No active requests right now. New teacher orders will appear here.';
+        area.appendChild(em);
+        return sec;
+    }
+
+    function decorateReasons() {
+        const box = document.getElementById('admin-cancelled-list');
+        if (!box) return;
+        const byKey = {};
+        Object.values(ordersCache || {}).forEach((o) => { if (o && isCancelledText(o.status)) byKey[(clean(o.teacherUid) || '-') + '|' + fmt(o.timestamp)] = o; });
+        box.querySelectorAll('.request-card').forEach((card) => {
+            const o = byKey[cardKey(card)];
+            let r = card.querySelector('.cx-reason');
+            if (!o || !(o.rejected || o.rejectReason)) { if (r) r.remove(); return; }
+            const who = clean(o.rejectedBy) ? ` by ${esc(o.rejectedBy)}` : '';
+            const when = o.rejectedAt ? ` · ${esc(fmt(o.rejectedAt))}` : '';
+            const html = `🚫 <b>Rejected${who}</b>${when}${clean(o.rejectReason) ? `<br>Reason: ${esc(o.rejectReason)}` : ''}`;
+            if (!r) {
+                r = document.createElement('div'); r.className = 'cx-reason';
+                const anchor = card.querySelector('.rq-meta');
+                if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(r, anchor.nextSibling); else card.appendChild(r);
+            }
+            if (r.innerHTML !== html) r.innerHTML = html;
+        });
+    }
+
+    function organize(rebuilt) {
+        const list = document.getElementById('admin-requests-list');
+        const sec = ensureSection();
+        if (!list || !sec) return;
+        const box = sec.querySelector('#admin-cancelled-list');
+        if (rebuilt) box.innerHTML = '';                                   // the app redrew every card: start the section again
+        [...list.children].filter((c) => c.classList && c.classList.contains('request-card') && isCancelledCard(c)).forEach((c) => {
+            c.classList.remove('approved', 'pending'); c.classList.add('closed');
+            const st = c.querySelector('.rq-status'); if (st) st.classList.remove('approved', 'pending');
+            const ap = c.querySelector('.request-actions'); if (ap && !ap.children.length) ap.remove();
+            box.appendChild(c);
+        });
+        refreshChrome();
+        decorateReasons();
+        if (list.__cxObs) list.__cxObs.takeRecords();                      // ignore the changes we just made ourselves
+    }
+    function refreshChrome() {
+        const list = document.getElementById('admin-requests-list'), sec = document.getElementById('admin-cancelled-area');
+        if (!list || !sec) return;
+        const n = sec.querySelectorAll('#admin-cancelled-list .request-card').length;
+        sec.style.display = n ? 'block' : 'none';
+        sec.querySelector('.cx-count').textContent = String(n);
+        const live = [...list.children].filter((c) => c.classList && c.classList.contains('request-card')).length;
+        const stillLoading = [...list.children].some((c) => c.tagName === 'P');
+        const em = document.getElementById('admin-live-empty');
+        if (em) em.style.display = (!live && !stillLoading) ? 'block' : 'none';
+    }
+    // an order that is no longer cancelled / was deleted: take its old card out (the app redraws an EMPTY list silently,
+    // so the browser never reports a change and the card would stay)
+    function pruneStale() {
+        if (!cacheLoaded) return;
+        const box = document.getElementById('admin-cancelled-list');
+        if (!box) return;
+        const keys = new Set();
+        Object.values(ordersCache || {}).forEach((o) => { if (o && isCancelledText(o.status)) keys.add((clean(o.teacherUid) || '-') + '|' + fmt(o.timestamp)); });
+        box.querySelectorAll('.request-card').forEach((c) => { if (!keys.has(cardKey(c))) c.remove(); });
+        refreshChrome();
+    }
+    window.__organizeCancelled = organize;
+
+    let ordersListening = false;
+    function tick() {
+        try {
+            const list = document.getElementById('admin-requests-list');
+            if (!list || !currentUser) return;
+            if (!isAdmin()) return;
+            if (!ordersListening) {
+                ordersListening = true;
+                try { addListener(ref(db, 'orders'), (s) => { ordersCache = s.val() || {}; cacheLoaded = true; pruneStale(); decorateReasons(); }); } catch (e) { ordersListening = false; }
+            }
+            if (!list.__cxObs) {
+                list.__cxObs = new MutationObserver((records) => organize(records.some((r) => r.addedNodes.length || r.removedNodes.length)));
+                list.__cxObs.observe(list, { childList: true });
+                organize(true);
+            }
+        } catch (e) { /* display only */ }
+    }
+    setInterval(tick, 1500);
+})();
+
+// =====================================================================================
+// v2.18.0 (additive) - ADMIN BACKUP ("💾 Backup Data" in the admin menu)
+//   One tap -> downloads a copy of the database to the admin's phone/computer:
+//     * JSON  = complete copy (keeps the structure, can be used to restore a node),
+//     * Excel = readable sheets (Orders one row per item, Inventory one row per batch, Staff, ...).
+//   READ-ONLY: it only reads Firebase (get). It writes NOTHING to the database and changes no existing function.
+//   Passwords (and biometric/credential ids) are left OUT unless the admin ticks "Include passwords".
+//   The time of the last backup is remembered on that device only (localStorage) and a reminder shows after 7 days.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__backupV2180) return;
+    window.__backupV2180 = true;
+    window.__APP_BUILD = '2.18.0';
+
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const LAST_KEY = 'stationery_last_backup_v1';
+    const NODES = [
+        { k: 'orders', label: 'Orders (requests, approvals, handovers)', on: true },
+        { k: 'inventory', label: 'Inventory (items and batches)', on: true },
+        { k: 'users', label: 'Staff list', on: true },
+        { k: 'settings', label: 'Settings', on: true },
+        { k: 'stock_movements', label: 'Stock movements', on: true },
+        { k: 'inventory_history', label: 'Inventory history', on: true },
+        { k: 'audit_logs', label: 'Audit logs', on: true },
+        { k: 'announcements', label: 'Announcements', on: true },
+        { k: 'itemLimits', label: 'Monthly limits (default)', on: true },
+        { k: 'itemLimitRules', label: 'Monthly limits (group / staff)', on: true },
+        { k: 'po_orders', label: 'Purchase orders', on: true },
+        { k: 'user_signatures', label: 'Saved admin signatures (images, JSON only)', on: true, heavy: true },
+        { k: 'po_files', label: 'Purchase order files (can be very big, JSON only)', on: false, heavy: true }
+    ];
+    const PW_KEY = /^(password|pass|pwd|passwd|pin|otp)$/i;      // NOT adecPassNumber (that is the staff ID)
+    const SENS_KEY = /biometric|credential|webauthn/i;
+
+    function sanitize(val, o) {
+        if (val == null) return val;
+        if (typeof val === 'string') return (!o.images && val.startsWith('data:')) ? '[image removed]' : val;
+        if (Array.isArray(val)) return val.map((x) => sanitize(x, o));
+        if (typeof val === 'object') {
+            const out = {};
+            Object.keys(val).forEach((k) => { if (!o.passwords && (PW_KEY.test(k) || SENS_KEY.test(k))) return; out[k] = sanitize(val[k], o); });
+            return out;
+        }
+        return val;
+    }
+    const countOf = (v) => (v && typeof v === 'object') ? Object.keys(v).length : (v == null ? 0 : 1);
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; };
+    function ago(iso) {
+        const t = new Date(iso); if (isNaN(t)) return 'never';
+        const m = Math.round((Date.now() - t.getTime()) / 60000);
+        if (m < 2) return 'just now';
+        if (m < 60) return m + ' minutes ago';
+        if (m < 60 * 24) return Math.round(m / 60) + ' hours ago';
+        return Math.round(m / 1440) + ' days ago';
+    }
+    const lastBackup = () => { try { return JSON.parse(localStorage.getItem(LAST_KEY) || 'null'); } catch (e) { return null; } };
+
+    async function readNode(k) {
+        let timer;
+        const t = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timed out after 90 seconds')), 90000); });
+        try { return (await Promise.race([get(ref(db, k)), t])).val(); } finally { clearTimeout(timer); }
+    }
+    function saveBlob(blob, name) {
+        if (typeof saveAs === 'function') { saveAs(blob, name); return; }
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    }
+
+    // ---------- Excel helpers (only XLSX.utils.book_new / aoa_to_sheet / book_append_sheet / writeFile, like the monthly report) ----------
+    function flat(obj, prefix, out, depth) {
+        out = out || {}; depth = depth || 0;
+        if (obj == null || typeof obj !== 'object') return out;
+        Object.keys(obj).forEach((k) => {
+            const v = obj[k], key = prefix ? prefix + '.' + k : k;
+            if (v && typeof v === 'object' && !Array.isArray(v) && depth < 2) flat(v, key, out, depth + 1);
+            else if (v && typeof v === 'object') out[key] = JSON.stringify(v).slice(0, 32000);
+            else out[key] = typeof v === 'string' ? v.slice(0, 32000) : v;
+        });
+        return out;
+    }
+    const listOf = (x) => Array.isArray(x) ? x.filter(Boolean) : (x && typeof x === 'object' ? Object.values(x).filter(Boolean) : []);
+    function toAoa(rows) {
+        const heads = [], seen = new Set();
+        rows.forEach((r) => Object.keys(r).forEach((k) => { if (!seen.has(k)) { seen.add(k); heads.push(k); } }));
+        return [heads].concat(rows.map((r) => heads.map((h) => (r[h] === undefined ? '' : r[h]))));
+    }
+    function addSheet(wb, name, rows) {
+        const aoa = rows.length ? toAoa(rows) : [['(no data)']];
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = aoa[0].map((h) => ({ wch: Math.min(40, Math.max(10, String(h).length + 2)) }));
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+    }
+    function nodeRows(k, v) {
+        if (v == null) return [];
+        if (k === 'orders') {
+            const rows = [];
+            Object.entries(v).forEach(([id, o]) => {
+                if (!o || typeof o !== 'object') return;
+                const rest = Object.assign({}, o); delete rest.items; delete rest.rejectedItems;
+                const base = Object.assign({ order_key: id }, flat(rest));
+                const its = listOf(o.items), rej = listOf(o.rejectedItems);
+                if (!its.length && !rej.length) rows.push(base);
+                its.forEach((it) => rows.push(Object.assign({}, base, { item_line_status: 'ordered' }, flat(it, 'item'))));
+                rej.forEach((it) => rows.push(Object.assign({}, base, { item_line_status: 'REJECTED' }, flat(it, 'item'))));
+            });
+            return rows;
+        }
+        if (k === 'inventory') {
+            const rows = [];
+            Object.entries(v).forEach(([id, n]) => {
+                if (!n || typeof n !== 'object') return;
+                const rest = Object.assign({}, n); delete rest.batches;
+                const base = Object.assign({ item_key: id }, flat(rest));
+                const bs = n.batches && typeof n.batches === 'object' ? Object.entries(n.batches) : [];
+                if (!bs.length) rows.push(base);
+                bs.forEach(([bid, b]) => rows.push(Object.assign({}, base, { batch_key: bid }, flat(b, 'batch'))));
+            });
+            return rows;
+        }
+        if (typeof v !== 'object') return [{ value: v }];
+        return Object.entries(v).map(([key, x]) => (x && typeof x === 'object') ? Object.assign({ key }, flat(x)) : { key, value: x });
+    }
+    const SHEET_NAME = { orders: 'Orders', inventory: 'Inventory', users: 'Staff', settings: 'Settings', stock_movements: 'Stock Movements', inventory_history: 'Inventory History', audit_logs: 'Audit Logs', announcements: 'Announcements', itemLimits: 'Limits Default', itemLimitRules: 'Limits Group-Staff', po_orders: 'Purchase Orders' };
+
+    // ---------- the window ----------
+    function openBackup() {
+        if (!isAdmin() || document.getElementById('backupModal')) return;      // admin only, one window at a time
+        const last = lastBackup();
+        const ov = document.createElement('div');
+        ov.id = 'backupModal';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.65);display:flex;align-items:center;justify-content:center;padding:12px';
+        const BTN = 'padding:11px;border-radius:10px;font-weight:800;cursor:pointer;flex:1';
+        ov.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:16px;width:100%;max-width:560px;max-height:94vh;overflow:auto;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.4)">
+          <div style="padding:16px 18px 6px">
+            <div style="font-size:1.15rem;font-weight:800">💾 Backup Data</div>
+            <div style="font-size:.82rem;color:#64748b;margin-top:2px">Downloads a copy of your data. It only <b>reads</b> the database, nothing is changed.</div>
+            <div id="bkLast" style="margin-top:8px;font-size:.85rem;font-weight:700;color:${last ? '#15803d' : '#b45309'}">Last backup on this device: ${last ? esc(ago(last.at)) : 'never'}</div>
+          </div>
+          <div id="bkForm" style="padding:6px 18px 4px">
+            <div style="font-size:.85rem;font-weight:700;margin-top:6px">Format</div>
+            <label style="display:block;font-size:.86rem;margin:4px 0"><input type="radio" name="bkFmt" value="json" checked> <b>JSON</b>: complete copy (best for safety / restore)</label>
+            <label style="display:block;font-size:.86rem;margin:4px 0"><input type="radio" name="bkFmt" value="xlsx"> <b>Excel</b>: readable sheets (no images)</label>
+            <label style="display:block;font-size:.86rem;margin:4px 0"><input type="radio" name="bkFmt" value="both"> Both</label>
+            <div style="font-size:.85rem;font-weight:700;margin-top:10px">What to include</div>
+            <div id="bkNodes">${NODES.map((n) => `<label style="display:block;font-size:.85rem;margin:3px 0"><input type="checkbox" data-k="${n.k}" ${n.on ? 'checked' : ''}> ${esc(n.label)}</label>`).join('')}</div>
+            <div style="font-size:.85rem;font-weight:700;margin-top:10px">Options</div>
+            <label style="display:block;font-size:.85rem;margin:4px 0"><input type="checkbox" id="bkImg" checked> Include images &amp; signatures (JSON)</label>
+            <label style="display:block;font-size:.85rem;margin:4px 0;color:#b91c1c"><input type="checkbox" id="bkPw"> Include passwords <span style="font-size:.76rem">(only for a private full backup, keep the file safe)</span></label>
+          </div>
+          <div id="bkProg" style="padding:6px 18px;font-size:.84rem;line-height:1.5"></div>
+          <div style="display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid #e2e8f0">
+            <button type="button" id="bkClose" style="${BTN};border:1px solid #cbd5e1;background:#fff;color:#334155">Close</button>
+            <button type="button" id="bkGo" style="${BTN};border:0;background:#2563eb;color:#fff">Start backup</button>
+          </div></div>`;
+        document.body.appendChild(ov);
+        const $s = (q) => ov.querySelector(q);
+        $s('#bkClose').addEventListener('click', () => ov.remove());
+        $s('#bkGo').addEventListener('click', () => run(ov));
+    }
+
+    async function run(ov) {
+        const $s = (q) => ov.querySelector(q);
+        const fmt = $s('input[name="bkFmt"]:checked').value;
+        const opt = { images: $s('#bkImg').checked, passwords: $s('#bkPw').checked };
+        const picked = NODES.filter((n) => $s(`#bkNodes input[data-k="${n.k}"]`).checked);
+        if (!picked.length) { $s('#bkProg').innerHTML = '<span style="color:#b91c1c">Please tick at least one item.</span>'; return; }
+        const go = $s('#bkGo'); go.disabled = true; go.textContent = 'Working...';
+        ov.querySelectorAll('input').forEach((i) => { i.disabled = true; });
+        const prog = $s('#bkProg');
+        const lines = {}; const render = () => { prog.innerHTML = picked.map((n) => lines[n.k] || `⏳ ${esc(n.label)}`).join('<br>'); };
+        const data = {}, counts = {}, errors = {};
+        render();
+        for (const n of picked) {
+            lines[n.k] = `🔄 ${esc(n.label)}...`; render();
+            try {
+                const v = await readNode(n.k);
+                data[n.k] = sanitize(v, opt);
+                counts[n.k] = countOf(v);
+                lines[n.k] = `✅ ${esc(n.label)}: <b>${counts[n.k]}</b>`;
+            } catch (e) {
+                const msg = clean(e && (e.message || e.code)) || 'failed';
+                errors[n.k] = msg; counts[n.k] = 0;
+                lines[n.k] = `<span style="color:#b91c1c">⚠ ${esc(n.label)}: ${esc(msg)}</span>`;
+            }
+            render();
+        }
+        const by = clean(currentUser && currentUser.name);
+        const at = new Date().toISOString();
+        const files = [];
+        try {
+            if (fmt === 'json' || fmt === 'both') {
+                const payload = { meta: { app: 'Stationery Tracker', build: window.__APP_BUILD, exportedAt: at, exportedBy: by, passwordsIncluded: opt.passwords, imagesIncluded: opt.images, counts, errors }, data };
+                const name = `Stationery_Backup_${stamp()}.json`;
+                saveBlob(new Blob([JSON.stringify(payload)], { type: 'application/json' }), name); files.push(name);
+            }
+            if (fmt === 'xlsx' || fmt === 'both') {
+                const wb = XLSX.utils.book_new();
+                const info = [{ Item: 'Exported at', Value: new Date(at).toLocaleString() }, { Item: 'Exported by', Value: by }, { Item: 'App build', Value: window.__APP_BUILD },
+                    { Item: 'Passwords included', Value: opt.passwords ? 'yes' : 'no' }, { Item: 'Images included', Value: 'no (Excel never holds images)' }]
+                    .concat(Object.keys(counts).map((k) => ({ Item: 'Records: ' + k, Value: errors[k] ? 'ERROR: ' + errors[k] : counts[k] })));
+                addSheet(wb, 'Info', info);
+                picked.forEach((n) => { if (!SHEET_NAME[n.k] || errors[n.k]) return; addSheet(wb, SHEET_NAME[n.k], nodeRows(n.k, sanitize(data[n.k], { images: false, passwords: opt.passwords }))); });
+                const name = `Stationery_Backup_${stamp()}.xlsx`;
+                XLSX.writeFile(wb, name); files.push(name);
+            }
+        } catch (e) {
+            console.warn('Backup file could not be created:', e);
+            prog.innerHTML += `<br><span style="color:#b91c1c">⚠ The file could not be created: ${esc(clean(e && e.message))}</span>`;
+            go.disabled = false; go.textContent = 'Try again'; ov.querySelectorAll('input').forEach((i) => { i.disabled = false; });
+            return;
+        }
+        const failed = Object.keys(errors).length;
+        if (files.length) { try { localStorage.setItem(LAST_KEY, JSON.stringify({ at, counts, files })); } catch (e) { /* storage full / private mode */ } }
+        $s('#bkLast').textContent = 'Last backup on this device: just now';
+        $s('#bkLast').style.color = '#15803d';
+        prog.innerHTML += `<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:${failed ? '#fef3c7' : '#dcfce7'};font-weight:700">${failed ? '⚠ Backup finished, but ' + failed + ' item(s) could not be read (see above).' : '✅ Backup finished.'}<br><span style="font-weight:600;font-size:.8rem">Saved: ${files.map(esc).join(', ')}<br>Keep this file somewhere safe (Google Drive / computer).</span></div>`;
+        go.textContent = 'Done'; go.disabled = true;
+        if (typeof showToast === 'function') showToast('Backup downloaded');
+    }
+    window.__openBackup = openBackup;
+
+    // ---------- admin menu item + weekly reminder ----------
+    function ensureMenuItem() {
+        const nav = document.getElementById('admin-menu');
+        if (!nav) return;
+        const have = document.getElementById('drawer-backup-btn');
+        if (!isAdmin()) { if (have) have.remove(); return; }
+        if (have) return;
+        const b = document.createElement('button');
+        b.id = 'drawer-backup-btn'; b.type = 'button'; b.className = 'drawer-item'; b.textContent = '💾 Backup Data';
+        b.addEventListener('click', () => { const c = document.getElementById('close-drawer-btn'); if (c) c.click(); openBackup(); });
+        nav.insertBefore(b, document.getElementById('logout-btn-admin') || null);
+    }
+    function remind() {
+        try {
+            if (!isAdmin() || sessionStorage.getItem('bk_remind_v1')) return;
+            sessionStorage.setItem('bk_remind_v1', '1');
+            const last = lastBackup();
+            const days = last ? (Date.now() - new Date(last.at).getTime()) / 86400000 : Infinity;
+            if (days > 7 && typeof showToast === 'function') setTimeout(() => showToast(last ? 'Reminder: no backup for over 7 days. Menu > Backup Data' : 'Reminder: no backup taken on this device yet. Menu > Backup Data'), 6000);
+        } catch (e) { /* reminder only */ }
+    }
+    setInterval(() => { try { if (!currentUser) return; ensureMenuItem(); remind(); } catch (e) { /* display only */ } }, 2000);
+})();
+
+// =====================================================================================
+// v2.19.0 (additive) - STOCK SAFETY, PART 2: restock, batch edit/delete, startup sync, item edit
+//   v2.9.1 made the handover deduction safe. These four other ways of writing stock still did "read the value, calculate,
+//   write it back" - if a handover landed in between, its deduction was silently overwritten (stock too high):
+//     1) addStockBatchToItem   (Restock / "add stock" / same serial number)  -> now ONE transaction on the item
+//     2) recalcParentTotals    (after a batch is edited or deleted)           -> now sums the batches on the LIVE value
+//     3) migrateInventoryFieldAliases (runs every time an admin opens the app) -> per-item transaction, only if really needed
+//     4) "Edit item" form      -> used to write back the quantity it showed when it was opened (even when only the
+//                                  description was changed). Now the stock is written ONLY if the admin typed a new quantity.
+//   Same fields, same rules, same messages as before. Kill switch: localStorage.stockSafetyOff = '1' (old behaviour).
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__stockSafetyV2190) return;
+    window.__stockSafetyV2190 = true;
+    window.__APP_BUILD = '2.19.0';
+    const killed = () => { try { return localStorage.getItem('stockSafetyOff') === '1'; } catch (e) { return false; } };
+    const num = (v) => parseInt(v, 10) || 0;
+
+    // ---------- 1) RESTOCK: one transaction on the item (batches + totals change together, on the live value) ----------
+    if (typeof addStockBatchToItem === 'function') {
+        const origAdd = addStockBatchToItem;
+        addStockBatchToItem = async function (itemId, opts) {
+            if (killed()) return origAdd.apply(this, arguments);
+            const { qty, date, brand, imageUrl, unit, color } = opts || {};
+            const parentRef = ref(db, `inventory/${itemId}`);
+            const nowIso = new Date().toISOString();
+            const batchDate = date || nowIso.split('T')[0];
+            const batchId = 'BATCH_' + Date.now();
+            let info = null;
+            const tx = await runTransaction(parentRef, (parent) => {
+                if (parent === null || typeof parent !== 'object') return parent;          // null first -> Firebase retries with the real value
+                const serial = String(parent.serialNumber || parent.batchNo || itemId);
+                const existing = (parent.batches && typeof parent.batches === 'object') ? parent.batches : {};
+                const batches = Object.assign({}, existing);
+                let total = Object.values(existing).reduce((s, b) => s + (parseInt(b.currentQty ?? b.currentStock ?? b.quantity ?? 0, 10) || 0), 0);
+                // old items keep their stock on the parent only: move it into its own batch first (same as before)
+                if (Object.keys(existing).length === 0) {
+                    const legacyQty = parseInt(parent.currentStock ?? parent.quantity ?? parent.availableStock ?? parent.stock ?? 0, 10) || 0;
+                    if (legacyQty > 0) {
+                        batches.BATCH_LEGACY = {
+                            batchNo: 'BATCH_LEGACY', brandName: parent.brand || 'Standard', brand: parent.brand || 'Standard', serialNumber: serial,
+                            unit: parent.unit || 'Pcs', color: parent.color || '',
+                            initialQty: parseInt(parent.openingQuantity ?? legacyQty, 10) || legacyQty,
+                            currentStock: legacyQty, quantity: legacyQty,
+                            receivedDate: (parent.createdAt || '1970-01-01').split('T')[0],
+                            imageUrl: parent.imageUrl || '', status: 'Active', createdAt: parent.createdAt || nowIso
+                        };
+                        total += legacyQty;
+                    }
+                }
+                const useBrand = brand || parent.brand || 'Standard';
+                batches[batchId] = {
+                    batchNo: batchId, brandName: useBrand, brand: useBrand, serialNumber: serial,
+                    unit: unit || parent.unit || 'Pcs', color: color ?? parent.color ?? '',
+                    initialQty: qty, currentQty: qty, currentStock: qty, quantity: qty,
+                    receivedDate: batchDate, imageUrl: imageUrl || parent.imageUrl || '', status: 'Active', createdAt: nowIso
+                };
+                total += qty;
+                info = { name: parent.itemName || parent.name || itemId, serial, total };
+                return sanitizeForFirebase(Object.assign({}, parent, { batches, quantity: total, currentStock: total, availableStock: total, stock: total }));
+            });
+            if (!tx.committed || !tx.snapshot.exists() || !info) throw new Error('Item not found in inventory.');
+            return { batchId, total: info.total, name: info.name, serial: info.serial };
+        };
+        window.addStockBatchToItem = addStockBatchToItem;
+    }
+
+    // ---------- 2) PARENT TOTAL = sum of the batches, calculated on the LIVE value ----------
+    if (typeof recalcParentTotals === 'function') {
+        const origRecalc = recalcParentTotals;
+        recalcParentTotals = async function (itemId) {
+            if (killed()) return origRecalc.apply(this, arguments);
+            const parentRef = ref(db, `inventory/${itemId}`);
+            let total = null;
+            const tx = await runTransaction(parentRef, (p) => {
+                if (p === null || typeof p !== 'object') return p;
+                const batches = (p.batches && typeof p.batches === 'object') ? Object.values(p.batches) : [];
+                if (!batches.length) { total = null; return; }                               // legacy item keeps its own value: nothing to write
+                total = batches.reduce((sum, b) => sum + Math.max(0, parseInt(b?.currentStock ?? b?.currentQty ?? b?.quantity ?? 0, 10) || 0), 0);
+                return Object.assign({}, p, {
+                    currentQty: total, currentStock: total, quantity: total, availableStock: total, stock: total,
+                    status: total > 0 ? (total <= 5 ? 'Low Stock' : 'In Stock') : 'Out of Stock',
+                    lastUpdated: new Date().toISOString()
+                });
+            });
+            if (!tx.snapshot.exists()) return null;
+            return total;
+        };
+        window.recalcParentTotals = recalcParentTotals;
+    }
+
+    // ---------- 3) STARTUP SYNC of the 4 stock fields: per item, on the live value, only when really different ----------
+    if (typeof migrateInventoryFieldAliases === 'function') {
+        const origMigrate = migrateInventoryFieldAliases;
+        const canon = (c) => {
+            let q = parseInt(c.quantity ?? c.availableStock ?? c.currentStock ?? c.stock ?? 0, 10);
+            if (c.batches && typeof c.batches === 'object') {
+                const bs = Object.values(c.batches).reduce((s, b) => s + (parseInt(b?.currentStock ?? b?.quantity ?? 0, 10) || 0), 0);
+                if (bs > 0 || q === 0) q = bs;
+            }
+            return q;
+        };
+        const needs = (c) => { const q = canon(c); return c.quantity !== q || c.availableStock !== q || c.currentStock !== q || c.stock !== q; };
+        migrateInventoryFieldAliases = async function () {
+            if (killed()) return origMigrate.apply(this, arguments);
+            try {
+                const invSnap = await get(ref(db, 'inventory'));
+                if (!invSnap.exists()) return;
+                const ids = Object.entries(invSnap.val()).filter(([id, c]) => c && typeof c === 'object' && needs(c)).map(([id]) => id);
+                for (const id of ids) {
+                    await runTransaction(ref(db, `inventory/${id}`), (c) => {
+                        if (c === null || typeof c !== 'object') return c;
+                        if (!needs(c)) return;                                               // already fine on the live value: write nothing
+                        const q = canon(c);
+                        return Object.assign({}, c, { quantity: q, availableStock: q, currentStock: q, stock: q });
+                    });
+                }
+                if (ids.length) console.log(`✅ Migrated ${ids.length} inventory nodes (safe)`);
+            } catch (e) { console.warn('Migration failed (non-critical):', e); }
+        };
+        window.migrateInventoryFieldAliases = migrateInventoryFieldAliases;
+    }
+
+    // ---------- 4) "EDIT ITEM" form: never write back a stale quantity ----------
+    let qtyTouched = false;
+    document.addEventListener('input', (e) => { if (e.target && e.target.id === 'edit-item-available-qty') qtyTouched = true; }, true);
+    document.addEventListener('show.bs.modal', (e) => { if (e.target && e.target.id === 'editItemModal') qtyTouched = false; }, true);
+    document.addEventListener('submit', async (e) => {
+        const form = e.target;
+        if (!form || form.id !== 'edit-inventory-form' || killed()) return;
+        e.preventDefault(); e.stopImmediatePropagation();                                   // our version replaces the old handler for this submit
+        const $v = (id) => document.getElementById(id);
+        const itemId = $v('edit-item-id').value;
+        const itemName = $v('edit-item-name').value.trim();
+        const itemCategory = $v('edit-item-category').value.trim();
+        const openingQuantity = num($v('edit-item-opening-qty').value);
+        const quantity = num($v('edit-item-available-qty').value);
+        const description = $v('edit-item-description').value.trim();
+        const writeStock = qtyTouched;                                                       // only if the admin really typed a new quantity
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+        try {
+            const tx = await runTransaction(ref(db, 'inventory/' + itemId), (cur) => {
+                if (cur === null || typeof cur !== 'object') return cur;
+                const n = Object.assign({}, cur, { itemName, category: itemCategory, openingQuantity, description });
+                if (writeStock) { n.quantity = quantity; n.availableStock = quantity; n.currentStock = quantity; n.stock = quantity; }
+                return n;
+            });
+            if (!tx.committed || !tx.snapshot.exists()) throw new Error('Item not found in inventory.');
+            await logActivity('Inventory Updated', `Item: ${itemName} (${itemId})`);
+            showToast('Item updated successfully!');
+            qtyTouched = false;
+            bootstrap.Modal.getInstance($v('editItemModal')).hide();
+        } catch (err) {
+            showToast('Update failed: ' + err.message, 'error');
+        } finally {
+            if (submitBtn) submitBtn.disabled = false;
+        }
+    }, true);
+})();
+
+// =====================================================================================
+// v2.20.0 (additive) - SECURITY PHASE 1: Firebase login accounts, built quietly UNDER the existing login
+//   * Nothing changes for staff: same ADEK number + password screen, same DB check. Database rules are NOT touched.
+//   * After a staff member logs in the normal way, the app silently gives him a Firebase Authentication account
+//     (hidden e-mail  <adek>@jys-staff.app , same password) and records the link:  users/<id>/authUid  +  authMap/<uid> = <id>.
+//   * Admin menu -> "🔐 Staff Login Accounts": creates / checks the accounts of ALL staff in one go (a second, hidden Firebase
+//     app instance is used, so the admin stays logged in) and lists who needs attention.
+//   * The built-in admin shortcut login is deliberately NOT turned into an account (its password is public in this file).
+//   * Logout also signs the Firebase account out (shared phones).
+//   * Firebase Auth is loaded with a dynamic import(): if it cannot be loaded, everything simply stays as it was.
+//   Passwords are never printed, logged or stored in any new place.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__authPhase1V2200) return;
+    window.__authPhase1V2200 = true;
+    window.__APP_BUILD = '2.20.0';
+
+    const AUTH_URL = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
+    const DOMAIN = 'jys-staff.app';
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const emailFor = (id) => clean(id).toLowerCase().replace(/[^a-z0-9._-]/g, '_') + '@' + DOMAIN;
+    window.__authEmailFor = emailFor;
+
+    // ---------- load Firebase Auth without risking the app ----------
+    let A = null, mainAuth = null, loading = null;
+    function loadAuth() {
+        if (A) return Promise.resolve(A);
+        if (!loading) {
+            loading = import(AUTH_URL).then((m) => { A = m; mainAuth = m.getAuth(app); return m; })
+                .catch((e) => { console.warn('Firebase Auth could not be loaded (security phase 1 skipped):', e && e.message); loading = null; return null; });
+        }
+        return loading;
+    }
+
+    // ---------- one account: sign in, else create ----------
+    const MISSING = ['auth/user-not-found', 'auth/invalid-credential', 'auth/wrong-password', 'auth/invalid-login-credentials'];
+    async function ensureAccount(auth, id, password) {
+        const pw = String(password == null ? '' : password);
+        if (!pw) return { status: 'nopassword' };
+        if (pw.length < 6) return { status: 'short' };
+        const email = emailFor(id);
+        try { const c = await A.signInWithEmailAndPassword(auth, email, pw); return { status: 'ok', uid: c.user.uid, email }; }
+        catch (e) {
+            const code = e && e.code;
+            if (code === 'auth/too-many-requests') return { status: 'limited' };
+            if (!MISSING.includes(code)) return { status: 'error', code: clean(code) || 'unknown' };
+        }
+        try { const c = await A.createUserWithEmailAndPassword(auth, email, pw); return { status: 'created', uid: c.user.uid, email }; }
+        catch (e) {
+            const code = e && e.code;
+            if (code === 'auth/email-already-in-use') return { status: 'mismatch' };      // the account exists but with another password
+            if (code === 'auth/weak-password') return { status: 'short' };
+            if (code === 'auth/too-many-requests') return { status: 'limited' };
+            return { status: 'error', code: clean(code) || 'unknown' };
+        }
+    }
+    async function linkAccount(id, uid, email) {
+        const out = { users: false, map: false };
+        try { await update(ref(db, 'users/' + id), { authUid: uid, authEmail: email, authAt: new Date().toISOString() }); out.users = true; } catch (e) { /* rules */ }
+        try { await set(ref(db, 'authMap/' + uid), id); out.map = true; } catch (e) { /* rules: authMap block missing */ }
+        return out;
+    }
+
+    // ---------- 1) quiet account for whoever just logged in the normal way ----------
+    async function lazyProvision(id, pw) {
+        const m = await loadAuth();
+        if (!m) return;
+        if (mainAuth.currentUser && mainAuth.currentUser.email === emailFor(id)) return;      // already signed in
+        const r = await ensureAccount(mainAuth, id, pw);
+        if (!r.uid) { console.info('Login account not ready for', id, '->', r.status); return; }
+        let linked = null;
+        try { linked = (await get(ref(db, 'users/' + id + '/authUid'))).val(); } catch (e) { /* ignore */ }
+        if (linked !== r.uid) await linkAccount(id, r.uid, r.email);
+    }
+    const origLogin = window.handleUserLogin;
+    if (typeof origLogin === 'function') {
+        window.handleUserLogin = async function () {
+            const idIn = clean((document.getElementById('login-pass-number') || {}).value);
+            const pwIn = String((document.getElementById('login-password') || {}).value || '').trim();
+            const result = await origLogin.apply(this, arguments);
+            try {
+                const ok = currentUser && idIn && String(currentUser.uid).toUpperCase() === idIn.toUpperCase();
+                const shortcut = sessionStorage.getItem('isAdminAuthenticated') === 'true';      // built-in admin shortcut: never make an account from it
+                if (ok && !shortcut) lazyProvision(currentUser.uid, pwIn).catch(() => { });
+            } catch (e) { /* never disturb the login */ }
+            return result;
+        };
+    }
+
+    // ---------- 2) logout also signs the Firebase account out ----------
+    const origLogout = window.handleUserLogout;
+    if (typeof origLogout === 'function') {
+        window.handleUserLogout = async function (event) {
+            try {
+                if (event && event.preventDefault) event.preventDefault();
+                if (A && mainAuth && mainAuth.currentUser) await Promise.race([A.signOut(mainAuth), sleep(700)]);
+            } catch (e) { /* keep logging out */ }
+            return origLogout.apply(this, arguments);
+        };
+    }
+
+    // ---------- 3) admin tool: create / check the accounts of all staff ----------
+    const TEXT = {
+        short: 'Password is shorter than 6 characters (Firebase minimum). Give this staff a longer password.',
+        nopassword: 'No password saved for this staff.',
+        mismatch: 'A login account already exists for this ID with a different password.',
+        limited: 'Firebase asked us to slow down. Wait 15 minutes and press the button again.',
+        error: 'Firebase error'
+    };
+    async function openTool() {
+        if (!isAdmin() || document.getElementById('authToolModal')) return;
+        const ov = document.createElement('div');
+        ov.id = 'authToolModal';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.65);display:flex;align-items:center;justify-content:center;padding:12px';
+        const BTN = 'padding:11px;border-radius:10px;font-weight:800;cursor:pointer;flex:1';
+        ov.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:16px;width:100%;max-width:620px;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.4)">
+          <div style="padding:16px 18px 6px;flex:none"><div style="font-size:1.15rem;font-weight:800">🔐 Staff Login Accounts</div>
+            <div style="font-size:.82rem;color:#64748b;margin-top:2px">Gives every staff member a secure Firebase login with his <b>current</b> ID and password. Nothing changes for staff, and no rules are touched.</div>
+            <div id="atSummary" style="margin-top:8px;font-size:.88rem;font-weight:700">Loading...</div></div>
+          <div id="atList" style="overflow:auto;padding:4px 18px;flex:1 1 auto;min-height:160px;font-size:.85rem"></div>
+          <div id="atMsg" style="padding:6px 18px;font-size:.82rem;line-height:1.45;flex:none"></div>
+          <div style="display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid #e2e8f0;flex:none">
+            <button type="button" id="atClose" style="${BTN};border:1px solid #cbd5e1;background:#fff;color:#334155">Close</button>
+            <button type="button" id="atGo" style="${BTN};border:0;background:#2563eb;color:#fff" disabled>Create / check accounts</button></div></div>`;
+        document.body.appendChild(ov);
+        const $s = (q) => ov.querySelector(q);
+        $s('#atClose').addEventListener('click', () => ov.remove());
+        let users = {}, mapUids = null, mapOk = true;
+        async function load() {
+            users = (await get(ref(db, 'users'))).val() || {};
+            try { mapUids = new Set(Object.keys((await get(ref(db, 'authMap'))).val() || {})); mapOk = true; } catch (e) { mapUids = new Set(); mapOk = false; }
+            draw();
+        }
+        const rows = () => Object.entries(users).filter(([id, u]) => u && typeof u === 'object').map(([id, u]) => ({
+            id, name: clean(u.name) || id, desig: clean(u.designation) || clean(u.role), pw: clean(u.password || u.pass), uid: clean(u.authUid),
+            linked: !!clean(u.authUid) && mapUids.has(clean(u.authUid)), half: !!clean(u.authUid) && !mapUids.has(clean(u.authUid))
+        })).sort((a, b) => a.name.localeCompare(b.name));
+        const status = {};     // id -> text set during a run
+        function draw() {
+            const rs = rows(), n = rs.filter((r) => r.linked).length;
+            $s('#atSummary').innerHTML = `Linked accounts: <span style="color:${n === rs.length ? '#15803d' : '#b45309'}">${n} of ${rs.length}</span>`;
+            $s('#atList').innerHTML = rs.map((r) => {
+                const st = status[r.id] || (r.linked ? '✅ ready' : r.half ? '⏳ link incomplete' : '⏳ not yet');
+                return `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid #f1f5f9"><div style="flex:1;min-width:0"><b>${esc(r.name)}</b><div style="font-size:.74rem;color:#64748b">${esc(r.id)} · ${esc(r.desig)}</div></div><div style="white-space:nowrap;font-weight:700">${st}</div></div>`;
+            }).join('') || '<div style="padding:16px;color:#64748b;text-align:center">No staff found.</div>';
+            $s('#atGo').disabled = !rs.length;
+        }
+        try { await load(); } catch (e) { $s('#atSummary').textContent = 'Could not read the staff list.'; return; }
+        $s('#atGo').addEventListener('click', async () => {
+            const go = $s('#atGo'); go.disabled = true; go.textContent = 'Working...';
+            const m = await loadAuth();
+            if (!m) { $s('#atMsg').innerHTML = '<span style="color:#b91c1c">Firebase Auth could not be loaded. Check the internet and try again.</span>'; go.disabled = false; go.textContent = 'Try again'; return; }
+            const secAuth = m.getAuth(initializeApp(firebaseConfig, 'provisioner'));          // second app instance: the admin stays logged in
+            const tally = { created: 0, ok: 0, linked: 0 }; const problems = []; let mapFailed = false, stop = false, setupHint = false, netHint = false;
+            for (const r of rows()) {
+                if (stop) break;
+                if (r.linked) { status[r.id] = '✅ ready'; continue; }
+                status[r.id] = '🔄'; draw();
+                if (r.half) {                                                                  // account known, only the lookup entry is missing
+                    const l = await linkAccount(r.id, r.uid, emailFor(r.id));
+                    if (l.map) { tally.linked++; status[r.id] = '✅ linked'; mapUids.add(r.uid); } else { mapFailed = true; status[r.id] = '⚠ rules'; }
+                    continue;
+                }
+                const res = await ensureAccount(secAuth, r.id, r.pw);
+                try { await m.signOut(secAuth); } catch (e) { /* ignore */ }
+                if (res.uid) {
+                    const l = await linkAccount(r.id, res.uid, res.email);
+                    if (!l.users) { status[r.id] = '⚠ rules'; problems.push(`${esc(r.name)} (${esc(r.id)}): could not save the link (check the Firebase rules for users).`); }
+                    else if (!l.map) { mapFailed = true; status[r.id] = '⚠ rules'; users[r.id] = Object.assign({}, users[r.id], { authUid: res.uid }); }
+                    else { status[r.id] = res.status === 'created' ? '✅ created' : '✅ ready'; users[r.id] = Object.assign({}, users[r.id], { authUid: res.uid }); mapUids.add(res.uid); }
+                    tally[res.status === 'created' ? 'created' : 'ok']++;
+                } else {
+                    status[r.id] = '⚠ ' + (res.status === 'limited' ? 'wait' : 'check');
+                    if (res.code === 'auth/operation-not-allowed') { setupHint = true; stop = true; }          // Email/Password is not switched on in Firebase
+                    if (res.code === 'auth/network-request-failed') { netHint = true; stop = true; }
+                    problems.push(`${esc(r.name)} (${esc(r.id)}): ${TEXT[res.status] || TEXT.error}${res.code ? ' [' + esc(res.code) + ']' : ''}`);
+                    if (res.status === 'limited') stop = true;
+                }
+                draw(); await sleep(350);
+            }
+            draw();
+            let html = `<div style="padding:8px 10px;border-radius:10px;background:${problems.length || mapFailed ? '#fef3c7' : '#dcfce7'};font-weight:700">New accounts: ${tally.created} · Already fine: ${tally.ok}${tally.linked ? ' · Links completed: ' + tally.linked : ''}${problems.length ? ' · Need attention: ' + problems.length : ''}</div>`;
+            if (mapFailed || !mapOk) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Firebase Rules are missing a block for "authMap". Add <code>"authMap": { ".read": true, ".write": true }</code> next to the other nodes, press Publish, then press this button again.</div>';
+            if (setupHint) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Email/Password login is not switched on in Firebase. Firebase Console → Authentication → Sign-in method → Email/Password → Enable → Save. Then press this button again.</div>';
+            if (netHint) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Internet problem while talking to Firebase. Check the connection and press this button again.</div>';
+            if (problems.length) html += '<ul style="margin:6px 0 0;padding-left:18px">' + problems.map((p) => `<li>${p}</li>`).join('') + '</ul>';
+            $s('#atMsg').innerHTML = html;
+            go.disabled = false; go.textContent = 'Run again';
+        });
+    }
+    window.__openStaffAuthTool = openTool;
+
+    function ensureMenuItem() {
+        const nav = document.getElementById('admin-menu');
+        if (!nav) return;
+        const have = document.getElementById('drawer-authacc-btn');
+        if (!isAdmin()) { if (have) have.remove(); return; }
+        if (have) return;
+        const b = document.createElement('button');
+        b.id = 'drawer-authacc-btn'; b.type = 'button'; b.className = 'drawer-item'; b.textContent = '🔐 Staff Login Accounts';
+        b.addEventListener('click', () => { const c = document.getElementById('close-drawer-btn'); if (c) c.click(); openTool(); });
+        nav.insertBefore(b, document.getElementById('logout-btn-admin') || null);
+    }
+    setInterval(() => { try { if (currentUser) ensureMenuItem(); } catch (e) { /* display only */ } }, 2000);
 })();
