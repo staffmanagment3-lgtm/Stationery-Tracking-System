@@ -10238,6 +10238,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         let entries = (teacherOrdersState && Array.isArray(teacherOrdersState.allItems)) ? teacherOrdersState.allItems : [];
         entries = entries.filter(([id, o]) => o && String(o.teacherUid) === String(uid));
         if (entries.length) return entries;
+        if (window.__smartCacheOrdersReady && window.__smartCacheOrdersReady()) return [];     // v2.22.0: he really has none (saved copy is current)
         try {                                                          // cache empty -> read once
             const s = await get(ref(db, 'orders'));
             return Object.entries(s.val() || {}).filter(([id, o]) => o && String(o.teacherUid) === String(uid));
@@ -11182,6 +11183,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     async function myEntries(uid) {
         const e = myEntriesSync().filter(([id, o]) => String(o.teacherUid) === String(uid));
         if (e.length) return e;
+        if (window.__smartCacheOrdersReady && window.__smartCacheOrdersReady()) return [];       // v2.22.0: he really has none (saved copy is current)
         try {
             const s = await get(ref(db, 'orders'));
             return Object.entries(s.val() || {}).filter(([id, o]) => o && String(o.teacherUid) === String(uid));
@@ -12141,7 +12143,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     'use strict';
     if (window.__authPhase1V2200) return;
     window.__authPhase1V2200 = true;
-    window.__APP_BUILD = '2.20.0';
+    window.__APP_BUILD = '2.20.1';
 
     const AUTH_URL = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
     const DOMAIN = 'jys-staff.app';
@@ -12282,7 +12284,8 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             const m = await loadAuth();
             if (!m) { $s('#atMsg').innerHTML = '<span style="color:#b91c1c">Firebase Auth could not be loaded. Check the internet and try again.</span>'; go.disabled = false; go.textContent = 'Try again'; return; }
             const secAuth = m.getAuth(initializeApp(firebaseConfig, 'provisioner'));          // second app instance: the admin stays logged in
-            const tally = { created: 0, ok: 0, linked: 0 }; const problems = []; let mapFailed = false, stop = false, setupHint = false, netHint = false;
+            const tally = { created: 0, ok: 0, linked: 0 }; const problems = []; let mapFailed = false, stop = false, setupHint = false, netHint = false, lastCode = null, errRun = 0, repeatCode = null;
+            Object.keys(status).forEach((k) => { delete status[k]; });
             for (const r of rows()) {
                 if (stop) break;
                 if (r.linked) { status[r.id] = '✅ ready'; continue; }
@@ -12295,6 +12298,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
                 const res = await ensureAccount(secAuth, r.id, r.pw);
                 try { await m.signOut(secAuth); } catch (e) { /* ignore */ }
                 if (res.uid) {
+                    lastCode = null; errRun = 0;
                     const l = await linkAccount(r.id, res.uid, res.email);
                     if (!l.users) { status[r.id] = '⚠ rules'; problems.push(`${esc(r.name)} (${esc(r.id)}): could not save the link (check the Firebase rules for users).`); }
                     else if (!l.map) { mapFailed = true; status[r.id] = '⚠ rules'; users[r.id] = Object.assign({}, users[r.id], { authUid: res.uid }); }
@@ -12302,8 +12306,9 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
                     tally[res.status === 'created' ? 'created' : 'ok']++;
                 } else {
                     status[r.id] = '⚠ ' + (res.status === 'limited' ? 'wait' : 'check');
-                    if (res.code === 'auth/operation-not-allowed') { setupHint = true; stop = true; }          // Email/Password is not switched on in Firebase
+                    if (res.code === 'auth/operation-not-allowed' || res.code === 'auth/configuration-not-found') { setupHint = true; stop = true; }          // Authentication / Email-Password is not set up in Firebase
                     if (res.code === 'auth/network-request-failed') { netHint = true; stop = true; }
+                    if (res.status === 'error') { if (res.code === lastCode) errRun++; else { lastCode = res.code; errRun = 1; } if (errRun >= 3) { repeatCode = res.code; stop = true; } }
                     problems.push(`${esc(r.name)} (${esc(r.id)}): ${TEXT[res.status] || TEXT.error}${res.code ? ' [' + esc(res.code) + ']' : ''}`);
                     if (res.status === 'limited') stop = true;
                 }
@@ -12312,7 +12317,8 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
             draw();
             let html = `<div style="padding:8px 10px;border-radius:10px;background:${problems.length || mapFailed ? '#fef3c7' : '#dcfce7'};font-weight:700">New accounts: ${tally.created} · Already fine: ${tally.ok}${tally.linked ? ' · Links completed: ' + tally.linked : ''}${problems.length ? ' · Need attention: ' + problems.length : ''}</div>`;
             if (mapFailed || !mapOk) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Firebase Rules are missing a block for "authMap". Add <code>"authMap": { ".read": true, ".write": true }</code> next to the other nodes, press Publish, then press this button again.</div>';
-            if (setupHint) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Email/Password login is not switched on in Firebase. Firebase Console → Authentication → Sign-in method → Email/Password → Enable → Save. Then press this button again.</div>';
+            if (setupHint) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Firebase login is not set up yet. Firebase Console → <b>Authentication</b> → press <b>Get started</b> (if you see it) → <b>Sign-in method</b> tab → <b>Email/Password</b> → <b>Enable</b> → <b>Save</b>. Then press this button again. Nothing was changed, and the run stopped at the first error.</div>';
+            if (repeatCode && !setupHint) html += `<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Firebase gave the same error (${esc(repeatCode)}) three times in a row, so the run was stopped instead of sending hundreds of failing requests. Fix the cause and press this button again.</div>`;
             if (netHint) html += '<div style="margin-top:6px;color:#b91c1c;font-weight:700">⚠ Internet problem while talking to Firebase. Check the connection and press this button again.</div>';
             if (problems.length) html += '<ul style="margin:6px 0 0;padding-left:18px">' + problems.map((p) => `<li>${p}</li>`).join('') + '</ul>';
             $s('#atMsg').innerHTML = html;
@@ -12320,6 +12326,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         });
     }
     window.__openStaffAuthTool = openTool;
+    window.__authApi = { loadAuth, ensureAccount, linkAccount, emailFor };          // used by the admin setup tool (v2.21.0)
 
     function ensureMenuItem() {
         const nav = document.getElementById('admin-menu');
@@ -12333,4 +12340,511 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         nav.insertBefore(b, document.getElementById('logout-btn-admin') || null);
     }
     setInterval(() => { try { if (currentUser) ensureMenuItem(); } catch (e) { /* display only */ } }, 2000);
+})();
+
+// =====================================================================================
+// v2.21.0 (additive) - SECURITY PHASE 2a: a REAL admin login, and a switch for the old public admin shortcut
+//   The built-in shortcut (an ID + password written in this public file) and the developer passcode let ANYONE who reads
+//   app.js in as admin. This step adds the safe replacement FIRST, and only then lets the old way be switched off:
+//     1) Admin menu -> "🛡 Admin Login Setup": create a real admin (ID, name, NEW strong password). It is saved as a normal
+//        user with role ADMIN (so the normal login screen works), and its Firebase login account is created and linked.
+//     2) Log out, log in with the new ID + password, check everything works.
+//     3) Only then: "Switch OFF the old shortcut". It is a flag in the database (settings/adminShortcutOff). While it is ON
+//        the old shortcut login and the developer passcode are refused. It can be switched back on from the real admin login.
+//   (Step 2b, later: the old password is deleted from this file for good.)
+//   Existing staff / admins and their passwords are not touched. Only NEW admin records are created, never edited.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__adminPhase2aV2210) return;
+    window.__adminPhase2aV2210 = true;
+    window.__APP_BUILD = '2.21.0';
+
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const onShortcutSession = () => sessionStorage.getItem('isAdminAuthenticated') === 'true';
+    const FLAG = 'settings/adminShortcutOff';
+    const RESERVED = ['ASIF', 'DEV001'];
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    async function shortcutIsOff() {
+        try { return (await get(ref(db, FLAG))).val() === true; } catch (e) { return false; }      // unreadable -> never lock anybody out
+    }
+
+    // ---------- the old ways are refused while the switch is OFF ----------
+    const origLogin = window.handleUserLogin;
+    if (typeof origLogin === 'function') {
+        window.handleUserLogin = async function (event) {
+            try {
+                const idIn = clean((document.getElementById('login-pass-number') || {}).value).toUpperCase();
+                if (idIn === 'ASIF' && await shortcutIsOff()) {
+                    const real = (await get(ref(db, 'users'))).val() || {};
+                    const hasRealRecord = Object.keys(real).some((k) => k.toUpperCase() === 'ASIF');      // a normal staff record with this ID keeps working
+                    if (!hasRealRecord) {
+                        if (event && event.preventDefault) event.preventDefault();
+                        alert('⚠️ The old admin shortcut is switched off. Please log in with your new admin ID and password.\n⚠️ تم إيقاف طريقة الدخول القديمة للمشرف. استخدم رقم الدخول وكلمة المرور الجديدين.');
+                        return;
+                    }
+                }
+            } catch (e) { /* never block a login because of a lookup problem */ }
+            return origLogin.apply(this, arguments);
+        };
+    }
+    const origVerify = window.verifyAdminByPassword;
+    if (typeof origVerify === 'function') {
+        window.verifyAdminByPassword = async function () {
+            if (await shortcutIsOff()) { alert('⚠️ The developer passcode is switched off. Please use your admin login.\n⚠️ تم إيقاف رمز المطور.'); return; }
+            return origVerify.apply(this, arguments);
+        };
+    }
+
+    // ---------- the tool ----------
+    function passwordProblems(pw, id) {
+        const p = [];
+        if (pw.length < 10) p.push('at least 10 characters');
+        if (!/[A-Za-z]/.test(pw)) p.push('at least one letter');
+        if (!/\d/.test(pw)) p.push('at least one number');
+        if (id && pw.toLowerCase().includes(id.toLowerCase())) p.push('must not contain the login ID');
+        if (/^(password|12345|qwerty|admin)/i.test(pw)) p.push('too common');
+        return p;
+    }
+    async function openTool() {
+        if (!isAdmin() || document.getElementById('adminSetupModal')) return;
+        const ov = document.createElement('div');
+        ov.id = 'adminSetupModal';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.65);display:flex;align-items:center;justify-content:center;padding:12px';
+        const BTN = 'padding:11px;border-radius:10px;font-weight:800;cursor:pointer;flex:1';
+        const INP = 'width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:10px;color:#0f172a;background:#fff;margin-top:4px';
+        ov.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:16px;width:100%;max-width:620px;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.4)">
+          <div style="padding:16px 18px 6px;flex:none"><div style="font-size:1.15rem;font-weight:800">🛡 Admin Login Setup</div>
+            <div id="asWho" style="margin-top:4px;font-size:.84rem;font-weight:700"></div></div>
+          <div style="overflow:auto;padding:4px 18px;flex:1 1 auto;font-size:.86rem">
+            <div style="font-weight:800;margin-top:8px">1. Real admins</div><div id="asList" style="margin:4px 0"></div>
+            <div style="font-weight:800;margin-top:12px">2. Add a new admin</div>
+            <div style="font-size:.78rem;color:#64748b">Use your own ADEK / pass number as the ID. Choose a NEW password that is not used anywhere else.</div>
+            <label style="display:block;margin-top:6px">Login ID<input id="asId" autocomplete="off" style="${INP}"></label>
+            <label style="display:block;margin-top:6px">Name<input id="asName" autocomplete="off" style="${INP}"></label>
+            <label style="display:block;margin-top:6px">New password<input id="asPw" type="password" autocomplete="new-password" style="${INP}"></label>
+            <label style="display:block;margin-top:6px">Repeat password<input id="asPw2" type="password" autocomplete="new-password" style="${INP}"></label>
+            <label style="display:block;margin-top:6px;font-size:.8rem"><input type="checkbox" id="asShow"> Show password</label>
+            <button type="button" id="asSave" style="${BTN};border:0;background:#2563eb;color:#fff;margin-top:8px;width:100%">Save new admin</button>
+            <div id="asMsg" style="margin-top:8px;line-height:1.45"></div>
+            <div style="font-weight:800;margin-top:14px">3. Old admin shortcut &amp; developer passcode</div>
+            <div id="asShort" style="margin:4px 0"></div>
+            <button type="button" id="asToggle" style="${BTN};border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;margin:6px 0 10px;width:100%" disabled>...</button>
+          </div>
+          <div style="display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid #e2e8f0;flex:none"><button type="button" id="asClose" style="${BTN};border:1px solid #cbd5e1;background:#fff;color:#334155">Close</button></div></div>`;
+        document.body.appendChild(ov);
+        const $s = (q) => ov.querySelector(q);
+        $s('#asClose').addEventListener('click', () => ov.remove());
+        $s('#asShow').addEventListener('change', (e) => { $s('#asPw').type = e.target.checked ? 'text' : 'password'; $s('#asPw2').type = e.target.checked ? 'text' : 'password'; });
+        let users = {}, off = false;
+        async function refresh() {
+            users = (await get(ref(db, 'users'))).val() || {};
+            let mapUids = new Set(); try { mapUids = new Set(Object.keys((await get(ref(db, 'authMap'))).val() || {})); } catch (e) { /* rules */ }
+            off = await shortcutIsOff();
+            $s('#asWho').innerHTML = onShortcutSession()
+                ? '<span style="color:#b45309">You are logged in with the OLD shortcut. Create your real admin below, log out, and log in with it.</span>'
+                : `<span style="color:#15803d">You are logged in as ${esc(clean(currentUser && currentUser.name))} (${esc(clean(currentUser && currentUser.uid))}).</span>`;
+            const admins = Object.entries(users).filter(([id, u]) => u && typeof u === 'object' && String(u.role || '').toUpperCase() === 'ADMIN');
+            const ready = admins.filter(([id, u]) => clean(u.authUid) && mapUids.has(clean(u.authUid)));
+            $s('#asList').innerHTML = admins.length ? admins.map(([id, u]) => `<div style="padding:5px 0;border-bottom:1px solid #f1f5f9"><b>${esc(clean(u.name) || id)}</b> <span style="color:#64748b">${esc(id)}</span> <span style="float:right;font-weight:700">${clean(u.authUid) && mapUids.has(clean(u.authUid)) ? '✅ login ready' : '⏳ login not linked yet'}</span></div>`).join('')
+                : '<div style="color:#64748b">No real admin record yet. (You are only using the old shortcut.)</div>';
+            const canSwitchOff = !onShortcutSession() && ready.length > 0;
+            $s('#asShort').innerHTML = off ? '<b style="color:#15803d">Switched OFF.</b> The old shortcut and the developer passcode are refused.'
+                : '<b style="color:#b45309">Still ON.</b> Anyone who reads the app\'s code can use it. Switch it off after you have tested the new admin login.';
+            const t = $s('#asToggle');
+            if (off) { t.disabled = onShortcutSession(); t.textContent = 'Switch the old shortcut back ON'; t.dataset.mode = 'on'; }
+            else { t.disabled = !canSwitchOff; t.textContent = canSwitchOff ? 'Switch OFF the old shortcut' : 'Switch OFF (first log in with a real admin that shows ✅)'; t.dataset.mode = 'off'; }
+        }
+        try { await refresh(); } catch (e) { $s('#asWho').textContent = 'Could not read the data. Check the internet and reopen.'; return; }
+
+        $s('#asToggle').addEventListener('click', async () => {
+            const t = $s('#asToggle'), turnOff = t.dataset.mode === 'off';
+            if (!confirm(turnOff ? 'Switch OFF the old admin shortcut and developer passcode?\n\nFrom now only real admin logins work. You can switch it back ON from here.' : 'Switch the old shortcut back ON?')) return;
+            t.disabled = true;
+            try { if (turnOff) await set(ref(db, FLAG), true); else await remove(ref(db, FLAG)); if (typeof showToast === 'function') showToast(turnOff ? 'Old shortcut switched OFF' : 'Old shortcut switched ON'); }
+            catch (e) { alert('Could not save the switch. Please try again.'); }
+            await refresh();
+        });
+
+        $s('#asSave').addEventListener('click', async () => {
+            const msg = $s('#asMsg'), btn = $s('#asSave');
+            const id = clean($s('#asId').value), name = clean($s('#asName').value), pw = String($s('#asPw').value), pw2 = String($s('#asPw2').value);
+            const bad = [];
+            if (!/^[A-Za-z0-9._-]{3,30}$/.test(id)) bad.push('Login ID: 3 to 30 letters / numbers (no spaces).');
+            else if (RESERVED.includes(id.toUpperCase())) bad.push('This ID is reserved. Please choose another one.');
+            else if (Object.keys(users).some((k) => k.toUpperCase() === id.toUpperCase())) bad.push('This ID already exists. Choose a new ID (existing staff and admins are not edited here).');
+            if (!name) bad.push('Please type the name.');
+            const pp = passwordProblems(pw, id); if (pp.length) bad.push('Password needs: ' + pp.join(', ') + '.');
+            if (pw !== pw2) bad.push('The two passwords are not the same.');
+            if (bad.length) { msg.innerHTML = '<span style="color:#b91c1c">' + bad.map(esc).join('<br>') + '</span>'; return; }
+            if (!confirm(`Create admin "${name}" with login ID ${id}?`)) return;
+            btn.disabled = true; btn.textContent = 'Saving...'; msg.innerHTML = '';
+            try {
+                await set(ref(db, 'users/' + id), { name, role: 'ADMIN', designation: 'Admin', adecPassNumber: id, password: pw, createdAt: new Date().toISOString(), createdBy: clean(currentUser && currentUser.name) });
+                let note = '';
+                try {                                                                           // create + link the Firebase login right away
+                    const api = window.__authApi, m = api && await api.loadAuth();
+                    if (m) {
+                        const secAuth = m.getAuth(initializeApp(firebaseConfig, 'provisioner'));
+                        const res = await api.ensureAccount(secAuth, id, pw);
+                        try { await m.signOut(secAuth); } catch (e) { /* ignore */ }
+                        if (res.uid) { const l = await api.linkAccount(id, res.uid, res.email); note = l.users && l.map ? '' : '<br>⚠ The Firebase login link is incomplete (see "Staff Login Accounts" tool and the Rules note there). It will complete at your first login.'; }
+                        else note = '<br>⚠ The Firebase login account was not created yet (' + esc(res.status) + '). It will be created automatically at your first login.';
+                    } else note = '<br>⚠ Firebase login could not be loaded now. It will be created automatically at your first login.';
+                } catch (e) { note = '<br>⚠ The Firebase login will be created automatically at your first login.'; }
+                msg.innerHTML = `<div style="padding:8px 10px;border-radius:10px;background:#dcfce7;font-weight:700">✅ Admin "${esc(name)}" saved.<br><span style="font-weight:600">Now: <b>log out</b>, then log in with ID <b>${esc(id)}</b> and your new password. Check that everything works.${note}</span></div>`;
+                $s('#asPw').value = ''; $s('#asPw2').value = '';
+                await refresh();
+            } catch (e) { msg.innerHTML = '<span style="color:#b91c1c">Could not save. Please try again. (' + esc(clean(e && e.message)) + ')</span>'; }
+            btn.disabled = false; btn.textContent = 'Save new admin';
+        });
+    }
+    window.__openAdminSetupTool = openTool;
+
+    function ensureMenuItem() {
+        const nav = document.getElementById('admin-menu');
+        if (!nav) return;
+        const have = document.getElementById('drawer-adminsetup-btn');
+        if (!isAdmin()) { if (have) have.remove(); return; }
+        if (have) return;
+        const b = document.createElement('button');
+        b.id = 'drawer-adminsetup-btn'; b.type = 'button'; b.className = 'drawer-item'; b.textContent = '🛡 Admin Login Setup';
+        b.addEventListener('click', () => { const c = document.getElementById('close-drawer-btn'); if (c) c.click(); openTool(); });
+        nav.insertBefore(b, document.getElementById('logout-btn-admin') || null);
+    }
+    setInterval(() => { try { if (currentUser) ensureMenuItem(); } catch (e) { /* display only */ } }, 2000);
+})();
+
+// =====================================================================================
+// v2.22.0 (additive) - SMART LOCAL CACHE + "CHANGE DIARY" SYNC  (keeps the Firebase free download limit safe)
+//   PROBLEM (audit): every teacher phone downloaded the WHOLE orders node (every teacher's orders, each with 3 signature
+//   images) and the whole inventory on EVERY app open; the Firebase SDK keeps nothing on disk.
+//   NOW (teachers):
+//     * the phone keeps a saved copy (IndexedDB): the catalog + the teacher's OWN orders. It is shown at once.
+//     * a tiny "change diary" in Firebase says what changed:  meta/feed/inv  (items)  and  meta/feed/o_<teacher>  (orders).
+//       The phone reads only the NEW diary lines (a few bytes) and fetches ONLY the item / order that changed.
+//     * a teacher never downloads other teachers' orders any more (query by teacherUid).
+//     * the existing screens are untouched: the same listener functions get the same kind of snapshot, from the cache.
+//   NOW (admins): nothing is hidden or reduced. Their open app writes the diary lines (it compares what it sees with what it
+//     saw before), so every change by any admin screen is covered without touching those screens.
+//   Logo is cached for 12 hours. Cache is per teacher and is deleted at logout / account change. No password/token is stored.
+//   If anything fails (no IndexedDB, no permission, old rules...) the app silently uses the ORIGINAL live listeners.
+//   Kill switch: localStorage.smartCacheOff = '1'.
+//   NEEDS in Firebase Rules (see delivery notes):  orders ".indexOn": ["teacherUid"]  and a "meta" node.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__smartCacheV2220) return;
+    window.__smartCacheV2220 = true;
+    window.__APP_BUILD = '2.22.0';
+
+    const DB_URL = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js';
+    const CACHE_VER = 1, FULL_MAX_AGE = 14 * 86400e3, NOFEED_MAX_AGE = 6 * 3600e3, SETTING_TTL = 12 * 3600e3;
+    const ORDERS_FIRST = 60, ORDERS_KEEP = 120, NET_TIMEOUT = 25000;
+    const killed = () => { try { return localStorage.getItem('smartCacheOff') === '1'; } catch (e) { return false; } };
+    const role = () => String((currentUser && currentUser.role) || '').toUpperCase();
+    const isTeacher = () => role() === 'TEACHER';
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(role());
+    const myId = () => String((currentUser && (currentUser.adecPassNumber || currentUser.uid)) || '');
+    const safeKey = (v) => String(v == null ? '' : v).trim().replace(/[.#$\[\]\/]/g, '_').slice(0, 120);
+    const pathOf = (r) => { try { if (r && typeof r.path === 'string') return r.path.replace(/^\/+/, ''); return decodeURIComponent(new URL(String(r)).pathname.replace(/^\/+/, '')); } catch (e) { return ''; } };
+    const withTimeout = (p) => { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('network timeout')), NET_TIMEOUT); })]).finally(() => clearTimeout(t)); };
+    const isPerm = (e) => /permission[_ ]denied/i.test(String((e && (e.code || e.message)) || ''));
+
+    // ---------- banner (offline / outdated) ----------
+    function banner(msg) {
+        let b = document.getElementById('smartCacheBanner');
+        if (!msg) { if (b) b.remove(); return; }
+        if (!b) { b = document.createElement('div'); b.id = 'smartCacheBanner'; b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99998;background:#b45309;color:#fff;text-align:center;font:600 12px/1.7 sans-serif;padding:1px 8px'; (document.body || document.documentElement).appendChild(b); }
+        b.textContent = msg;
+    }
+
+    // ---------- IndexedDB (key/value). Every failure just means "no cache" ----------
+    const IDB = {
+        db: null, ok: false,
+        open() {
+            return new Promise((res, rej) => {
+                const rq = indexedDB.open('stationery_smart_cache', 1);
+                rq.onupgradeneeded = () => { try { rq.result.createObjectStore('kv', { keyPath: 'k' }); } catch (e) { /* exists */ } };
+                rq.onsuccess = () => { this.db = rq.result; this.ok = true; this.db.onversionchange = () => { try { this.db.close(); } catch (e) { /* ignore */ } this.ok = false; }; res(); };
+                rq.onerror = () => rej(rq.error || new Error('IndexedDB error'));
+                rq.onblocked = () => rej(new Error('IndexedDB blocked'));
+            });
+        },
+        store(mode) { return this.db.transaction('kv', mode).objectStore('kv'); },
+        get(k) { return new Promise((res) => { try { const r = this.store('readonly').get(k); r.onsuccess = () => res(r.result ? r.result.v : null); r.onerror = () => res(null); } catch (e) { res(null); } }); },
+        set(k, v) { return new Promise((res) => { try { const tx = this.db.transaction('kv', 'readwrite'); tx.objectStore('kv').put({ k, v }); tx.oncomplete = () => res(true); tx.onerror = () => res(false); tx.onabort = () => res(false); } catch (e) { res(false); } }); },   // quota full -> false
+        del(k) { return new Promise((res) => { try { const tx = this.db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = () => res(true); tx.onerror = () => res(false); tx.onabort = () => res(false); } catch (e) { res(false); } }); },
+        keys() { return new Promise((res) => { try { const r = this.store('readonly').getAllKeys(); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); } catch (e) { res([]); } }); }
+    };
+    let Q = null, prep = null;
+    function prepare() {
+        if (!prep) prep = (async () => {
+            try {
+                if (killed() || !('indexedDB' in window)) return false;
+                Q = await import(DB_URL);
+                if (!Q || typeof Q.query !== 'function') return false;
+                await IDB.open();
+                const mine = 'o:' + safeKey(myId());                                   // other people's saved orders are removed (shared phones)
+                for (const k of await IDB.keys()) if (String(k).startsWith('o:') && k !== mine) await IDB.del(k);
+                return true;
+            } catch (e) { console.warn('Smart cache not available, using normal live data:', e && e.message); return false; }
+        })();
+        return prep;
+    }
+
+    // ---------- helpers ----------
+    function mkSnap(obj, key) {
+        const o = obj == null ? null : obj;
+        return {
+            key: key || null, val: () => o, exists: () => o != null && (typeof o !== 'object' || Object.keys(o).length > 0),
+            hasChildren: () => !!o && typeof o === 'object' && Object.keys(o).length > 0, numChildren: () => (o && typeof o === 'object') ? Object.keys(o).length : 0,
+            child: (k) => mkSnap(o ? o[k] : null, k),
+            forEach: (fn) => { if (o && typeof o === 'object') for (const k of Object.keys(o)) if (fn(mkSnap(o[k], k)) === true) break; }
+        };
+    }
+    async function headKey(feedPath) {
+        const s = await withTimeout(get(Q.query(ref(db, feedPath), Q.orderByKey(), Q.limitToLast(1))));
+        const v = s.val(); return v ? Object.keys(v).sort().pop() : null;
+    }
+    const validCache = (c) => !!c && c.v === CACHE_VER && c.map && typeof c.map === 'object' && !Array.isArray(c.map) && typeof c.fullAt === 'number';
+
+    // ---------- one synchronised data set (items, or one teacher's orders) ----------
+    class Channel {
+        constructor(o) { Object.assign(this, o); this.listeners = new Set(); this.cache = null; this.loaded = false; this.syncing = null; this.again = false; this.headUnsub = null; this.saveT = null; this.noFeed = false; this.firstDone = false; }
+        load() { return this.loadP || (this.loadP = (async () => { const c = await IDB.get(this.cacheKey); if (!this.cache) this.cache = validCache(c) ? c : null; this.loaded = true; })()); }
+        snapshot() { const m = this.cache ? this.cache.map : {}; const out = {}; Object.keys(m).sort().forEach((k) => { out[k] = m[k]; }); return mkSnap(out, this.rootKey); }
+        emit() { const s = this.snapshot(); this.listeners.forEach((cb) => { try { cb(s); } catch (e) { console.error(e); } }); }
+        persist() { clearTimeout(this.saveT); this.saveT = setTimeout(() => { if (this.cache && IDB.ok) IDB.set(this.cacheKey, this.cache); }, 250); }
+        trim() { if (!this.keep) return; const ks = Object.keys(this.cache.map).sort(); if (ks.length > this.keep) ks.slice(0, ks.length - this.keep).forEach((k) => { delete this.cache.map[k]; }); }
+        sync() {
+            if (this.syncing) { this.again = true; return this.syncing; }
+            this.syncing = (async () => {
+                try {
+                    do {
+                        this.again = false;
+                        const c = this.cache, age = c ? Date.now() - c.fullAt : Infinity;
+                        if (!c || age > FULL_MAX_AGE || (this.noFeed && age > NOFEED_MAX_AGE)) await this.full(); else await this.delta();
+                    } while (this.again);
+                    banner(navigator.onLine === false ? '📴 Offline: saved data is shown and may be outdated' : '');
+                } catch (e) {
+                    if (isPerm(e)) { this.noFeed = true; console.warn('Change diary not readable (add the "meta" rule):', e && e.message); }
+                    else banner('📴 Offline: saved data is shown and may be outdated');
+                } finally { this.syncing = null; this.firstDone = true; if (!this.headUnsub) this.watchHead(); }
+            })();
+            return this.syncing;
+        }
+        async full() {
+            let head = null; try { head = await headKey(this.feedPath); } catch (e) { if (!isPerm(e)) throw e; this.noFeed = true; }
+            const map = await this.fetchFull();
+            this.cache = { v: CACHE_VER, map: map || {}, lastKey: head, fullAt: Date.now() };
+            this.trim(); this.persist(); this.emit();
+        }
+        async delta() {
+            const c = this.cache;
+            const q = c.lastKey ? Q.query(ref(db, this.feedPath), Q.orderByKey(), Q.startAfter(c.lastKey)) : Q.query(ref(db, this.feedPath), Q.orderByKey());
+            const feed = (await withTimeout(get(q))).val() || {};
+            const keys = Object.keys(feed).sort();
+            if (!keys.length) { if (!this.firstDone) this.emit(); return; }
+            const ids = [...new Set(keys.map((k) => feed[k] && feed[k].id).filter(Boolean))];
+            for (const id of ids) { const one = await this.fetchOne(id); if (one) c.map[id] = one; else delete c.map[id]; }
+            c.lastKey = keys[keys.length - 1];
+            this.trim(); this.persist(); this.emit();
+        }
+        async refreshIds(ids) { if (!this.cache) return; try { for (const id of ids) { const one = await this.fetchOne(id); if (one) this.cache.map[id] = one; else delete this.cache.map[id]; } this.trim(); this.persist(); this.emit(); } catch (e) { /* the next sync will repair it */ } }
+        watchHead() {                                                            // tiny live listener on the diary: a few bytes per change
+            if (this.noFeed || !Q) return;
+            try {
+                const un = onValue(Q.query(ref(db, this.feedPath), Q.orderByKey(), Q.limitToLast(1)), (snap) => {
+                    const v = snap.val(); const head = v ? Object.keys(v).sort().pop() : null;
+                    if (head && this.cache && head !== this.cache.lastKey) this.sync();
+                }, () => { this.noFeed = true; });
+                this.headUnsub = un; unsubscribeListeners.push(un);
+            } catch (e) { /* diary not available */ }
+        }
+        dispose() { if (this.headUnsub) { try { this.headUnsub(); } catch (e) { /* ignore */ } this.headUnsub = null; } this.listeners.clear(); }
+    }
+    let invCh = null, ordCh = null, ordUid = null;
+    const getInv = () => invCh || (invCh = new Channel({
+        rootKey: 'inventory', feedPath: 'meta/feed/inv', cacheKey: 'inv',
+        fetchFull: async () => (await withTimeout(get(ref(db, 'inventory')))).val() || {},
+        fetchOne: async (id) => (await withTimeout(get(ref(db, 'inventory/' + id)))).val()
+    }));
+    const getOrd = () => {
+        const uid = myId();
+        if (!ordCh || ordUid !== uid) {
+            if (ordCh) ordCh.dispose();
+            ordUid = uid;
+            ordCh = new Channel({
+                rootKey: 'orders', feedPath: 'meta/feed/o_' + safeKey(uid), cacheKey: 'o:' + safeKey(uid), keep: ORDERS_KEEP,
+                fetchFull: async () => (await withTimeout(get(Q.query(ref(db, 'orders'), Q.orderByChild('teacherUid'), Q.equalTo(uid), Q.limitToLast(ORDERS_FIRST))))).val() || {},
+                fetchOne: async (id) => { const o = (await withTimeout(get(ref(db, 'orders/' + id)))).val(); return o && String(o.teacherUid) === uid ? o : null; }
+            });
+            ordCh.recent = async function () {                                      // right after the teacher sends an order: fetch his newest ones
+                const r = (await withTimeout(get(Q.query(ref(db, 'orders'), Q.orderByChild('teacherUid'), Q.equalTo(uid), Q.limitToLast(5))))).val() || {};
+                if (!this.cache) return; Object.assign(this.cache.map, r); this.trim(); this.persist(); this.emit();
+            };
+        }
+        return ordCh;
+    };
+    window.__smartCacheOrdersReady = () => !!(ordCh && ordCh.loaded && ordUid === myId() && (ordCh.cache || ordCh.firstDone));
+
+    // ---------- teachers: the same addListener(...) calls now get cached data ----------
+    const origAdd = addListener;
+    function viaChannel(getCh, cb, dbRef) {
+        let dead = false, ch = null;
+        const un = () => { dead = true; if (ch) ch.listeners.delete(cb); };
+        unsubscribeListeners.push(un);
+        (async () => {
+            try {
+                if (!(await prepare())) throw new Error('cache off');
+                ch = getCh(); await ch.load();
+                if (dead) return;
+                ch.listeners.add(cb);
+                if (ch.cache) { try { cb(ch.snapshot()); } catch (e) { console.error(e); } }      // saved copy first: instant
+                ch.sync();
+            } catch (e) { if (!dead) origAdd(dbRef, cb); }
+        })();
+        return un;
+    }
+    function viaSetting(p, cb, dbRef) {
+        let dead = false;
+        const un = () => { dead = true; }; unsubscribeListeners.push(un);
+        (async () => {
+            try {
+                if (!(await prepare())) throw new Error('cache off');
+                const key = 'set:' + p, c = await IDB.get(key);
+                if (c && c.v === CACHE_VER && Date.now() - c.at < SETTING_TTL) { if (!dead) cb(mkSnap(c.val, p)); return; }
+                const val = (await withTimeout(get(ref(db, p)))).val();
+                IDB.set(key, { v: CACHE_VER, at: Date.now(), val });
+                if (!dead) cb(mkSnap(val, p));
+            } catch (e) { if (!dead) { if (e && e.message === 'cache off') origAdd(dbRef, cb); else { const c = await IDB.get('set:' + p); if (c && !dead) cb(mkSnap(c.val, p)); } } }
+        })();
+        return un;
+    }
+    addListener = function (dbRef, callback) {
+        try {
+            if (!killed() && isTeacher()) {
+                const p = pathOf(dbRef);
+                if (p === 'orders') return viaChannel(getOrd, callback, dbRef);
+                if (p === 'inventory') return viaChannel(getInv, callback, dbRef);
+                if (p === 'settings/logo') return viaSetting(p, callback, dbRef);
+            }
+        } catch (e) { console.warn('Smart cache skipped:', e); }
+        return origAdd.apply(this, arguments);
+    };
+
+    // after he sends an order / cancels one, bring just that order in
+    const origFetchTOH = (typeof fetchTeacherOrderHistory === 'function') ? fetchTeacherOrderHistory : null;
+    if (origFetchTOH) {
+        let calls = 0;
+        fetchTeacherOrderHistory = function () {
+            const r = origFetchTOH.apply(this, arguments);
+            try { if (!killed() && isTeacher() && ++calls > 1 && ordCh && ordCh.cache) ordCh.recent().catch(() => { }); } catch (e) { /* ignore */ }
+            return r;
+        };
+        window.fetchTeacherOrderHistory = fetchTeacherOrderHistory;
+    }
+    const origCancel = window.cancelTeacherOrder;
+    if (typeof origCancel === 'function') {
+        window.cancelTeacherOrder = async function (orderId) {
+            const r = await origCancel.apply(this, arguments);
+            try { if (!killed() && isTeacher() && ordCh) await ordCh.refreshIds([orderId]); } catch (e) { /* ignore */ }
+            return r;
+        };
+    }
+
+    // ---------- admins: write the diary lines (nothing is hidden from admins) ----------
+    function sigOrder(o) {
+        let s = '';
+        Object.keys(o).sort().forEach((k) => {
+            const v = o[k];
+            if (typeof v === 'string') s += k + ':' + (v.length > 300 ? '#' + v.length : v) + '|';
+            else if (v && typeof v === 'object') s += k + ':' + JSON.stringify(v, (kk, vv) => (typeof vv === 'string' && vv.length > 300) ? '#' + vv.length : vv) + '|';
+            else s += k + ':' + v + '|';
+        });
+        return s;
+    }
+    const pub = { on: false, orders: null, inv: null, warned: false };
+    const diaryWrite = (path, entry) => push(ref(db, path), entry).catch((e) => { if (!pub.warned) { pub.warned = true; console.warn('Change diary not written (add the "meta" rule):', e && e.message); } });
+    function publishOrders(data) {
+        const cur = {};
+        Object.entries(data).forEach(([id, o]) => { if (o && typeof o === 'object') cur[id] = { u: String(o.teacherUid || ''), s: sigOrder(o) }; });
+        if (pub.orders) {
+            Object.keys(cur).forEach((id) => { if (!pub.orders[id] || pub.orders[id].s !== cur[id].s) { if (cur[id].u) diaryWrite('meta/feed/o_' + safeKey(cur[id].u), { id, t: Date.now() }); } });
+            Object.keys(pub.orders).forEach((id) => { if (!cur[id] && pub.orders[id].u) diaryWrite('meta/feed/o_' + safeKey(pub.orders[id].u), { id, t: Date.now(), d: 1 }); });
+        }
+        pub.orders = cur;
+    }
+    function publishInv(data) {
+        const cur = {};
+        Object.entries(data).forEach(([id, it]) => { cur[id] = JSON.stringify(it); });
+        if (pub.inv) {
+            Object.keys(cur).forEach((id) => { if (pub.inv[id] !== cur[id]) diaryWrite('meta/feed/inv', { id, t: Date.now() }); });
+            Object.keys(pub.inv).forEach((id) => { if (!(id in cur)) diaryWrite('meta/feed/inv', { id, t: Date.now(), d: 1 }); });
+        }
+        pub.inv = cur;
+    }
+    function startPublishers() {
+        if (pub.on || killed() || !isAdmin()) return;
+        pub.on = true;
+        origAdd(ref(db, 'orders'), (snap) => { try { publishOrders(snap.val() || {}); } catch (e) { /* diary only */ } });
+        origAdd(ref(db, 'inventory'), (snap) => { try { publishInv(snap.val() || {}); } catch (e) { /* diary only */ } });
+    }
+
+    // ---------- logout / account change: nothing of the previous user stays ----------
+    const prevLogout = window.handleUserLogout;
+    if (typeof prevLogout === 'function') {
+        window.handleUserLogout = async function () {
+            try {
+                const uid = safeKey(myId());
+                if (ordCh) { ordCh.dispose(); ordCh = null; }
+                if (invCh) { invCh.dispose(); invCh = null; }
+                pub.on = false; pub.orders = null; pub.inv = null;
+                if (IDB.ok && uid) await Promise.race([IDB.del('o:' + uid), new Promise((r) => setTimeout(r, 600))]);
+            } catch (e) { /* keep logging out */ }
+            return prevLogout.apply(this, arguments);
+        };
+    }
+    // ---- the old startup "backfill" read ALL orders + ALL stock_movements for EVERY visitor on EVERY page load (even the login page) ----
+    if (typeof retroactiveFixCompletedOrders === 'function') {
+        const origRetro = retroactiveFixCompletedOrders;
+        let retroTried = false;
+        retroactiveFixCompletedOrders = async function () {
+            if (killed()) return origRetro.apply(this, arguments);
+            if (!isAdmin()) return;                                                   // teachers / login page: never
+            const last = Number(localStorage.getItem('retro_last_v1') || 0);
+            if (Date.now() - last < 86400e3) return;                                  // admins: at most once a day per device
+            localStorage.setItem('retro_last_v1', String(Date.now()));
+            return origRetro.apply(this, arguments);
+        };
+        window.retroactiveFixCompletedOrders = retroactiveFixCompletedOrders;
+        window.__retroDue = () => { if (retroTried || !isAdmin() || killed()) return; retroTried = true; retroactiveFixCompletedOrders().catch(() => { }); };
+    }
+    // ---- reopening while OFFLINE: a teacher who is already signed in on this phone keeps his saved profile (the original code needs a live read) ----
+    if (typeof handleUserRole === 'function') {
+        const origHUR = handleUserRole;
+        handleUserRole = async function (adecNumber) {
+            if (!killed() && navigator.onLine === false) {                                   // only when the phone truly has no internet
+                try {
+                    const raw = localStorage.getItem('currentUser'), u = raw ? JSON.parse(raw) : null;
+                    if (u && String(u.role || '').toUpperCase() === 'TEACHER' && String(u.uid || u.adecPassNumber) === String(adecNumber)) {
+                        currentUser = u; sessionStorage.setItem('userRole', 'TEACHER');
+                        try { fetchSystemBranding(); fetchCategories(); } catch (e) { /* cached or skipped */ }
+                        window.renderDashboardForRole('TEACHER', adecNumber);
+                        banner('📴 Offline: saved data is shown and may be outdated');
+                        return;
+                    }
+                } catch (e) { /* fall through to the normal way */ }
+            }
+            return origHUR.apply(this, arguments);
+        };
+    }
+    window.addEventListener('online', () => { try { if (ordCh) ordCh.sync(); if (invCh) invCh.sync(); } catch (e) { /* ignore */ } });
+    window.addEventListener('offline', () => banner('📴 Offline: saved data is shown and may be outdated'));
+    window.__smartCache = { peek: (id) => (ordCh && ordCh.cache && ordCh.cache.map[id]) ? ordCh.cache.map[id].status : null, recent: () => (ordCh && ordCh.recent ? ordCh.recent() : Promise.resolve()), status: () => ({ ok: IDB.ok, killed: killed(), orders: ordCh && ordCh.cache ? Object.keys(ordCh.cache.map).length : null, inventory: invCh && invCh.cache ? Object.keys(invCh.cache.map).length : null, noFeed: !!((ordCh && ordCh.noFeed) || (invCh && invCh.noFeed)) }) };
+    setInterval(() => { try { if (currentUser && isAdmin()) { startPublishers(); if (window.__retroDue) window.__retroDue(); } } catch (e) { /* ignore */ } }, 2000);
 })();
