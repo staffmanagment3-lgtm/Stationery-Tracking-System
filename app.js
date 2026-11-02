@@ -11033,6 +11033,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         pushBusy = true;
         try {
             if (!isAdmin()) return;
+            if (typeof window.__adminInvStale === 'function' && window.__adminInvStale()) return;      // v2.23.0 hook: never decide from the saved copy, only from live stock
             const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
             if (!Object.keys(inv).length) return;                         // inventory not loaded yet
             const list = computeList().filter((x) => x.level === 'out' || x.level === 'emergency');
@@ -12617,7 +12618,9 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         constructor(o) { Object.assign(this, o); this.listeners = new Set(); this.cache = null; this.loaded = false; this.syncing = null; this.again = false; this.headUnsub = null; this.saveT = null; this.noFeed = false; this.firstDone = false; }
         load() { return this.loadP || (this.loadP = (async () => { const c = await IDB.get(this.cacheKey); if (!this.cache) this.cache = validCache(c) ? c : null; this.loaded = true; })()); }
         snapshot() { const m = this.cache ? this.cache.map : {}; const out = {}; Object.keys(m).sort().forEach((k) => { out[k] = m[k]; }); return mkSnap(out, this.rootKey); }
-        emit() { const s = this.snapshot(); this.listeners.forEach((cb) => { try { cb(s); } catch (e) { console.error(e); } }); }
+        emit() {
+            if (this.rootKey === 'orders' && this.gaveCache && !this.caughtUp) { this.caughtUp = true; try { orderWatcherSeeded = false; } catch (e) { /* ignore */ } }   // v2.23.0 hook: catching up after the saved copy is a re-seed, not a live change (no repeated pushes)
+            const s = this.snapshot(); this.listeners.forEach((cb) => { try { cb(s); } catch (e) { console.error(e); } }); }
         persist() { clearTimeout(this.saveT); this.saveT = setTimeout(() => { if (this.cache && IDB.ok) IDB.set(this.cacheKey, this.cache); }, 250); }
         trim() { if (!this.keep) return; const ks = Object.keys(this.cache.map).sort(); if (ks.length > this.keep) ks.slice(0, ks.length - this.keep).forEach((k) => { delete this.cache.map[k]; }); }
         sync() {
@@ -12704,7 +12707,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
                 ch = getCh(); await ch.load();
                 if (dead) return;
                 ch.listeners.add(cb);
-                if (ch.cache) { try { cb(ch.snapshot()); } catch (e) { console.error(e); } }      // saved copy first: instant
+                if (ch.cache) { try { cb(ch.snapshot()); } catch (e) { console.error(e); } if (!ch.firstDone) ch.gaveCache = true; }      // saved copy first: instant   (v2.23.0 hook: remember it)
                 ch.sync();
             } catch (e) { if (!dead) origAdd(dbRef, cb); }
         })();
@@ -12791,6 +12794,7 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     function startPublishers() {
         if (pub.on || killed() || !isAdmin()) return;
         pub.on = true;
+        if (typeof window.__adminFeedHook === 'function' && window.__adminFeedHook(publishOrders, publishInv)) return;   // v2.23.0 hook: same saved-copy channels, no second download
         origAdd(ref(db, 'orders'), (snap) => { try { publishOrders(snap.val() || {}); } catch (e) { /* diary only */ } });
         origAdd(ref(db, 'inventory'), (snap) => { try { publishInv(snap.val() || {}); } catch (e) { /* diary only */ } });
     }
@@ -12847,4 +12851,334 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     window.addEventListener('offline', () => banner('📴 Offline: saved data is shown and may be outdated'));
     window.__smartCache = { peek: (id) => (ordCh && ordCh.cache && ordCh.cache.map[id]) ? ordCh.cache.map[id].status : null, recent: () => (ordCh && ordCh.recent ? ordCh.recent() : Promise.resolve()), status: () => ({ ok: IDB.ok, killed: killed(), orders: ordCh && ordCh.cache ? Object.keys(ordCh.cache.map).length : null, inventory: invCh && invCh.cache ? Object.keys(invCh.cache.map).length : null, noFeed: !!((ordCh && ordCh.noFeed) || (invCh && invCh.noFeed)) }) };
     setInterval(() => { try { if (currentUser && isAdmin()) { startPublishers(); if (window.__retroDue) window.__retroDue(); } } catch (e) { /* ignore */ } }, 2000);
+})();
+
+// =====================================================================================
+// v2.23.0 (additive) - ADMIN SAVED COPY  +  "ONLY RECENT ORDERS ARE LIVE"
+//   v2.22.0 gave TEACHERS a saved copy. The admin's app still downloaded ALL orders + ALL inventory on every open and
+//   showed a loading screen meanwhile. This block gives the ADMIN the same instant start, and downloads far less:
+//     ORDERS     saved copy is shown at once. Then only these are live from Firebase:
+//                  - orders of the last 35 days (a query on "timestamp"),
+//                  - the few OLDER orders that are still open (pending / approved), one by one,
+//                and everything older and finished (Done / Cancelled) comes from the saved copy.
+//                A full re-download happens only on the first open on a device, after 7 days, or by the menu button
+//                "Refresh Saved Data". If anything looks wrong (too many old open orders, a query error, an empty answer
+//                while the copy has recent orders) the app silently goes back to the ORIGINAL full live listener.
+//     INVENTORY  saved copy is shown at once, then the normal full live listener takes over (stock is always exact).
+//   Admin screens are untouched: they get the same snapshot object as before (merged saved + live).
+//   Also fixes (found while testing v2.22.0): a teacher who reopened the app after an old handover was sent a repeated
+//   "Handover Confirmed" push (the catch-up after the saved copy counted as a live change) - three tiny documented
+//   hooks in the v2.22.0 block (see the diff notes) + this block now re-seed the order watcher after catching up.
+//   Kill switch: localStorage.adminCacheOff = '1' (or smartCacheOff = '1').
+//   NEEDS in Firebase Rules:  orders  ".indexOn": ["teacherUid", "timestamp"]   (without "timestamp" the app still works
+//   but Firebase downloads everything and filters on the phone; the app then warns once).
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__adminCacheV2230) return;
+    window.__adminCacheV2230 = true;
+    window.__APP_BUILD = '2.23.0';
+
+    const DB_URL = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js';
+    const CACHE_VER = 1, FULL_MAX_AGE = 7 * 86400e3, MAX_OLD_OPEN = 30, READY_WAIT = 6000, PERSIST_GAP = 20000, NET_TIMEOUT = 25000;
+    const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const killed = () => lsGet('adminCacheOff') === '1' || lsGet('smartCacheOff') === '1';
+    const WINDOW_DAYS = (() => { const n = Number(lsGet('adminWindowDays')); return (n >= 7 && n <= 400) ? Math.floor(n) : 35; })();
+    const role = () => String((currentUser && currentUser.role) || '').toUpperCase();
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(role());
+    const pathOf = (r) => { try { if (r && typeof r.path === 'string') return r.path.replace(/^\/+/, ''); return decodeURIComponent(new URL(String(r)).pathname.replace(/^\/+/, '')); } catch (e) { return ''; } };
+    const withTimeout = (p) => { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('network timeout')), NET_TIMEOUT); })]).finally(() => clearTimeout(t)); };
+    const FINAL = /\b(done|completed|cancelled|canceled|rejected)\b/i;
+    const isFinal = (o) => !!o && typeof o === 'object' && FINAL.test(String(o.status || ''));
+    const deliver = (cb, s) => { try { cb(s); } catch (e) { console.error(e); } };
+
+    function banner(msg) {
+        let b = document.getElementById('smartCacheBanner');
+        if (!msg) { if (b) b.remove(); return; }
+        if (!b) { b = document.createElement('div'); b.id = 'smartCacheBanner'; b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99998;background:#b45309;color:#fff;text-align:center;font:600 12px/1.7 sans-serif;padding:1px 8px'; (document.body || document.documentElement).appendChild(b); }
+        b.textContent = msg;
+    }
+
+    // ---------- IndexedDB (same small store as v2.22.0; every failure just means "no saved copy") ----------
+    const IDB = {
+        db: null, ok: false,
+        open() {
+            return new Promise((res, rej) => {
+                const rq = indexedDB.open('stationery_smart_cache', 1);
+                rq.onupgradeneeded = () => { try { rq.result.createObjectStore('kv', { keyPath: 'k' }); } catch (e) { /* exists */ } };
+                rq.onsuccess = () => { this.db = rq.result; this.ok = true; this.db.onversionchange = () => { try { this.db.close(); } catch (e) { /* ignore */ } this.ok = false; }; res(); };
+                rq.onerror = () => rej(rq.error || new Error('IndexedDB error'));
+                rq.onblocked = () => rej(new Error('IndexedDB blocked'));
+            });
+        },
+        get(k) { return new Promise((res) => { try { const r = this.db.transaction('kv', 'readonly').objectStore('kv').get(k); r.onsuccess = () => res(r.result ? r.result.v : null); r.onerror = () => res(null); } catch (e) { res(null); } }); },
+        set(k, v) { return new Promise((res) => { try { const tx = this.db.transaction('kv', 'readwrite'); tx.objectStore('kv').put({ k, v }); tx.oncomplete = () => res(true); tx.onerror = () => res(false); tx.onabort = () => res(false); } catch (e) { res(false); } }); },
+        del(k) { return new Promise((res) => { try { const tx = this.db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = () => res(true); tx.onerror = () => res(false); tx.onabort = () => res(false); } catch (e) { res(false); } }); }
+    };
+    let Q = null, prepP = null, wiped = false;
+    function ensure() {
+        if (!prepP) prepP = (async () => {
+            try {
+                if (killed() || !('indexedDB' in window)) return false;
+                Q = await import(DB_URL);
+                if (!Q || typeof Q.query !== 'function' || typeof Q.startAt !== 'function' || typeof Q.orderByChild !== 'function') return false;
+                await IDB.open();
+                return true;
+            } catch (e) { console.warn('Admin saved copy not available, using normal live data:', e && e.message); return false; }
+        })();
+        return prepP;
+    }
+    const wipeSaved = async () => { try { if (IDB.ok) { await IDB.del('adm:orders'); await IDB.del('adm:inv'); } } catch (e) { /* ignore */ } };
+
+    function mkSnap(obj, key) {
+        const o = obj == null ? null : obj;
+        return {
+            key: key || null, val: () => (o && typeof o === 'object') ? Object.assign({}, o) : o, exists: () => o != null && (typeof o !== 'object' || Object.keys(o).length > 0),
+            hasChildren: () => !!o && typeof o === 'object' && Object.keys(o).length > 0, numChildren: () => (o && typeof o === 'object') ? Object.keys(o).length : 0,
+            child: (k) => mkSnap(o ? o[k] : null, k),
+            forEach: (fn) => { if (o && typeof o === 'object') for (const k of Object.keys(o)) if (fn(mkSnap(o[k], k)) === true) break; }
+        };
+    }
+    // Firebase tells the phone (in the console) when a query has no index and the whole node is being downloaded anyway
+    (function watchIndexWarning() {
+        const w = console.warn;
+        console.warn = function () {
+            try {
+                const m = String(arguments[0] || '');
+                if (/unspecified index/i.test(m) && /\/orders/.test(m) && isAdmin() && !window.__adminIndexMissing) {
+                    window.__adminIndexMissing = true;
+                    if (typeof showToast === 'function') showToast('⚠ Firebase Rules: orders me "timestamp" ki indexOn add karein, warna data bachat nahi hogi', 'error');
+                }
+            } catch (e) { /* warning only */ }
+            return w.apply(this, arguments);
+        };
+    })();
+
+    function serverOffset() {
+        return new Promise((res) => {
+            let done = false, un = null;
+            const fin = (v) => { if (done) return; done = true; try { if (un) un(); } catch (e) { /* ignore */ } res(v); };
+            try { un = onValue(ref(db, '.info/serverTimeOffset'), (s) => { const v = Number(s.val()); fin(isFinite(v) ? v : 0); }, () => fin(0)); if (done && un) un(); } catch (e) { fin(0); }
+            setTimeout(() => fin(0), 1500);
+        });
+    }
+
+    // ---------- one saved data set (all orders, or the whole inventory) ----------
+    class AdminCh {
+        constructor(key, root) { Object.assign(this, { key, root, map: null, fullAt: 0, listeners: new Set(), live: false, staleSent: false, started: false, unsubs: [], emitT: null, persistT: null, lastPersist: 0, mode: 'smart', loadP: null, reseeded: false }); }
+        load() { return this.loadP || (this.loadP = (async () => { const c = await IDB.get(this.key); if (c && c.v === CACHE_VER && c.map && typeof c.map === 'object' && !Array.isArray(c.map) && typeof c.fullAt === 'number') { this.map = c.map; this.fullAt = c.fullAt; } })()); }
+        snap() { const m = this.map || {}, o = {}; Object.keys(m).sort().forEach((k) => { o[k] = m[k]; }); return mkSnap(o, this.root); }
+        add(cb) {
+            this.listeners.add(cb);
+            if (this.live) deliver(cb, this.snap());
+            else if (this.map) { this.staleSent = true; deliver(cb, this.snap()); if (navigator.onLine === false) banner('📴 Offline: saved data is shown and may be outdated'); }      // saved copy first: instant
+            this.start();
+        }
+        remove(cb) { this.listeners.delete(cb); }
+        emit() {
+            clearTimeout(this.emitT); this.emitT = null;
+            // catching up after the saved copy is a RE-SEED for the order watcher, not a "live change" (no repeated pushes)
+            if (this.root === 'orders' && this.staleSent && !this.reseeded) { this.reseeded = true; try { orderWatcherSeeded = false; } catch (e) { /* ignore */ } }
+            const s = this.snap(); this.listeners.forEach((cb) => deliver(cb, s));
+        }
+        soon() { if (!this.emitT) this.emitT = setTimeout(() => this.emit(), 120); }
+        goLive() { if (!this.live) { this.live = true; this.emit(); this.persist(true); banner(navigator.onLine === false ? '📴 Offline: saved data is shown and may be outdated' : ''); } else { this.soon(); this.persist(); } }
+        persist(now) {
+            if (this.persistT) return;
+            const wait = now ? 0 : Math.max(0, this.lastPersist + PERSIST_GAP - Date.now());
+            this.persistT = setTimeout(() => { this.persistT = null; this.lastPersist = Date.now(); if (IDB.ok && this.map) IDB.set(this.key, { v: CACHE_VER, map: this.map, fullAt: this.fullAt }); }, wait);
+        }
+        flush() { try { clearTimeout(this.persistT); this.persistT = null; if (IDB.ok && this.map && this.live) IDB.set(this.key, { v: CACHE_VER, map: this.map, fullAt: this.fullAt }); } catch (e) { /* best effort */ } }
+        dispose() { this.unsubs.forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); this.unsubs = []; clearTimeout(this.emitT); clearTimeout(this.persistT); clearTimeout(this.readyT); this.listeners.clear(); }
+    }
+
+    class OrdersCh extends AdminCh {
+        constructor() { super('adm:orders', 'orders'); this.oldUn = {}; this.oldWait = 0; this.winSeen = false; this.winIds = new Set(); this.needFull = false; }
+        async start() {
+            if (this.started) return; this.started = true;
+            try {
+                if (killed()) throw new Error('off');
+                const age = this.map ? Date.now() - this.fullAt : Infinity;
+                if (age > FULL_MAX_AGE) {
+                    try { this.map = (await withTimeout(get(ref(db, 'orders')))).val() || {}; this.fullAt = Date.now(); }
+                    catch (e) { if (!this.map) throw e; this.needFull = true; }          // offline with an old copy: keep it, refresh when online
+                }
+                await this.openLive();
+            } catch (e) { this.bail(e); }
+        }
+        async openLive() {
+            const off = await serverOffset();
+            this.cut = new Date(Date.now() + off - WINDOW_DAYS * 86400e3).toISOString();
+            const q = Q.query(ref(db, 'orders'), Q.orderByChild('timestamp'), Q.startAt(this.cut));
+            this.attachOld();                                                            // the few old open orders are watched in parallel with the recent window
+            if (this.mode !== 'smart') return;
+            this.readyT = setTimeout(() => { if (!this.live && this.winSeen && this.mode === 'smart') this.goLive(); }, READY_WAIT);
+            this.unsubs.push(onValue(q, (snap) => { try { this.onWindow(snap.val() || {}); } catch (e) { this.bail(e); } }, (err) => this.bail(err)));
+        }
+        onWindow(win) {
+            if (this.mode !== 'smart') return;
+            const m = this.map = this.map || {}, ids = Object.keys(win);
+            const inWin = Object.keys(m).filter((id) => { const t = m[id] && m[id].timestamp; return typeof t === 'string' && t >= this.cut; });
+            if (!ids.length && inWin.length >= 3) { this.bail(new Error('empty answer while the saved copy has recent orders')); return; }
+            inWin.forEach((id) => { if (!(id in win)) delete m[id]; });                 // inside the window but gone from Firebase = deleted
+            ids.forEach((id) => { m[id] = win[id]; });
+            this.winIds = new Set(ids);
+            this.winSeen = true;
+            this.after();
+        }
+        attachOld() {
+            const m = this.map, cand = Object.keys(m).filter((id) => { const t = m[id] && m[id].timestamp; return !(typeof t === 'string' && t >= this.cut) && !isFinal(m[id]); });   // older than the window (or no date) and still open
+            if (cand.length > MAX_OLD_OPEN) { this.bail(new Error(cand.length + ' open old orders')); return; }
+            this.oldWait = cand.length;
+            cand.forEach((id) => {
+                let first = true;
+                const un = onValue(ref(db, 'orders/' + id), (s) => { try { this.onOld(id, s.val(), first); } catch (e) { /* ignore */ } first = false; }, () => { });
+                this.oldUn[id] = un; this.unsubs.push(un);
+            });
+        }
+        onOld(id, v, first) {
+            if (this.mode !== 'smart') return;
+            if (v == null) delete this.map[id]; else this.map[id] = v;
+            if (first && this.oldWait > 0) this.oldWait--;
+            if (v == null || isFinal(v)) { const un = this.oldUn[id]; if (un) { try { un(); } catch (e) { /* ignore */ } delete this.oldUn[id]; } }
+            this.after();
+        }
+        after() { if (!this.live) { if (this.winSeen && this.oldWait <= 0) this.goLive(); } else { this.soon(); this.persist(); } }
+        bail(why) {                                                                     // go back to the ORIGINAL way: one full live listener
+            if (this.mode === 'full') return; this.mode = 'full';
+            console.warn('Admin saved copy: using the normal full live orders. Reason:', (why && why.message) || why);
+            this.unsubs.forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); this.unsubs = []; this.oldUn = {}; clearTimeout(this.readyT);
+            try { this.unsubs.push(onValue(ref(db, 'orders'), (snap) => { this.map = snap.val() || {}; this.fullAt = Date.now(); this.goLive(); }, () => { })); } catch (e) { /* nothing more to try */ }
+        }
+        async refull() {
+            try { this.map = (await withTimeout(get(ref(db, 'orders')))).val() || {}; this.fullAt = Date.now(); this.needFull = false; this.soon(); this.persist(true); } catch (e) { /* next time */ }
+        }
+    }
+    class InvCh extends AdminCh {
+        constructor() { super('adm:inv', 'inventory'); }
+        start() {
+            if (this.started) return; this.started = true;
+            try {
+                if (killed()) throw new Error('off');
+                this.unsubs.push(onValue(ref(db, 'inventory'), (snap) => { this.map = snap.val() || {}; this.fullAt = Date.now(); this.goLive(); }, () => { }));
+            } catch (e) { console.warn('Admin inventory saved copy: live listener failed', e); }
+        }
+    }
+    let ordersCh = null, invCh = null;
+    const getOrders = () => ordersCh || (ordersCh = new OrdersCh());
+    const getInv = () => invCh || (invCh = new InvCh());
+    window.__adminInvStale = () => !!(invCh && invCh.staleSent && !invCh.live);
+
+    // ---------- the same addListener(...) calls now get saved data first, for admins ----------
+    const prevAdd = addListener;
+    function viaAdmin(getCh, cb, dbRef, track) {
+        let dead = false, ch = null;
+        const un = () => { dead = true; if (ch) ch.remove(cb); };
+        if (track !== false) unsubscribeListeners.push(un);
+        (async () => {
+            try {
+                if (!(await ensure())) throw new Error('off');
+                ch = getCh(); await ch.load();
+                if (dead) return;
+                ch.add(cb);
+            } catch (e) { if (!dead) prevAdd(dbRef, cb); }
+        })();
+        return un;
+    }
+    addListener = function (dbRef, callback) {
+        try {
+            if (!killed() && isAdmin()) {
+                const p = pathOf(dbRef);
+                if (p === 'orders') return viaAdmin(getOrders, callback, dbRef);
+                if (p === 'inventory') return viaAdmin(getInv, callback, dbRef);
+            }
+        } catch (e) { console.warn('Admin saved copy skipped:', e); }
+        return prevAdd.apply(this, arguments);
+    };
+    // the v2.22.0 "change diary" writer reads orders / inventory through the same saved-copy channels (no second download)
+    window.__adminFeedHook = function (pubOrders, pubInv) {
+        if (killed() || !isAdmin()) return false;
+        const oc = getOrders(), ic = getInv();                                           // the diary only ever follows LIVE data, never the saved copy
+        viaAdmin(getOrders, (snap) => { try { if (!(oc.staleSent && !oc.live)) pubOrders(snap.val() || {}); } catch (e) { /* diary only */ } }, ref(db, 'orders'), false);
+        viaAdmin(getInv, (snap) => { try { if (!(ic.staleSent && !ic.live)) pubInv(snap.val() || {}); } catch (e) { /* diary only */ } }, ref(db, 'inventory'), false);
+        return true;
+    };
+
+    // the startup stock sync (v2.19.0) does its own full inventory read: wait until the live listener has the data, so Firebase answers from it
+    if (typeof migrateInventoryFieldAliases === 'function') {
+        const origMig = migrateInventoryFieldAliases;
+        migrateInventoryFieldAliases = async function () {
+            try {
+                if (!killed() && isAdmin() && await ensure()) {                          // only when the saved-copy channels are really in use
+                    const t0 = Date.now();
+                    while (Date.now() - t0 < 8000 && !(invCh && invCh.live)) await new Promise((r) => setTimeout(r, 250));
+                }
+            } catch (e) { /* run it anyway */ }
+            return origMig.apply(this, arguments);
+        };
+        window.migrateInventoryFieldAliases = migrateInventoryFieldAliases;
+    }
+
+    // the startup backfill (a legacy repair of orders that are exactly "done"/"completed") reads ALL orders + ALL stock movements:
+    // v2.22.0 allowed it once a day per device, it is plenty once a week (it is safe to repeat, nothing depends on the day)
+    if (typeof retroactiveFixCompletedOrders === 'function') {
+        const origRetro2 = retroactiveFixCompletedOrders;
+        retroactiveFixCompletedOrders = async function () {
+            try {
+                if (!killed() && isAdmin()) {
+                    const last = Math.max(Number(lsGet('retro_last_v1') || 0), Number(lsGet('retro_last_v2') || 0));
+                    if (Date.now() - last < 7 * 86400e3) return;
+                    try { localStorage.setItem('retro_last_v2', String(Date.now())); } catch (e) { /* ignore */ }
+                }
+            } catch (e) { /* run it */ }
+            return origRetro2.apply(this, arguments);
+        };
+        window.retroactiveFixCompletedOrders = retroactiveFixCompletedOrders;
+    }
+
+    // ---------- logout: nothing of the admin stays on the phone; teachers never keep admin data ----------
+    const prevLogout = window.handleUserLogout;
+    if (typeof prevLogout === 'function') {
+        window.handleUserLogout = async function () {
+            try {
+                if (ordersCh) { ordersCh.dispose(); ordersCh = null; }
+                if (invCh) { invCh.dispose(); invCh = null; }
+                wiped = false;
+                await Promise.race([wipeSaved(), new Promise((r) => setTimeout(r, 800))]);
+            } catch (e) { /* keep logging out */ }
+            return prevLogout.apply(this, arguments);
+        };
+    }
+    async function wipeIfNotAdmin() { if (wiped) return; wiped = true; try { if (await ensure()) await wipeSaved(); } catch (e) { /* ignore */ } }
+
+    window.addEventListener('online', () => { try { if (ordersCh && ordersCh.needFull) ordersCh.refull(); banner(''); } catch (e) { /* ignore */ } });
+    window.addEventListener('offline', () => { if (ordersCh || invCh) banner('📴 Offline: saved data is shown and may be outdated'); });
+    window.addEventListener('pagehide', () => { try { if (ordersCh) ordersCh.flush(); if (invCh) invCh.flush(); } catch (e) { /* best effort */ } });
+
+    // ---------- admin menu: "Refresh Saved Data" ----------
+    function ensureMenuItem() {
+        const nav = document.getElementById('admin-menu');
+        if (!nav) return;
+        const have = document.getElementById('drawer-refresh-saved-btn');
+        if (!isAdmin() || killed()) { if (have) have.remove(); return; }
+        if (have) return;
+        const b = document.createElement('button');
+        b.id = 'drawer-refresh-saved-btn'; b.type = 'button'; b.className = 'drawer-item'; b.textContent = '🔄 Refresh Saved Data';
+        b.addEventListener('click', async () => {
+            const c = document.getElementById('close-drawer-btn'); if (c) c.click();
+            if (!confirm('Is phone ki saved copy hata kar sab data dobara Firebase se download karein?\n(Sirf tab karein jab data galat/purana lage. Ye ek baar poora download karega.)')) return;
+            try { if (ordersCh) { ordersCh.dispose(); ordersCh = null; } if (invCh) { invCh.dispose(); invCh = null; } if (await ensure()) await wipeSaved(); } catch (e) { /* reload anyway */ }
+            location.reload();
+        });
+        nav.insertBefore(b, document.getElementById('drawer-backup-btn') || document.getElementById('logout-btn-admin') || null);
+    }
+
+    window.__adminCache = {
+        status: () => ({
+            mode: ordersCh ? ordersCh.mode : null, live: !!(ordersCh && ordersCh.live), orders: ordersCh && ordersCh.map ? Object.keys(ordersCh.map).length : null,
+            inventory: invCh && invCh.map ? Object.keys(invCh.map).length : null, oldOpen: ordersCh ? Object.keys(ordersCh.oldUn).length : null,
+            windowDays: WINDOW_DAYS, cut: ordersCh ? ordersCh.cut || null : null, indexMissing: !!window.__adminIndexMissing, killed: killed(), idb: IDB.ok
+        })
+    };
+    setInterval(() => { try { if (!currentUser) return; if (isAdmin()) ensureMenuItem(); else wipeIfNotAdmin(); } catch (e) { /* display only */ } }, 2000);
 })();
