@@ -13526,3 +13526,502 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
 
     window.__teacherGuard = { check: guardSheet, avail: (sn, name) => avail(sn, name, localFlat()), version: '2.24.0' };
 })();
+
+// =====================================================================================
+// v2.25.0 (additive) - "ISSUE ON BEHALF OF A TEACHER"
+//   For a teacher who took items in a hurry and never ordered them.
+//   ADMIN  menu "📝 Issue on Behalf": pick the teacher (search by name / ADEK), pick items (search by name / serial, photo,
+//          stock shown), type quantities, "Issue now". The stock is deducted AT THAT MOMENT (the items already left) with the
+//          same safe FIFO transaction as a handover, and the batch split is remembered so a wrong entry can be returned exactly.
+//          Menu "⏳ Pending Confirmations": every issue waiting for a teacher, how many days, "Teacher says NOT MINE" flags,
+//          buttons to remind (push) or cancel (stock goes back to the same batches).
+//   TEACHER  a banner + (once per app open) a pop-up: "items issued to you - confirm". He confirms with his saved signature
+//          (same password / fingerprint check as before) or signs; that turns the issue into a normal finished order
+//          (status Done, flagged issuedOnBehalf, receipts / reports / vouchers work as for any order). "Not mine" tells the admin.
+//   Until the teacher confirms nothing exists in the orders list: monthly limits, reports and order lists are untouched.
+//   Reminders: push at issue time; every day the admin app is opened it sends one push per still-pending issue (claimed with a
+//   transaction so two admins never double-send). The teacher's pending list is kept on his phone and shown at once.
+//   NEEDS in Firebase Rules:  "onBehalf": {".read": true, ".write": true}
+//   Kill switch: localStorage.onBehalfOff = '1'.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__onBehalfV2250) return;
+    window.__onBehalfV2250 = true;
+    window.__APP_BUILD = '2.25.0';
+
+    const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const off = () => lsGet('onBehalfOff') === '1';
+    const DB_URL = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js';
+    const role = () => String((currentUser && currentUser.role) || '').toUpperCase();
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(role());
+    const isTeacher = () => role() === 'TEACHER';
+    const safeKey = (v) => String(v || '').replace(/[.#$\[\]\/]/g, '_');
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const myAdec = () => String((currentUser && (currentUser.adecPassNumber || currentUser.uid)) || '');
+    const adminName = () => sessionStorage.getItem('userName') || (currentUser && currentUser.name) || (currentUser && currentUser.uid) || 'Admin';
+    const toast = (m, t) => { try { if (typeof showToast === 'function') showToast(m, t || 'success'); else alert(m); } catch (e) { /* ignore */ } };
+    const qtyOf = (b) => parseInt(b && (b.currentQty ?? b.currentStock ?? b.quantity ?? 0), 10) || 0;
+    const statusOf = (n) => n > 0 ? (n <= 5 ? 'Low Stock' : 'In Stock') : 'Out of Stock';
+    const imgOf = (o) => { try { return (typeof pickImg === 'function' ? pickImg(o) : (o && (o.imageUrl || o.image || o.photoUrl || o.photo))) || ''; } catch (e) { return ''; } };
+    const photo = (raw) => { try { if (raw && typeof isValidImageUrl === 'function' && isValidImageUrl(raw) && typeof getDirectDriveUrl === 'function') return getDirectDriveUrl(raw); } catch (e) { /* ignore */ } return raw || ''; };
+
+    // ---------- styles ----------
+    (function css() {
+        if (document.getElementById('ob-style')) return;
+        const st = document.createElement('style'); st.id = 'ob-style';
+        st.textContent = [
+            '#obOv{position:fixed;inset:0;z-index:100002;background:rgba(15,23,42,.55);display:flex;align-items:flex-end;justify-content:center}',
+            '@media(min-width:700px){#obOv{align-items:center}}',
+            '#obOv .bx{background:#fff;color:#111827;width:min(560px,100%);max-height:92dvh;display:flex;flex-direction:column;border-radius:20px 20px 0 0;font:15px/1.45 system-ui,sans-serif;overflow:hidden}',
+            '@media(min-width:700px){#obOv .bx{border-radius:20px}}',
+            '#obOv .hd{padding:14px 16px;background:#0f1a3a;color:#fff;display:flex;justify-content:space-between;align-items:center;gap:8px}',
+            '#obOv .hd b{font-size:16px}',
+            '#obOv .hd button{background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;min-width:38px;min-height:38px;font-size:18px;cursor:pointer}',
+            '#obOv .bd{padding:14px 16px;overflow:auto;flex:1}',
+            '#obOv .ft{padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap}',
+            '#obOv input[type=text],#obOv input[type=search],#obOv textarea{width:100%;box-sizing:border-box;border:1.5px solid #d6dbe8;border-radius:12px;padding:10px 12px;font:16px system-ui,sans-serif}',
+            '#obOv .row{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid #e5e7eb;border-radius:12px;margin-top:8px;background:#fff}',
+            '#obOv .row.pick{cursor:pointer}',
+            '#obOv .row.pick:hover{background:#f1f5ff}',
+            '#obOv .ph{width:46px;height:46px;border-radius:10px;background:#eef1f8;display:grid;place-items:center;font-size:22px;overflow:hidden;flex:none}',
+            '#obOv .ph img{width:100%;height:100%;object-fit:cover}',
+            '#obOv .tx{flex:1;min-width:0}',
+            '#obOv .tx b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '#obOv small{color:#6b7280}',
+            '#obOv .bad{color:#b91c1c;font-weight:700}',
+            '#obOv .tag{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;background:#fef3c7;color:#92400e}',
+            '#obOv .tag.red{background:#fee2e2;color:#991b1b}',
+            '#obOv button.pr,#obOv button.sc,#obOv button.dg{min-height:44px;border-radius:12px;border:0;font-weight:700;font-size:15px;padding:0 14px;cursor:pointer}',
+            '#obOv button.pr{background:#2563eb;color:#fff;flex:1}',
+            '#obOv button.sc{background:#e5e7eb;color:#111827}',
+            '#obOv button.dg{background:#fee2e2;color:#991b1b}',
+            '#obOv button[disabled]{opacity:.5;cursor:not-allowed}',
+            '#obOv input.q{width:64px;text-align:center;font-weight:700;padding:8px 4px}',
+            '#obOv canvas.sp{width:100%;height:170px;border:2px dashed #94a3b8;border-radius:12px;touch-action:none;background:#fff}',
+            '#obBanner{margin:10px 12px;padding:12px 14px;border-radius:14px;background:#fff7ed;border:1.5px solid #fb923c;color:#7c2d12;font:600 14px/1.4 system-ui,sans-serif;display:flex;gap:10px;align-items:center;justify-content:space-between;cursor:pointer}',
+            '#obBanner button{background:#ea580c;color:#fff;border:0;border-radius:10px;min-height:38px;padding:0 14px;font-weight:700;cursor:pointer}',
+            '#obBadge{display:inline-block;min-width:20px;padding:0 6px;border-radius:999px;background:#dc2626;color:#fff;font-size:12px;line-height:20px;text-align:center;margin-left:6px}'
+        ].join('\n');
+        document.head.appendChild(st);
+    })();
+
+    // =================================================================================
+    // stock helpers (same FIFO rules as the handover: window.__applyFifo from v2.9.1)
+    // =================================================================================
+    function nodeTotal(n) {
+        if (!n || typeof n !== 'object') return 0;
+        if (n.batches && typeof n.batches === 'object' && Object.keys(n.batches).length) { let t = 0; Object.values(n.batches).forEach((b) => { t += Math.max(0, qtyOf(b)); }); return t; }
+        return Math.max(0, parseInt(n.currentQty ?? n.currentStock ?? n.quantity ?? n.availableStock ?? 0, 10) || 0);
+    }
+    function serialOfNode(key, n) {
+        if (n && n.serialNumber) return String(n.serialNumber);
+        if (n && n.batches) { const b = Object.values(n.batches).find((x) => x && (x.serialNumber || x.batchNo)); if (b) return String(b.serialNumber || b.batchNo); }
+        return String((n && n.batchNo) || key);
+    }
+    function catalogRows() {                                  // one selectable row per inventory node (that is also the node we deduct from)
+        const inv = (typeof inventoryData === 'object' && inventoryData) ? inventoryData : {};
+        return Object.entries(inv).filter(([, n]) => n && typeof n === 'object').map(([key, n]) => {
+            const bs = n.batches && typeof n.batches === 'object' ? Object.values(n.batches) : [];
+            return {
+                key, name: String(n.itemName || n.name || key), serial: serialOfNode(key, n), unit: String(n.unit || (bs[0] && bs[0].unit) || 'Pcs'),
+                brand: String(n.brand || n.brandName || (bs[0] && (bs[0].brandName || bs[0].brand)) || ''), category: String(n.category || ''),
+                img: imgOf(n) || (bs[0] ? imgOf(bs[0]) : ''), stock: nodeTotal(n)
+            };
+        });
+    }
+    function refreshLocal() {
+        try {
+            window.masterInventoryList = getFlatInventoryList();
+            if (typeof renderMasterInventory === 'function') renderMasterInventory();
+            if (typeof renderMasterInventoryReport === 'function') renderMasterInventoryReport();
+        } catch (e) { /* display only */ }
+    }
+    // deduct 'want' from inventory/<key>; returns { deducted, split:[{bId,qty}] } or throws when the live stock is not enough
+    async function deductWithSplit(key, want) {
+        let split = null, short = 0, before = 0, after = 0;
+        const tx = await runTransaction(ref(db, 'inventory/' + key), (cur) => {
+            if (cur === null || typeof cur !== 'object') return cur;                   // null first -> Firebase retries with the real value
+            const r = window.__applyFifo(cur, want);
+            if (r.shortage > 0) { short = r.shortage; return; }                      // not enough: abort, nothing is written
+            short = 0; before = nodeTotal(cur); after = nodeTotal(r.node); split = [];
+            if (cur.batches && typeof cur.batches === 'object' && Object.keys(cur.batches).length) {
+                Object.keys(cur.batches).forEach((bId) => { const d = qtyOf(cur.batches[bId]) - qtyOf(r.node.batches[bId]); if (d > 0) split.push({ bId, qty: d }); });
+            } else split.push({ bId: '', qty: before - after });
+            return r.node;
+        });
+        if (!tx.committed) throw new Error(short > 0 ? 'Not enough stock now (' + short + ' short)' : 'Stock update was not committed');
+        if (!tx.snapshot.exists() || !split) throw new Error('Item not found in inventory');
+        return { split, before, after };
+    }
+    async function restoreSplit(key, split) {
+        const tx = await runTransaction(ref(db, 'inventory/' + key), (cur) => {
+            if (cur === null || typeof cur !== 'object') return cur;
+            const node = JSON.parse(JSON.stringify(cur));
+            const has = node.batches && typeof node.batches === 'object' && Object.keys(node.batches).length > 0;
+            if (has) {
+                let rest = 0;
+                split.forEach((s) => {
+                    if (s.bId && node.batches[s.bId]) { const b = node.batches[s.bId]; const nq = qtyOf(b) + s.qty; b.currentQty = nq; b.currentStock = nq; b.quantity = nq; b.status = 'In Stock'; } else rest += s.qty;
+                });
+                if (rest > 0) { const first = Object.values(node.batches)[0]; const nq = qtyOf(first) + rest; first.currentQty = nq; first.currentStock = nq; first.quantity = nq; first.status = 'In Stock'; }
+                const sum = nodeTotal(node);
+                node.currentQty = sum; node.currentStock = sum; node.quantity = sum; node.availableStock = sum; node.stock = sum; node.status = statusOf(sum);
+            } else {
+                const add = split.reduce((a, s) => a + s.qty, 0); const nv = nodeTotal(node) + add;
+                node.currentQty = nv; node.currentStock = nv; node.quantity = nv; node.availableStock = nv; node.stock = nv; node.status = statusOf(nv);
+            }
+            return node;
+        });
+        if (!tx.committed) throw new Error('Could not return stock for ' + key);
+    }
+
+    // =================================================================================
+    // ADMIN: issue sheet
+    // =================================================================================
+    let overlay = null;
+    function closeOv() { if (overlay) { overlay.remove(); overlay = null; } }
+    function openOv(title, body, foot) {
+        closeOv();
+        overlay = document.createElement('div'); overlay.id = 'obOv';
+        overlay.innerHTML = '<div class="bx" role="dialog" aria-modal="true"><div class="hd"><b>' + title + '</b><button type="button" class="x" aria-label="Close">✕</button></div><div class="bd"></div><div class="ft"></div></div>';
+        document.body.appendChild(overlay);
+        overlay.querySelector('.x').onclick = closeOv;
+        overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) closeOv(); });
+        if (body) overlay.querySelector('.bd').innerHTML = body;
+        if (foot !== undefined) overlay.querySelector('.ft').innerHTML = foot;
+        return overlay;
+    }
+    const phHtml = (raw, emoji) => { const u = photo(raw); return '<div class="ph">' + (u ? '<img src="' + esc(u) + '" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.textContent=\'' + (emoji || '📦') + '\'">' : (emoji || '📦')) + '</div>'; };
+
+    let usersCache = null, usersAt = 0;
+    async function loadUsers() {
+        if (usersCache && Date.now() - usersAt < 10 * 60e3) return usersCache;
+        const s = await get(ref(db, 'users'));
+        const v = s.val() || {};
+        usersCache = Object.entries(v).filter(([, u]) => u && typeof u === 'object' && !['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String(u.role || '').toUpperCase()))
+            .map(([id, u]) => ({ id, adec: String(u.adecPassNumber || id), name: String(u.name || id), designation: String(u.designation || ''), dept: String(u.department || u.dept || '') }));
+        usersAt = Date.now();
+        return usersCache;
+    }
+
+    async function openIssue() {
+        if (off() || !isAdmin()) return;
+        const st = { teacher: null, cart: {} };                       // cart: key -> qty
+        const ov = openOv('📝 Issue on Behalf of Teacher', '<div class="stp"></div>', '');
+        const bd = ov.querySelector('.bd'), ft = ov.querySelector('.ft');
+        let users = [];
+        bd.innerHTML = '<small>Loading staff…</small>';
+        try { users = await loadUsers(); } catch (e) { bd.innerHTML = '<div class="bad">Could not load staff list. Check internet and try again.</div>'; return; }
+
+        function step1() {
+            bd.innerHTML = '<b>1. Which teacher took the items?</b><div style="margin-top:8px"><input type="search" id="obT" placeholder="Type name or ADEK (e.g. PASS1234)" autocomplete="off"></div><div id="obTL"></div>';
+            ft.innerHTML = '<button class="sc" type="button" id="obC">Cancel</button>';
+            ft.querySelector('#obC').onclick = closeOv;
+            const inp = bd.querySelector('#obT'), list = bd.querySelector('#obTL');
+            const draw = () => {
+                const t = inp.value.toLowerCase().trim();
+                const rows = users.filter((u) => !t || (u.name + ' ' + u.adec + ' ' + u.designation + ' ' + u.dept).toLowerCase().includes(t)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 40);
+                list.innerHTML = rows.length ? rows.map((u) => '<div class="row pick" data-id="' + esc(u.id) + '"><div class="ph">👤</div><div class="tx"><b>' + esc(u.name) + '</b><small>' + esc(u.adec) + (u.designation ? ' · ' + esc(u.designation) : '') + (u.dept ? ' · ' + esc(u.dept) : '') + '</small></div></div>').join('') : '<small>No staff found.</small>';
+            };
+            inp.addEventListener('input', draw); draw(); setTimeout(() => inp.focus(), 50);
+            list.onclick = (e) => { const r = e.target.closest('.row.pick'); if (!r) return; st.teacher = users.find((u) => u.id === r.dataset.id); if (st.teacher) step2(); };
+        }
+
+        function step2() {
+            bd.innerHTML = '<div class="row" style="margin:0 0 10px"><div class="ph">👤</div><div class="tx"><b>' + esc(st.teacher.name) + '</b><small>' + esc(st.teacher.adec) + ' · <a href="#" id="obChg">change teacher</a></small></div></div>' +
+                '<b>2. What did he take?</b><div style="margin-top:8px"><input type="search" id="obI" placeholder="Search item name or serial number" autocomplete="off"></div><div id="obIL"></div>' +
+                '<div id="obCart" style="margin-top:14px"></div>';
+            const inp = bd.querySelector('#obI'), list = bd.querySelector('#obIL'), cartEl = bd.querySelector('#obCart');
+            bd.querySelector('#obChg').onclick = (e) => { e.preventDefault(); st.cart = {}; step1(); };
+            const rows = catalogRows();
+            const rowOf = (k) => rows.find((r) => r.key === k);
+            const drawList = () => {
+                const t = inp.value.toLowerCase().trim();
+                if (!t) { list.innerHTML = '<small>Type to search the store.</small>'; return; }
+                const found = rows.filter((r) => (r.name + ' ' + r.serial + ' ' + r.brand + ' ' + r.category).toLowerCase().includes(t)).slice(0, 25);
+                list.innerHTML = found.length ? found.map((r) => '<div class="row' + (r.stock > 0 ? ' pick' : '') + '" data-k="' + esc(r.key) + '">' + phHtml(r.img) + '<div class="tx"><b>' + esc(r.name) + '</b><small>SN: ' + esc(r.serial) + (r.brand ? ' · ' + esc(r.brand) : '') + '</small></div><div style="text-align:right">' + (r.stock > 0 ? '<b>' + r.stock + '</b><small> ' + esc(r.unit) + '</small>' : '<span class="bad">Out of stock</span>') + '</div></div>').join('') : '<small>Nothing found.</small>';
+            };
+            const drawCart = () => {
+                const ks = Object.keys(st.cart);
+                cartEl.innerHTML = ks.length ? '<b>To issue (stock is deducted when you press Issue)</b>' + ks.map((k) => { const r = rowOf(k); return '<div class="row">' + phHtml(r.img) + '<div class="tx"><b>' + esc(r.name) + '</b><small>SN: ' + esc(r.serial) + ' · stock ' + r.stock + ' ' + esc(r.unit) + '</small></div><input type="text" class="q" inputmode="numeric" data-k="' + esc(k) + '" value="' + st.cart[k] + '"><button type="button" class="dg" data-rm="' + esc(k) + '" style="min-width:40px;padding:0">✕</button></div>'; }).join('') : '';
+                ft.innerHTML = '<button class="sc" type="button" id="obC">Cancel</button><button class="pr" type="button" id="obGo"' + (ks.length ? '' : ' disabled') + '>Issue now (' + ks.length + ')</button>';
+                ft.querySelector('#obC').onclick = closeOv;
+                ft.querySelector('#obGo').onclick = review;
+            };
+            inp.addEventListener('input', drawList);
+            list.onclick = (e) => { const r = e.target.closest('.row.pick'); if (!r) return; const k = r.dataset.k; if (!st.cart[k]) st.cart[k] = 1; drawCart(); inp.value = ''; drawList(); };
+            cartEl.addEventListener('click', (e) => { const b = e.target.closest('[data-rm]'); if (b) { delete st.cart[b.dataset.rm]; drawCart(); } });
+            cartEl.addEventListener('change', (e) => {
+                const i = e.target.closest('input.q'); if (!i) return; const k = i.dataset.k, r = rowOf(k); let n = parseInt(String(i.value).replace(/\D/g, ''), 10);
+                if (!n || n < 1) n = st.cart[k]; if (n > r.stock) { n = r.stock; toast('Only ' + r.stock + ' ' + r.unit + ' in stock', 'error'); } st.cart[k] = n; i.value = String(n);
+            });
+            drawList(); drawCart(); setTimeout(() => inp.focus(), 50);
+
+            function review() {
+                const ks = Object.keys(st.cart);
+                bd.innerHTML = '<b>3. Check and issue</b><div class="row" style="margin-top:8px"><div class="ph">👤</div><div class="tx"><b>' + esc(st.teacher.name) + '</b><small>' + esc(st.teacher.adec) + '</small></div></div>' +
+                    ks.map((k) => { const r = rowOf(k); return '<div class="row">' + phHtml(r.img) + '<div class="tx"><b>' + esc(r.name) + '</b><small>SN: ' + esc(r.serial) + '</small></div><b>× ' + st.cart[k] + ' ' + esc(r.unit) + '</b></div>'; }).join('') +
+                    '<p style="margin-top:12px"><small>⚠ Stock will be <b>deducted now</b> (the items already left). The teacher gets a request to confirm with his signature. If you made a mistake you can cancel it later from “Pending Confirmations” and the stock returns.</small></p>' +
+                    '<div style="margin-top:8px"><input type="text" id="obNote" placeholder="Note for the teacher (optional)" maxlength="120"></div><div id="obErr" class="bad" style="margin-top:8px"></div>';
+                ft.innerHTML = '<button class="sc" type="button" id="obB">Back</button><button class="pr" type="button" id="obGo2">✅ Issue now</button>';
+                ft.querySelector('#obB').onclick = () => step2();
+                ft.querySelector('#obGo2').onclick = () => commit(ks, bd.querySelector('#obNote').value.trim());
+            }
+            async function commit(ks, note) {
+                const go = ft.querySelector('#obGo2'), err = bd.querySelector('#obErr');
+                go.disabled = true; go.textContent = 'Issuing…'; err.textContent = '';
+                const done = [];                                                         // [{key, split}] for rollback
+                try {
+                    const lines = [];
+                    for (const k of ks) {
+                        const r = rowOf(k), want = st.cart[k];
+                        const res = await deductWithSplit(k, want);
+                        done.push({ key: k, split: res.split });
+                        lines.push({ itemId: k, itemName: r.name, serialNumber: r.serial, requestQuantity: want, issuedQty: want, unit: r.unit, imageUrl: r.img || '', stockBefore: res.before, stockAfter: res.after, invKey: k, split: res.split });
+                    }
+                    let adminSig = null;
+                    try { const s = await window.getSavedSignature(currentUser.uid); if (s) adminSig = s; } catch (e) { /* optional */ }
+                    const issueId = 'OB-' + Date.now();
+                    const rec = { issueId, teacherUid: st.teacher.adec, teacherName: st.teacher.name, designation: st.teacher.designation || '', department: st.teacher.dept || '', issuedBy: adminName(), issuedByUid: String((currentUser && currentUser.uid) || ''), issuedAt: new Date().toISOString(), status: 'pending', note: note || '', items: lines };
+                    if (adminSig) rec.adminSignature = adminSig;
+                    const clean = typeof sanitizeForFirebase === 'function' ? sanitizeForFirebase(rec) : rec;
+                    await set(ref(db, 'onBehalf/' + safeKey(st.teacher.adec) + '/' + issueId), clean);
+                    try { await logActivity('Issued on behalf', issueId + ' to ' + st.teacher.name + ': ' + lines.map((l) => l.itemName + ' x' + l.requestQuantity).join(', ')); } catch (e) { /* log only */ }
+                    try { relayPushEvent({ eventKey: 'obissue_' + issueId, toUser: st.teacher.adec, title: '📝 Please confirm items issued to you', body: lines.map((l) => l.itemName + ' x' + l.requestQuantity).join(', ').slice(0, 120) + '. Open the app and confirm with your signature.' }); } catch (e) { /* push is optional */ }
+                    refreshLocal();
+                    closeOv(); toast('Issued to ' + st.teacher.name + '. Stock deducted; waiting for his confirmation.');
+                } catch (e) {
+                    for (const d of done.reverse()) { try { await restoreSplit(d.key, d.split); } catch (re) { console.error('rollback failed', re); } }   // nothing stays half-deducted
+                    refreshLocal();
+                    const denied = /permission|denied/i.test(String(e && e.message));
+                    err.textContent = denied ? 'Firebase Rules block the "onBehalf" node. Add  "onBehalf": {".read": true, ".write": true}  to the Rules and Publish. Nothing was deducted.' : 'Not issued: ' + (e && e.message ? e.message : e) + '. Nothing was deducted.';
+                    go.disabled = false; go.textContent = '✅ Issue now';
+                }
+            }
+        }
+        step1();
+    }
+
+    // =================================================================================
+    // ADMIN: pending confirmations list (+ daily reminder from the admin app)
+    // =================================================================================
+    let pendingAll = {}, pendingOn = false; const unsubs = [];
+    const flatPending = () => { const out = []; Object.entries(pendingAll || {}).forEach(([tk, m]) => Object.entries(m || {}).forEach(([id, r]) => { if (r && typeof r === 'object') out.push(Object.assign({ _tk: tk, _id: id }, r)); })); return out.sort((a, b) => String(a.issuedAt).localeCompare(String(b.issuedAt))); };
+    function badge() { const n = flatPending().length; const b = document.getElementById('drawer-ob-list-btn'); if (b) b.innerHTML = '⏳ Pending Confirmations' + (n ? '<span id="obBadge">' + n + '</span>' : ''); }
+    function startPendingWatch() {
+        if (pendingOn || off() || !isAdmin()) return; pendingOn = true;
+        try {
+            unsubs.push(onValue(ref(db, 'onBehalf'), (s) => { pendingAll = s.val() || {}; badge(); if (overlay && overlay.dataset.kind === 'plist') drawPending(); maybeRemind(); }, () => { /* rules not added yet: menu still works, shows a message */ }));
+        } catch (e) { console.warn('onBehalf watch failed', e); }
+    }
+    const ageDays = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400e3));
+    let reminded = false;
+    async function maybeRemind() {
+        if (reminded || off() || !isAdmin()) return; reminded = true;
+        const day = new Date().toISOString().slice(0, 10);
+        for (const r of flatPending()) {
+            if (r.status !== 'pending') continue;
+            const last = r.lastReminderAt ? new Date(r.lastReminderAt).getTime() : new Date(r.issuedAt).getTime();
+            if (Date.now() - last < 20 * 3600e3) continue;
+            try {
+                const tx = await runTransaction(ref(db, 'onBehalf/' + r._tk + '/' + r._id + '/lastReminderAt'), (cur) => { if (cur && Date.now() - new Date(cur).getTime() < 20 * 3600e3) return; return new Date().toISOString(); });
+                if (tx.committed) relayPushEvent({ eventKey: 'obremind_' + r._id + '_' + day, toUser: r.teacherUid, title: '⏳ Items waiting for your confirmation', body: (r.items || []).map((l) => l.itemName + ' x' + l.requestQuantity).join(', ').slice(0, 110) + ' - open the app and confirm.' });
+            } catch (e) { /* reminders are best effort */ }
+        }
+    }
+    function drawPending() {
+        if (!overlay) return;
+        const bd = overlay.querySelector('.bd'); const list = flatPending();
+        bd.innerHTML = list.length ? list.map((r) => {
+            const d = ageDays(r.issuedAt), dis = r.status === 'disputed';
+            return '<div style="border:1px solid #e5e7eb;border-radius:14px;padding:10px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><div><b>' + esc(r.teacherName) + '</b><br><small>' + esc(r.teacherUid) + ' · issued ' + esc(String(r.issuedAt).slice(0, 10)) + ' by ' + esc(r.issuedBy) + '</small></div><div style="text-align:right"><span class="tag' + (dis ? ' red' : '') + '">' + (dis ? 'NOT MINE' : d + ' day' + (d === 1 ? '' : 's') + ' pending') + '</span></div></div>' +
+                (dis ? '<div class="bad" style="margin-top:6px">Teacher says these are not his' + (r.disputeReason ? ': “' + esc(r.disputeReason) + '”' : '') + '</div>' : '') +
+                (r.items || []).map((l) => '<div class="row">' + phHtml(l.imageUrl) + '<div class="tx"><b>' + esc(l.itemName) + '</b><small>SN: ' + esc(l.serialNumber) + '</small></div><b>× ' + l.requestQuantity + ' ' + esc(l.unit || '') + '</b></div>').join('') +
+                '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="sc" type="button" data-rem="' + esc(r._tk + '|' + r._id) + '">🔔 Remind</button><button class="dg" type="button" data-can="' + esc(r._tk + '|' + r._id) + '">↩ Cancel &amp; return stock</button></div></div>';
+        }).join('') : '<div style="text-align:center;padding:30px 10px"><div style="font-size:40px">✅</div><b>Nothing is waiting for a teacher.</b></div>';
+    }
+    function openPending() {
+        if (off() || !isAdmin()) return;
+        const ov = openOv('⏳ Pending Confirmations', '', '<button class="sc" type="button" id="obX">Close</button>'); ov.dataset.kind = 'plist';
+        ov.querySelector('#obX').onclick = closeOv; startPendingWatch(); drawPending();
+        ov.querySelector('.bd').addEventListener('click', async (e) => {
+            const rem = e.target.closest('[data-rem]'), can = e.target.closest('[data-can]');
+            const find = (v) => { const [tk, id] = v.split('|'); return flatPending().find((r) => r._tk === tk && r._id === id); };
+            if (rem) {
+                const r = find(rem.dataset.rem); if (!r) return;
+                relayPushEvent({ eventKey: 'obremind_' + r._id + '_' + Date.now(), toUser: r.teacherUid, title: '⏳ Items waiting for your confirmation', body: (r.items || []).map((l) => l.itemName + ' x' + l.requestQuantity).join(', ').slice(0, 110) + ' - open the app and confirm.' });
+                toast('Reminder sent to ' + r.teacherName);
+            }
+            if (can) {
+                const r = find(can.dataset.can); if (!r) return;
+                if (!confirm('Cancel this issue for ' + r.teacherName + '?\nThe stock will be returned to the same batches.')) return;
+                can.disabled = true;
+                try {
+                    const issueRef = ref(db, 'onBehalf/' + r._tk + '/' + r._id);
+                    const tx = await runTransaction(issueRef, (cur) => { if (!cur || (cur.status !== 'pending' && cur.status !== 'disputed')) return; return Object.assign({}, cur, { status: 'cancelling' }); });
+                    if (!tx.committed) { toast('This issue was already handled (maybe the teacher just confirmed it).', 'error'); can.disabled = false; return; }
+                    for (const l of (r.items || [])) { await restoreSplit(l.invKey || l.itemId, Array.isArray(l.split) ? l.split : [{ bId: '', qty: l.requestQuantity }]); }
+                    await set(issueRef, null);
+                    try { await logActivity('Issue cancelled', r._id + ' for ' + r.teacherName + ': stock returned'); } catch (er) { /* log only */ }
+                    refreshLocal(); toast('Cancelled. Stock returned.');
+                } catch (er) { toast('Could not cancel: ' + (er && er.message ? er.message : er), 'error'); can.disabled = false; }
+            }
+        });
+    }
+
+    // =================================================================================
+    // TEACHER: banner, pop-up, confirm with signature, "not mine"
+    // =================================================================================
+    let myIssues = [], tOn = false, tKey = '', shownPopup = false;
+    const openForTeacher = (r) => r.status === 'pending' || r.status === 'disputed' || (r.status === 'confirming' && Date.now() - new Date(r.confirmingAt || 0).getTime() > 120000);
+    let kvdb = null;
+    function kvOpen() { if (kvdb) return Promise.resolve(kvdb); return new Promise((res, rej) => { try { const rq = indexedDB.open('stationery_smart_cache', 1); rq.onupgradeneeded = () => { try { rq.result.createObjectStore('kv', { keyPath: 'k' }); } catch (e) { /* exists */ } }; rq.onsuccess = () => { kvdb = rq.result; res(kvdb); }; rq.onerror = () => rej(rq.error); } catch (e) { rej(e); } }); }
+    const kvGet = async (k) => { try { const d = await kvOpen(); return await new Promise((res) => { const r = d.transaction('kv', 'readonly').objectStore('kv').get(k); r.onsuccess = () => res(r.result ? r.result.v : null); r.onerror = () => res(null); }); } catch (e) { return null; } };
+    const kvSet = async (k, v) => { try { const d = await kvOpen(); await new Promise((res) => { const tx = d.transaction('kv', 'readwrite'); tx.objectStore('kv').put({ k, v }); tx.oncomplete = () => res(); tx.onerror = () => res(); }); } catch (e) { /* cache is optional */ } };
+
+    function drawBanner() {
+        let b = document.getElementById('obBanner');
+        const n = myIssues.length;
+        if (!n) { if (b) b.remove(); return; }
+        if (!b) {
+            const grid = document.getElementById('grid'); const host = grid && grid.parentElement; if (!host) return;
+            b = document.createElement('div'); b.id = 'obBanner'; host.insertBefore(b, grid);
+            b.addEventListener('click', openConfirmList);
+        }
+        b.innerHTML = '<span>⚠ ' + n + ' issue' + (n > 1 ? 's' : '') + ' waiting: items given to you that are not ordered yet. Please confirm.</span><button type="button">Review</button>';
+    }
+    function startTeacherWatch() {
+        if (tOn || off() || !isTeacher()) return;
+        const key = safeKey(myAdec()); if (!key) return; tOn = true; tKey = key;
+        (async () => {
+            const c = await kvGet('ob:' + key);                                  // saved copy: shown at once, even offline
+            if (Array.isArray(c)) { myIssues = c; drawBanner(); popupOnce(); }
+            try {
+                unsubs.push(onValue(ref(db, 'onBehalf/' + key), (s) => {
+                    const v = s.val() || {}; myIssues = Object.entries(v).filter(([, r]) => r && typeof r === 'object').map(([id, r]) => Object.assign({ _id: id }, r)).filter(openForTeacher).sort((a, b) => String(a.issuedAt).localeCompare(String(b.issuedAt)));
+                    kvSet('ob:' + key, myIssues); drawBanner(); popupOnce();
+                    if (overlay && overlay.dataset.kind === 'tlist') drawConfirmList();
+                }, () => { /* rules not added: keep the saved copy */ }));
+            } catch (e) { console.warn('onBehalf teacher watch failed', e); }
+        })();
+    }
+    function popupOnce() { if (shownPopup || !myIssues.length) return; try { if (sessionStorage.getItem('ob_popup_' + tKey)) return; sessionStorage.setItem('ob_popup_' + tKey, '1'); } catch (e) { /* ignore */ } shownPopup = true; setTimeout(openConfirmList, 1500); }
+
+    function drawConfirmList() {
+        if (!overlay) return; const bd = overlay.querySelector('.bd');
+        bd.innerHTML = myIssues.length ? '<p style="margin:0 0 8px"><small>These items were given to you by the store but no order was made. Please confirm with your signature so the record is complete.</small></p>' + myIssues.map((r) =>
+            '<div style="border:1px solid #e5e7eb;border-radius:14px;padding:10px;margin-bottom:10px"><small>Issued ' + esc(String(r.issuedAt).slice(0, 10)) + ' by ' + esc(r.issuedBy) + (r.note ? ' · “' + esc(r.note) + '”' : '') + '</small>' +
+            (r.status === 'disputed' ? '<div class="tag red" style="margin-top:6px">You marked this “Not mine” - the store is checking</div>' : '') +
+            (r.items || []).map((l) => '<div class="row">' + phHtml(l.imageUrl) + '<div class="tx"><b>' + esc(l.itemName) + '</b><small>SN: ' + esc(l.serialNumber) + '</small></div><b>× ' + l.requestQuantity + ' ' + esc(l.unit || '') + '</b></div>').join('') +
+            '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="pr" type="button" data-ok="' + esc(r._id) + '">✅ Confirm &amp; sign</button><button class="dg" type="button" data-no="' + esc(r._id) + '">❌ Not mine</button></div></div>').join('')
+            : '<div style="text-align:center;padding:30px 10px"><div style="font-size:40px">✅</div><b>All confirmed. Thank you!</b></div>';
+    }
+    function openConfirmList() {
+        if (off() || !isTeacher()) return;
+        const ov = openOv('📝 Items issued to you', '', '<button class="sc" type="button" id="obX">Close</button>'); ov.dataset.kind = 'tlist';
+        ov.querySelector('#obX').onclick = closeOv; drawConfirmList();
+        ov.querySelector('.bd').addEventListener('click', (e) => {
+            const ok = e.target.closest('[data-ok]'), no = e.target.closest('[data-no]');
+            if (ok) startConfirm(myIssues.find((r) => r._id === ok.dataset.ok));
+            if (no) notMine(myIssues.find((r) => r._id === no.dataset.no));
+        });
+    }
+    function notMine(r) {
+        if (!r) return;
+        const ov = openOv('❌ This is not mine', '<p>Tell the store why (optional). The store will check and may cancel the issue.</p><textarea id="obWhy" rows="3" maxlength="140" placeholder="Reason (optional)"></textarea>', '<button class="sc" type="button" id="obB">Back</button><button class="dg" type="button" id="obSend">Send to store</button>'); ov.dataset.kind = 'tnm';
+        ov.querySelector('#obB').onclick = openConfirmList;
+        ov.querySelector('#obSend').onclick = async () => {
+            const why = ov.querySelector('#obWhy').value.trim();
+            try {
+                await update(ref(db, 'onBehalf/' + tKey + '/' + r._id), { status: 'disputed', disputeReason: why, disputedAt: new Date().toISOString() });
+                try { relayPushEvent({ eventKey: 'obdispute_' + r._id, toAdmins: true, title: '⚠ Teacher says items are not his', body: (r.teacherName || '') + ': ' + (r.items || []).map((l) => l.itemName + ' x' + l.requestQuantity).join(', ').slice(0, 90) + (why ? ' - ' + why : '') }); } catch (e) { /* optional */ }
+                toast('Sent to the store.'); openConfirmList();
+            } catch (e) { toast('Could not send: ' + (e && e.message ? e.message : e), 'error'); }
+        };
+    }
+    function signPad(onDone) {                                                  // used only when he has no saved signature (or chose "Sign again")
+        const ov = openOv('✍ Sign to confirm', '<p style="margin:0 0 8px"><small>Sign inside the box.</small></p><canvas class="sp" id="obPad"></canvas>', '<button class="sc" type="button" id="obClr">Clear</button><button class="pr" type="button" id="obOk" disabled>Confirm</button>'); ov.dataset.kind = 'tsign';
+        const cv = ov.querySelector('#obPad'), r = cv.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
+        cv.width = Math.max(300, Math.round(r.width * ratio)); cv.height = Math.round(170 * ratio);
+        const cx = cv.getContext('2d'); cx.lineWidth = 2.6 * ratio; cx.lineCap = 'round'; cx.strokeStyle = '#0f1a3a';
+        let down = false, ink = 0;
+        const pos = (e) => { const b = cv.getBoundingClientRect(); return [(e.clientX - b.left) * (cv.width / b.width), (e.clientY - b.top) * (cv.height / b.height)]; };
+        cv.addEventListener('pointerdown', (e) => { down = true; try { cv.setPointerCapture(e.pointerId); } catch (er) { /* ignore */ } const [x, y] = pos(e); cx.beginPath(); cx.moveTo(x, y); e.preventDefault(); });
+        cv.addEventListener('pointermove', (e) => { if (!down) return; const [x, y] = pos(e); cx.lineTo(x, y); cx.stroke(); ink++; if (ink > 6) ov.querySelector('#obOk').disabled = false; e.preventDefault(); });
+        const up = () => { down = false; }; cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+        ov.querySelector('#obClr').onclick = () => { cx.clearRect(0, 0, cv.width, cv.height); ink = 0; ov.querySelector('#obOk').disabled = true; };
+        ov.querySelector('#obOk').onclick = async () => {
+            const data = cv.toDataURL('image/png');
+            if (typeof dataUrlHasInk === 'function' && !(await dataUrlHasInk(data))) { toast('Please sign inside the box.', 'error'); return; }
+            onDone(data, true);
+        };
+    }
+    async function startConfirm(r) {
+        if (!r) return;
+        let saved = null;
+        try { saved = await window.getSavedSignature(myAdec()); } catch (e) { /* none */ }
+        if (saved && typeof window.confirmSavedSignatureUse === 'function') {
+            closeOv();
+            window.confirmSavedSignatureUse(myAdec(), saved, { onUse: () => commitConfirm(r, saved, false), onResign: () => signPad((d, isNew) => commitConfirm(r, d, isNew)) });
+        } else signPad((d, isNew) => commitConfirm(r, d, isNew));
+    }
+    async function commitConfirm(r, sig, isNew) {
+        try { if (typeof showGlobalLoader === 'function') window.showGlobalLoader('Confirming…'); } catch (e) { /* ignore */ }
+        const issueRef = ref(db, 'onBehalf/' + tKey + '/' + r._id);
+        try {
+            const claim = await runTransaction(issueRef, (cur) => { if (!cur || !openForTeacher(cur)) return; return Object.assign({}, cur, { status: 'confirming', confirmingAt: new Date().toISOString() }); });
+            if (!claim.committed) { toast('This issue was already handled or cancelled by the store.', 'error'); closeOv(); return; }
+            const cur = claim.snapshot.val();
+            const adminSig = cur.adminSignature || '';
+            const orderId = 'ORD-' + Date.now();
+            const now = new Date().toISOString();
+            const items = (cur.items || []).map((l) => ({ itemId: l.itemId, itemName: l.itemName, serialNumber: l.serialNumber, requestQuantity: l.requestQuantity, issuedQty: l.issuedQty ?? l.requestQuantity, unit: l.unit || 'Pcs', imageUrl: l.imageUrl || '', stockBefore: l.stockBefore ?? null, stockAfter: l.stockAfter ?? null }));
+            const order = {
+                orderId, teacherUid: cur.teacherUid, teacherName: cur.teacherName, timestamp: cur.issuedAt, requestedAt: cur.issuedAt, completedAt: now, items,
+                status: 'Done', teacherRequestSignature: sig, teacherSign: sig, signature: sig, requesterSignature: sig, receiverSignature: sig,
+                handoverSignatureUrl: adminSig, authorizedSignature: adminSig, issuerSign: adminSig, adminSign: adminSig, storekeeperSign: adminSig,
+                handedOverBy: cur.issuedBy, issuedBy: cur.issuedBy, approvedByName: cur.issuedBy, approvedByUid: cur.issuedByUid || '', pickupLocation: 'Taken from store (issued on behalf)',
+                stockDeducted: true, stockDeductedAt: cur.issuedAt, issuedOnBehalf: true, onBehalfIssueId: cur.issueId, onBehalfConfirmedAt: now, onBehalfNote: cur.note || ''
+            };
+            const clean = typeof sanitizeForFirebase === 'function' ? sanitizeForFirebase(order) : order;
+            try {
+                await update(ref(db), { ['orders/' + orderId]: clean, ['onBehalf/' + tKey + '/' + r._id]: null });
+            } catch (e) { await update(issueRef, { status: 'pending' }).catch(() => { /* ignore */ }); throw e; }
+            if (isNew && typeof window.saveUserSignature === 'function') { try { window.saveUserSignature(myAdec(), sig); } catch (e) { /* optional */ } }
+            try { if (typeof processOrderCompletionAndAudit === 'function') await processOrderCompletionAndAudit(clean); } catch (e) { console.warn('ledger line skipped', e); }
+            try { await logActivity('Issue confirmed', cur.issueId + ' → ' + orderId + ' by ' + cur.teacherName); } catch (e) { /* log only */ }
+            try { relayPushEvent({ eventKey: 'obconfirm_' + cur.issueId, toAdmins: true, title: '✅ Teacher confirmed issued items', body: cur.teacherName + ' confirmed ' + items.map((l) => l.itemName + ' x' + l.requestQuantity).join(', ').slice(0, 90) }); } catch (e) { /* optional */ }
+            closeOv(); toast('Confirmed. Thank you!');
+            try { if (typeof fetchTeacherOrderHistory === 'function') fetchTeacherOrderHistory(myAdec()); } catch (e) { /* ignore */ }
+        } catch (e) { toast('Could not confirm: ' + (e && e.message ? e.message : e), 'error'); }
+        finally { try { if (typeof hideGlobalLoader === 'function') window.hideGlobalLoader(); } catch (e) { /* ignore */ } }
+    }
+
+    // =================================================================================
+    // wiring: admin menu items, watchers
+    // =================================================================================
+    function ensureMenu() {
+        const nav = document.getElementById('admin-menu'); if (!nav) return;
+        const has1 = document.getElementById('drawer-ob-issue-btn');
+        if (!isAdmin() || off()) { if (has1) has1.remove(); const h2 = document.getElementById('drawer-ob-list-btn'); if (h2) h2.remove(); return; }
+        if (has1) return;
+        const mk = (id, txt, fn) => { const b = document.createElement('button'); b.id = id; b.type = 'button'; b.className = 'drawer-item'; b.innerHTML = txt; b.addEventListener('click', () => { const c = document.getElementById('close-drawer-btn'); if (c) c.click(); fn(); }); return b; };
+        const anchor = document.getElementById('drawer-backup-btn') || document.getElementById('logout-btn-admin') || null;
+        nav.insertBefore(mk('drawer-ob-issue-btn', '📝 Issue on Behalf', openIssue), anchor);
+        nav.insertBefore(mk('drawer-ob-list-btn', '⏳ Pending Confirmations', openPending), anchor);
+        badge();
+    }
+    setInterval(() => {
+        try {
+            if (!currentUser || off()) return;
+            if (isAdmin()) { ensureMenu(); startPendingWatch(); }
+            else if (isTeacher()) { startTeacherWatch(); if (myIssues.length && !document.getElementById('obBanner')) drawBanner(); }
+        } catch (e) { /* display only */ }
+    }, 1500);
+    const prevLogout = window.handleUserLogout;
+    if (typeof prevLogout === 'function') {
+        window.handleUserLogout = async function () { unsubs.splice(0).forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); tOn = false; pendingOn = false; reminded = false; shownPopup = false; myIssues = []; pendingAll = {}; closeOv(); return prevLogout.apply(this, arguments); };
+    }
+    window.__onBehalf = { openIssue, openPending, openConfirmList, status: () => ({ mine: myIssues.length, pending: flatPending().length, version: '2.25.0' }) };
+})();
