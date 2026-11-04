@@ -4873,6 +4873,7 @@ window.initNewTeacherDashboard = function(adecNumber) {
         if (typeof fetchInventory === 'function') fetchInventory();
         if (typeof fetchTeacherOrderHistory === 'function') fetchTeacherOrderHistory(adec);
 
+        window.__sheetApi = { P: () => P, cart: () => cart, upd, cartR };   // v2.24.0 hook: lets the stock guard / cart photo / typed-quantity code (appended block) see this sheet
         // Re-render when Firebase inventory arrives / changes (fixes photos & items not showing)
         window.refreshTeacherCatalog = () => {
             try {
@@ -13181,4 +13182,347 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         })
     };
     setInterval(() => { try { if (!currentUser) return; if (isAdmin()) ensureMenuItem(); else wipeIfNotAdmin(); } catch (e) { /* display only */ } }, 2000);
+})();
+
+// =====================================================================================
+// v2.24.0 (additive) - TEACHER ORDER SHEET: stock guard, photos in the cart, typed quantity, saved-signature cache
+//   1) STOCK GUARD  An item with no stock can no longer be added / ordered. Out-of-stock cards say so and cannot be added;
+//      "+" and "Add to Cart" stop at the available stock; before signing and again right before the order is written the
+//      cart is checked against the stock (final check reads the live inventory once). If something is short, NOTHING is
+//      placed: the teacher sees which items, and a button fixes the cart (removes sold-out items, lowers the rest).
+//      If the live stock cannot be read (offline) the check uses the stock already on the phone (never blocks on a failed read).
+//   2) PHOTOS      The cart showed a 📦 emoji for every item. It now shows the item photo (same Drive link handling as the
+//      catalog cards); the emoji stays only for items that really have no photo.
+//   3) QUANTITY    The number between - and + is now a box: tap it and type (numeric keypad on phones, keyboard on computers).
+//      Above the stock it is lowered to the stock with a notice; 0 / empty / letters are ignored.
+//   4) SIGNATURE   A teacher's saved signature is kept on the phone (IndexedDB, per ADEK, 30 days) and used from there, so
+//      later orders do not read it from Firebase. A new signature replaces it. The existing "confirm with password /
+//      fingerprint before the saved signature is used" step is unchanged.
+//   Kill switches: localStorage.stockGuardOff='1', localStorage.sigCacheOff='1'. Needs nothing new in Firebase Rules.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__teacherBlockV2240) return;
+    window.__teacherBlockV2240 = true;
+    window.__APP_BUILD = '2.24.0';
+
+    const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const guardOff = () => lsGet('stockGuardOff') === '1';
+    const sigOff = () => lsGet('sigCacheOff') === '1' || lsGet('smartCacheOff') === '1';
+    const $1 = (s, r) => (r || document).querySelector(s);
+    const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+
+    // ---------- small style sheet ----------
+    (function css() {
+        if (document.getElementById('sg-style')) return;
+        const st = document.createElement('style'); st.id = 'sg-style';
+        st.textContent = [
+            '#user-view-container .ci .e{overflow:hidden}',
+            '#user-view-container .ci .e img{width:100%;height:100%;object-fit:cover;display:block}',
+            '#user-view-container .qty input.qty-in{width:56px;height:36px;border:1.5px solid var(--line,#d6dbe8);border-radius:10px;text-align:center;font:700 16px/1 inherit;color:inherit;background:#fff;padding:0 4px;-moz-appearance:textfield}',
+            '#user-view-container .qty input.qty-in:focus{outline:2px solid #2563eb;border-color:#2563eb}',
+            '#user-view-container .add[disabled]{background:#e5e7eb!important;color:#6b7280!important;cursor:not-allowed}',
+            '#sgNotice{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:100001;background:#1f2937;color:#fff;padding:10px 16px;border-radius:12px;font:600 14px/1.4 system-ui,sans-serif;max-width:88vw;text-align:center;box-shadow:0 6px 24px rgba(0,0,0,.3)}',
+            '#sgGuard{position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.55);display:grid;place-items:center;padding:16px}',
+            '#sgGuard .bx{background:#fff;border-radius:18px;width:min(440px,100%);max-height:86dvh;overflow:auto;padding:18px;font:15px/1.45 system-ui,sans-serif;color:#111827}',
+            '#sgGuard h3{margin:0 0 6px;font-size:18px;color:#b91c1c}',
+            '#sgGuard ul{margin:10px 0 14px;padding:0;list-style:none}',
+            '#sgGuard li{padding:8px 10px;border-radius:10px;background:#fef2f2;margin-bottom:6px}',
+            '#sgGuard li small{display:block;color:#6b7280}',
+            '#sgGuard .bt{display:flex;gap:8px;flex-wrap:wrap}',
+            '#sgGuard button{flex:1;min-height:44px;border-radius:12px;border:0;font-weight:700;font-size:15px;cursor:pointer}',
+            '#sgGuard .fix{background:#2563eb;color:#fff}',
+            '#sgGuard .cl{background:#e5e7eb;color:#111827}'
+        ].join('\n');
+        document.head.appendChild(st);
+    })();
+
+    let noticeT = null;
+    function notice(msg) {
+        let n = document.getElementById('sgNotice');
+        if (!n) { n = document.createElement('div'); n.id = 'sgNotice'; document.body.appendChild(n); }
+        n.textContent = msg; n.style.display = '';
+        clearTimeout(noticeT); noticeT = setTimeout(() => { n.style.display = 'none'; }, 2600);
+    }
+
+    // ---------- stock helpers (same rules the catalog uses) ----------
+    const stockOf = (it) => Math.max(0, parseInt(it.currentStock ?? it.currentQty ?? it.quantity ?? it.totalAvailableStock ?? 0, 10) || 0);
+    const snKey = (v) => String(v == null || v === '' ? 'N/A' : v).trim().toLowerCase();
+    const mergeable = (k) => !!k && k !== 'n/a' && k !== 'undefined' && k !== 'null';
+    function localFlat() {
+        let raw = [];
+        try { raw = (window.masterInventoryList && window.masterInventoryList.length > 0) ? window.masterInventoryList : (typeof getFlatInventoryList === 'function' ? getFlatInventoryList() : []); } catch (e) { raw = []; }
+        return raw.map((it) => ({ sn: snKey(it.serialNumber || it.batchNo), name: String(it.itemName || it.name || ''), stock: stockOf(it) }));
+    }
+    function liveFlat(inv) {                                       // same flattening as getFlatInventoryList(), numbers only
+        const out = [];
+        Object.entries(inv || {}).forEach(([catId, c]) => {
+            if (!c || typeof c !== 'object') return;
+            const name = String(c.itemName || c.name || catId || '');
+            const bs = c.batches && typeof c.batches === 'object' ? Object.entries(c.batches) : [];
+            if (bs.length) bs.forEach(([, b]) => out.push({ sn: snKey(b.serialNumber || b.batchNo || c.serialNumber), name, stock: Math.max(0, parseInt(b.currentStock ?? b.quantity ?? 0, 10) || 0) }));
+            else out.push({ sn: snKey(c.serialNumber || c.batchNo), name, stock: Math.max(0, parseInt(c.currentStock ?? c.quantity ?? c.availableStock ?? 0, 10) || 0) });
+        });
+        return out;
+    }
+    // number in stock for one item, or null when we cannot tell (never block on "unknown")
+    function avail(sn, name, flat) {
+        if (!flat || !flat.length) return null;
+        const k = snKey(sn);
+        let found = false, total = 0;
+        flat.forEach((f) => {
+            const same = mergeable(k) ? f.sn === k : (!mergeable(f.sn) && f.name === String(name || ''));
+            if (same) { found = true; total += f.stock; }
+        });
+        return found ? total : null;
+    }
+    async function fetchLive() {
+        try {
+            const s = await Promise.race([get(ref(db, 'inventory')), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]);
+            const v = s.val();
+            return v && typeof v === 'object' ? liveFlat(v) : null;
+        } catch (e) { return null; }
+    }
+    const sheet = () => window.__sheetApi || null;
+
+    // ---------- the warning ----------
+    function closeGuard() { const g = document.getElementById('sgGuard'); if (g) g.remove(); }
+    function showGuard(issues, fixFn) {
+        closeGuard();
+        const g = document.createElement('div'); g.id = 'sgGuard';
+        g.innerHTML = '<div class="bx" role="alertdialog" aria-modal="true"><h3>⚠️ Stock not available</h3>' +
+            '<div>Your order was <b>not</b> placed. These items cannot be ordered right now:</div><ul>' +
+            issues.map((x) => '<li><b>' + esc(x.name) + '</b>' + (x.sn && x.sn !== 'N/A' ? ' <small>SN: ' + esc(x.sn) + '</small>' : '') +
+                '<small>' + (x.avail <= 0 ? '❌ Out of stock' : 'Only ' + x.avail + ' ' + esc(x.unit || '') + ' left') + ' · you asked for ' + x.req + '</small></li>').join('') +
+            '</ul><div class="bt"><button type="button" class="fix">Fix my cart</button><button type="button" class="cl">Close</button></div></div>';
+        document.body.appendChild(g);
+        g.querySelector('.cl').onclick = closeGuard;
+        g.querySelector('.fix').onclick = () => { try { fixFn(issues); } catch (e) { console.warn(e); } closeGuard(); notice('Cart updated. Please check it and try again.'); };
+    }
+    function problems(lines, flat) {
+        const out = [];
+        lines.forEach((l) => { const a = avail(l.sn, l.name, flat); if (a !== null && a < l.req) out.push(Object.assign({}, l, { avail: a })); });
+        return out;
+    }
+    let busy = false;
+    // placing=false: before signing (the phone's own stock first, confirmed live only when it says something is short)
+    // placing=true : right before the order is written (always the live stock)
+    async function guard(lines, placing, fixFn) {
+        if (guardOff() || !lines.length) return true;
+        if (busy) return false;
+        busy = true;
+        try {
+            let issues = problems(lines, localFlat());
+            if (!placing && !issues.length) return true;
+            const live = await fetchLive();
+            if (live) issues = problems(lines, live);
+            if (!issues.length) return true;
+            showGuard(issues, fixFn);
+            return false;
+        } catch (e) { console.warn('Stock guard skipped:', e); return true; } finally { busy = false; }
+    }
+    function sheetLines() {
+        const a = sheet(); if (!a) return [];
+        const P = a.P(), cart = a.cart();
+        return Object.keys(cart).filter((i) => P[i]).map((i) => ({ key: i, name: P[i][0], sn: P[i][2], unit: P[i][4], req: cart[i] }));
+    }
+    function sheetFix(issues) {
+        const a = sheet(); if (!a) return;
+        const cart = a.cart();
+        issues.forEach((x) => { if (x.avail <= 0) delete cart[x.key]; else cart[x.key] = x.avail; });
+        a.upd(); a.cartR();
+    }
+    const guardSheet = (placing) => guard(sheetLines(), placing, sheetFix);
+
+    // ---------- Add to Cart / "+" stop at the available stock ----------
+    function availNowFor(i) {
+        const a = sheet(); if (!a) return null;
+        const row = a.P()[i]; if (!row) return null;
+        return avail(row[2], row[0], localFlat());
+    }
+    document.addEventListener('click', (e) => {
+        try {
+            const a = sheet(); if (!a || guardOff() || !e.target || !e.target.closest) return;
+            const add = e.target.closest('#grid .add'), plus = e.target.closest('#cartBody [data-p]');
+            if (!add && !plus) return;
+            const i = add ? add.dataset.i : plus.dataset.p;
+            const row = a.P()[i]; if (!row) return;
+            const have = availNowFor(i);
+            if (have === null) return;                                   // unknown -> behave as before
+            const inCart = a.cart()[i] || 0;
+            if (inCart + 1 > have) {
+                e.stopPropagation(); e.preventDefault();
+                notice(have <= 0 ? '❌ ' + row[0] + ' is out of stock' : 'Only ' + have + ' ' + (row[4] || '') + ' available');
+            }
+        } catch (err) { console.warn(err); }
+    }, true);
+
+    // ---------- catalog cards: sold-out items say so and cannot be added ----------
+    function markSoldOut() {
+        const g = document.getElementById('grid'); if (!g || guardOff()) return;
+        const flat = localFlat(); if (!flat.length) return;
+        g.querySelectorAll('article.p').forEach((art) => {
+            if (art.dataset.sg) return;
+            const have = avail(art.dataset.sn, art.dataset.name, flat);
+            art.dataset.sg = '1';
+            if (have === 0) {
+                const b = art.querySelector('.add'); if (b) { b.disabled = true; b.textContent = '❌ Out of Stock'; }
+                const t = art.querySelector('.av-b'); if (t) t.textContent = 'Out of stock';
+                art.style.opacity = '.8';
+            }
+        });
+    }
+
+    // ---------- cart rows: photo + typed quantity ----------
+    function enhanceCart() {
+        const a = sheet(), body = document.getElementById('cartBody'); if (!a || !body) return;
+        const P = a.P();
+        body.querySelectorAll('.ci').forEach((ci) => {
+            if (ci.dataset.enh) return;
+            const btn = ci.querySelector('[data-m],[data-p]'); if (!btn) return;
+            const i = btn.dataset.m !== undefined ? btn.dataset.m : btn.dataset.p;
+            const row = P[i]; if (!row) return;
+            ci.dataset.enh = '1';
+            // photo
+            const it = (row[7] && typeof row[7] === 'object') ? row[7] : {};
+            const raw = it.imageUrl || it.image || it.photoUrl || it.photo || it.itemImageUrl || it.photoBase64 || it.url || '';
+            const e = ci.querySelector('.e');
+            if (e && raw && isValidImageUrl(raw)) {
+                const img = document.createElement('img');
+                img.alt = String(row[0] || 'Item'); img.referrerPolicy = 'no-referrer'; img.decoding = 'async';
+                const isDrive = /(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})/.test(raw);
+                img.onerror = function () {
+                    const n = parseInt(img.dataset.try || '0', 10);
+                    if (n < 2 && isDrive) { img.dataset.try = String(n + 1); img.src = getDirectDriveUrl(raw, n + 1); return; }
+                    img.onerror = null; e.textContent = row[5] || '📦';          // no photo could be loaded: keep the emoji
+                };
+                img.src = typeof getDirectDriveUrl === 'function' ? getDirectDriveUrl(raw) : raw;
+                e.textContent = ''; e.appendChild(img);
+            }
+            // typed quantity
+            const q = ci.querySelector('.qty b');
+            if (q) {
+                const inp = document.createElement('input');
+                inp.type = 'text'; inp.className = 'qty-in'; inp.inputMode = 'numeric'; inp.pattern = '[0-9]*'; inp.autocomplete = 'off';
+                inp.setAttribute('aria-label', 'Quantity'); inp.value = q.textContent.trim(); inp.dataset.i = i;
+                inp.addEventListener('click', (ev) => ev.stopPropagation());          // the sheet re-draws itself on every click in the cart: keep the box alive
+                inp.addEventListener('focus', () => setTimeout(() => { try { inp.select(); } catch (er) { /* ignore */ } }, 0));
+                inp.addEventListener('input', () => { const c = inp.value.replace(/\D/g, '').slice(0, 5); if (c !== inp.value) inp.value = c; });
+                inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); } });
+                const commit = () => {
+                    const cart = a.cart(); const cur = cart[i]; if (cur === undefined) return;
+                    let n = parseInt(inp.value, 10);
+                    if (!n || n < 1) { inp.value = cur; return; }
+                    if (!guardOff()) {
+                        const have = availNowFor(i);
+                        if (have !== null && n > have) {
+                            if (have < 1) { inp.value = cur; notice('❌ ' + row[0] + ' is out of stock'); return; }
+                            n = have; notice('Only ' + have + ' ' + (row[4] || '') + ' available');
+                        }
+                    }
+                    cart[i] = n; inp.value = String(n); a.upd();
+                };
+                inp.addEventListener('change', commit); inp.addEventListener('blur', commit);
+                q.replaceWith(inp);
+            }
+        });
+    }
+
+    // ---------- keep everything attached (the sheet is built after login, and re-built on every cart change) ----------
+    function attach() {
+        try {
+            const body = document.getElementById('cartBody');
+            if (body && !body.__sgObs) { body.__sgObs = new MutationObserver(enhanceCart); body.__sgObs.observe(body, { childList: true }); enhanceCart(); }
+            const g = document.getElementById('grid');
+            if (g && !g.__sgObs) { g.__sgObs = new MutationObserver(markSoldOut); g.__sgObs.observe(g, { childList: true }); markSoldOut(); }
+            if (!sheet()) return;
+            const ts = document.getElementById('toSign'), cf = document.getElementById('conf');
+            if (ts && typeof ts.onclick === 'function' && !ts.onclick.__sg) {
+                const o = ts.onclick; const w = async function (ev) { if (!(await guardSheet(false))) return; return o.call(this, ev); }; w.__sg = 1; ts.onclick = w;
+            }
+            if (cf && typeof cf.onclick === 'function' && !cf.onclick.__sg) {
+                const o = cf.onclick; const w = async function (ev) { if (!(await guardSheet(true))) return; return o.call(this, ev); }; w.__sg = 1; cf.onclick = w;
+            }
+        } catch (e) { console.warn('stock guard attach:', e); }
+    }
+    setInterval(attach, 600);
+
+    // ---------- the older cart pop-up (kept for completeness) gets the same final check ----------
+    if (typeof window.submitFinalOrderWithSignature === 'function') {
+        const origFinal = window.submitFinalOrderWithSignature;
+        window.submitFinalOrderWithSignature = async function () {
+            try {
+                const cart = window.stationeryCart || [];
+                const lines = cart.map((c, i) => ({ key: i, name: c.itemName, sn: c.serialNumber, unit: c.unit, req: Number(c.requestQuantity || 1) }));
+                const fix = (issues) => {
+                    const drop = new Set(issues.filter((x) => x.avail <= 0).map((x) => x.key));
+                    issues.forEach((x) => { if (x.avail > 0 && window.stationeryCart[x.key]) window.stationeryCart[x.key].requestQuantity = x.avail; });
+                    window.stationeryCart = window.stationeryCart.filter((c, i) => !drop.has(i));
+                    if (window.saveCartToStorage) window.saveCartToStorage();
+                    if (window.renderCartModalItems) window.renderCartModalItems();
+                };
+                if (!(await guard(lines, true, fix))) return;
+            } catch (e) { console.warn('stock guard (old cart) skipped:', e); }
+            return origFinal.apply(this, arguments);
+        };
+    }
+
+    // =================================================================================
+    // saved signature: kept on this phone, used from there
+    // =================================================================================
+    const SIG_TTL = 30 * 86400e3;
+    let sdb = null;
+    function sOpen() {
+        if (sdb) return Promise.resolve(sdb);
+        return new Promise((res, rej) => {
+            try {
+                const rq = indexedDB.open('stationery_smart_cache', 1);
+                rq.onupgradeneeded = () => { try { rq.result.createObjectStore('kv', { keyPath: 'k' }); } catch (e) { /* exists */ } };
+                rq.onsuccess = () => { sdb = rq.result; sdb.onversionchange = () => { try { sdb.close(); } catch (e) { /* ignore */ } sdb = null; }; res(sdb); };
+                rq.onerror = () => rej(rq.error || new Error('IndexedDB error'));
+                rq.onblocked = () => rej(new Error('blocked'));
+            } catch (e) { rej(e); }
+        });
+    }
+    const sGet = async (k) => { const d = await sOpen(); return new Promise((res) => { try { const r = d.transaction('kv', 'readonly').objectStore('kv').get(k); r.onsuccess = () => res(r.result ? r.result.v : null); r.onerror = () => res(null); } catch (e) { res(null); } }); };
+    const sSet = async (k, v) => { const d = await sOpen(); return new Promise((res) => { try { const tx = d.transaction('kv', 'readwrite'); tx.objectStore('kv').put({ k, v }); tx.oncomplete = () => res(true); tx.onerror = () => res(false); tx.onabort = () => res(false); } catch (e) { res(false); } }); };
+    const sDel = async (k) => { const d = await sOpen(); return new Promise((res) => { try { const tx = d.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = () => res(true); tx.onerror = () => res(false); tx.onabort = () => res(false); } catch (e) { res(false); } }); };
+    const sKey = (uid) => 'sig:' + String(uid || '').trim().toUpperCase();
+
+    if (typeof window.getSavedSignature === 'function') {
+        const prevGet = window.getSavedSignature;
+        window.getSavedSignature = async function (uid) {
+            if (!sigOff() && uid) {
+                try {
+                    const c = await sGet(sKey(uid));
+                    if (c && c.v === 1 && typeof c.dataUrl === 'string' && c.dataUrl.indexOf('data:image') === 0 && Date.now() - c.at < SIG_TTL) return c.dataUrl;
+                } catch (e) { /* no cache: read as before */ }
+            }
+            const d = await prevGet.apply(this, arguments);              // Firebase read (+ the "must contain a real signature" check)
+            if (d && uid && !sigOff()) { try { await sSet(sKey(uid), { v: 1, dataUrl: d, at: Date.now() }); } catch (e) { /* ignore */ } }
+            return d;
+        };
+    }
+    if (typeof window.saveUserSignature === 'function') {
+        const prevSave = window.saveUserSignature;
+        window.saveUserSignature = async function (uid, dataUrl) {
+            const r = await prevSave.apply(this, arguments);
+            if (uid && !sigOff()) {
+                try { await sDel(sKey(uid)); } catch (e) { /* ignore */ }
+                setTimeout(() => { try { window.getSavedSignature(uid); } catch (e) { /* refill is optional */ } }, 800);   // re-cache the small stored copy
+            }
+            return r;
+        };
+    }
+    let primed = '';
+    setInterval(() => {                                                     // once after a teacher logs in: make sure the signature is on the phone
+        try {
+            if (sigOff() || typeof currentUser === 'undefined' || !currentUser) return;
+            if (String(currentUser.role || '').toUpperCase() !== 'TEACHER') return;
+            const id = currentUser.adecPassNumber || currentUser.uid; if (!id || primed === id) return;
+            primed = id; setTimeout(() => { try { window.getSavedSignature(id); } catch (e) { /* optional */ } }, 3000);
+        } catch (e) { /* ignore */ }
+    }, 2000);
+
+    window.__teacherGuard = { check: guardSheet, avail: (sn, name) => avail(sn, name, localFlat()), version: '2.24.0' };
 })();
