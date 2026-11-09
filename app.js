@@ -2001,17 +2001,13 @@ window.openAdminModal = function(e) {
             document.body.classList.add('modal-open');
         }
     } else {
-        const pass = prompt("Enter Developer Passcode:");
-        if (pass === "Asif8013@#$") {
-            window.verifyAdminByPassword("Asif8013@#$");
-        } else if (pass) {
-            alert("Incorrect Developer Passcode!");
-        }
+        // v2.26.0: the built-in developer passcode was REMOVED (it was readable by anyone).
+        alert("Developer passcode access has been removed. Please log in with your admin ID and password.");
     }
 };
 
 window.verifyAdminByPassword = function(password) {
-    if (password === "Asif8013@#$") {
+    if (false) {   // v2.26.0: built-in developer passcode REMOVED (the old one was readable by anyone)
         console.log("Developer Direct Access Granted");
         sessionStorage.setItem('isAdminAuthenticated', 'true');
         currentUser = {
@@ -2046,7 +2042,7 @@ window.verifyAdminByPassword = function(password) {
         window.renderDashboardForRole('developer', 'DEV001');
         showToast("Welcome, Developer", "success");
     } else {
-        alert("Invalid Developer Passcode. Please try again.");
+        alert("Developer passcode access has been removed. Please log in with your admin ID and password.");
     }
 };
 
@@ -3030,20 +3026,8 @@ window.handleUserLogin = async function(event) {
         return;
     }
 
-    if (passNumber === "ASIF" && password === "Asif8013@#$") {
-        console.log("Bypass Login Successful for Admin: Asif");
-        window.clearLoginAttempts();
-        localStorage.setItem('last_used_adec', 'Asif');
-        sessionStorage.setItem('isAdminAuthenticated', 'true');
-        currentUser = { role: 'ADMIN', name: 'Asif', uid: 'Asif', adecPassNumber: 'Asif' };
-        localStorage.setItem('stationery_user_adec', 'Asif');
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
-
-        window.hideLoginSection();
-        window.renderDashboardForRole('ADMIN', 'Asif');
-        if (loginError) loginError.textContent = "";
-        return;
-    }
+    // v2.26.0: the built-in "ASIF" shortcut login (an ID + password written in this public file) was REMOVED.
+    //          Admins now log in with their own admin account (menu: Admin Login Setup).
 
     if (loginBtn) {
         loginBtn.disabled = true;
@@ -14024,4 +14008,253 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
         window.handleUserLogout = async function () { unsubs.splice(0).forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); tOn = false; pendingOn = false; reminded = false; shownPopup = false; myIssues = []; pendingAll = {}; closeOv(); return prevLogout.apply(this, arguments); };
     }
     window.__onBehalf = { openIssue, openPending, openConfirmList, status: () => ({ mine: myIssues.length, pending: flatPending().length, version: '2.25.0' }) };
+})();
+
+// v2.26.0 (Phase 2b): the old built-in admin password was removed from this file (3 places). See the comments marked "v2.26.0" above.
+(function () { 'use strict'; window.__APP_BUILD = '2.26.0'; })();
+
+// =====================================================================================
+// v2.27.0 (additive) - SECURITY PHASE 3.0: groundwork for locking the database rules.   >>> Rules are NOT touched here <<<
+//   Before the Firebase Rules can be closed, every phone must carry a real Firebase login and every staff password must
+//   exist in Firebase too. This block prepares exactly that, and changes nothing a teacher or admin sees today:
+//   1) LOGIN        The typed ADEK + password also sign the phone into Firebase (silently, first, never blocks or changes the normal login).
+//   2) STARTUP      The saved Firebase session is restored when the app opens (window.__authReady). A phone that once had a working
+//                   Firebase login for this user but lost it is asked to log in again (this is how old sessions disappear before
+//                   the rules are closed). Nothing happens if Firebase login never worked on that phone.
+//   3) NEW / CHANGED STAFF PASSWORDS  "Add staff" and "Edit staff -> New Password" now also create / update the Firebase login,
+//                   otherwise that person could not log in once the rules are closed. A failure is shown to the admin, never hidden.
+//   4) ADMIN TOOL   "🔎 Security Check": this phone's login, how many staff are ready, and a PUBLIC ACCESS TEST that asks the database
+//                   the way a stranger would (no login): which nodes anyone can read, and whether anyone can write. Plain text
+//                   report that can be copied.
+//   Kill switch: localStorage.secPhase3Off = '1'.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__secPhase3V2270) return;
+    window.__secPhase3V2270 = true;
+    window.__APP_BUILD = '2.27.0';
+
+    const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } };
+    const off = () => lsGet('secPhase3Off') === '1';
+    const clean = (v) => String(v == null ? '' : v).trim();
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const isAdmin = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const api = () => window.__authApi || null;
+    const emailFor = (id) => (window.__authEmailFor ? window.__authEmailFor(id) : clean(id).toLowerCase() + '@jys-staff.app');
+    const toast = (m, t) => { try { if (typeof showToast === 'function') showToast(m, t || 'success'); } catch (e) { /* ignore */ } };
+
+    // ---------- Firebase Auth: load once, wait for the saved session ----------
+    let M = null, MA = null;
+    async function mainAuth() {
+        if (MA) return MA;
+        const a = api(); if (!a) return null;
+        M = await a.loadAuth(); if (!M) return null;
+        MA = M.getAuth(app); return MA;
+    }
+    window.__authReady = (async () => {
+        try {
+            if (off()) return false;
+            const a = await mainAuth(); if (!a) return false;
+            if (typeof a.authStateReady === 'function') await Promise.race([a.authStateReady(), sleep(5000)]);
+            else await new Promise((res) => { let un = null; try { un = M.onAuthStateChanged(a, () => { try { un && un(); } catch (e) { /* ignore */ } res(); }); } catch (e) { res(); } setTimeout(res, 5000); });
+            return !!a.currentUser;
+        } catch (e) { return false; }
+    })();
+
+    // ids that have had a working Firebase login on THIS phone (so we know the login works here)
+    const okIds = () => { try { return JSON.parse(lsGet('authOkIds') || '[]'); } catch (e) { return []; } };
+    const forget = (id) => { const k = clean(id).toLowerCase(); lsSet('authOkIds', JSON.stringify(okIds().filter((x) => x !== k))); };      // never force a login loop on someone whose Firebase login does not work
+    const remember = (id) => { const k = clean(id).toLowerCase(); if (!k) return; const l = okIds().filter((x) => x !== k); l.unshift(k); lsSet('authOkIds', JSON.stringify(l.slice(0, 30))); };
+
+    // ---------- 1) typed ADEK + password also sign the phone into Firebase (silent, never blocks the normal login) ----------
+    const prevLogin = window.handleUserLogin;
+    if (typeof prevLogin === 'function') {
+        window.handleUserLogin = async function () {
+            const id = clean((document.getElementById('login-pass-number') || {}).value);
+            const pw = String((document.getElementById('login-password') || {}).value || '').trim();
+            freshLogin = true;
+            if (!off() && id && pw) {
+                try {
+                    await Promise.race([(async () => {
+                        const a = await mainAuth(); if (!a) return;
+                        if (a.currentUser && a.currentUser.email === emailFor(id)) return;
+                        try { await M.signInWithEmailAndPassword(a, emailFor(id), pw); } catch (e) { /* no account yet / wrong password: the normal login decides */ }
+                    })(), sleep(6000)]);
+                } catch (e) { /* never disturb the login */ }
+            }
+            const r = await prevLogin.apply(this, arguments);
+            try {
+                if (!off() && currentUser && id && clean(currentUser.uid).toLowerCase() === id.toLowerCase()) {
+                    const uid = currentUser.uid;
+                    setTimeout(() => {                                                // a few seconds later (the quiet account setup needs a moment)
+                        try { if (MA && MA.currentUser && MA.currentUser.email === emailFor(uid)) remember(uid); else forget(uid); } catch (e) { /* ignore */ }
+                    }, 4000);
+                }
+            } catch (e) { /* ignore */ }
+            return r;
+        };
+    }
+
+    // ---------- 2) a phone that HAD a working Firebase login for this user but lost it: log in again (once) ----------
+    const restoredAtLoad = !!(lsGet('currentUser') || lsGet('stationery_user_adec'));          // only a session that was already saved when the app opened (never a fresh login)
+    let freshLogin = false;
+    (async () => {
+        await window.__authReady;
+        for (let i = 0; i < 30; i++) {
+            await sleep(1000);
+            try {
+                if (freshLogin || !restoredAtLoad) return;
+                if (off() || !currentUser || navigator.onLine === false) continue;
+                if (sessionStorage.getItem('isAdminAuthenticated') === 'true') continue;
+                const id = clean(currentUser.uid).toLowerCase();
+                if (MA && MA.currentUser) { remember(id); return; }
+                if (!okIds().includes(id)) return;
+                if (sessionStorage.getItem('authRelogin') === '1') return;
+                sessionStorage.setItem('authRelogin', '1');
+                toast('🔒 Security update: please log in again.', 'error');
+                if (typeof window.handleUserLogout === 'function') await window.handleUserLogout();
+                return;
+            } catch (e) { /* ignore */ }
+        }
+    })();
+
+    // ---------- 3) staff added / password changed: Firebase login follows ----------
+    const secApp = (m) => m.getAuth(initializeApp(firebaseConfig, 'provisioner'));
+    async function createFor(id, pw) {                                          // new staff: make + link the Firebase login
+        const a = api(); if (!a) return { status: 'noauth' };
+        const m = await a.loadAuth(); if (!m) return { status: 'noauth' };
+        const ex = (await get(ref(db, 'users/' + id))).exists(); if (!ex) return { status: 'notsaved' };
+        const sec = secApp(m);
+        const r = await a.ensureAccount(sec, id, pw);
+        try { await m.signOut(sec); } catch (e) { /* ignore */ }
+        if (r.uid) { try { await a.linkAccount(id, r.uid, r.email); } catch (e) { /* the staff tool can repair */ } }
+        return r;
+    }
+    async function changeFor(id, oldPw, newPw) {                                // changed password: sign in with the old one, update it
+        const a = api(); if (!a) return { status: 'noauth' };
+        const m = await a.loadAuth(); if (!m) return { status: 'noauth' };
+        const sec = secApp(m), email = emailFor(id);
+        try {
+            if (oldPw) {
+                try { const c = await m.signInWithEmailAndPassword(sec, email, oldPw); await m.updatePassword(c.user, newPw); try { await m.signOut(sec); } catch (e) { /* ignore */ } return { status: 'updated' }; }
+                catch (e) { if (e && e.code === 'auth/too-many-requests') return { status: 'limited' }; }
+            }
+            const r = await a.ensureAccount(sec, id, newPw);                     // no account yet -> create it with the new password
+            try { await m.signOut(sec); } catch (e) { /* ignore */ }
+            if (r.uid) { try { await a.linkAccount(id, r.uid, r.email); } catch (e) { /* ignore */ } }
+            return r.status === 'created' ? { status: 'created' } : r;           // 'ok' means it already had this password; 'mismatch' = needs attention
+        } catch (e) { return { status: 'error', code: e && e.code }; }
+    }
+    function drift(id, why) { try { const l = JSON.parse(lsGet('secDrift') || '[]').filter((x) => x.id !== id); l.unshift({ id, why, at: new Date().toISOString() }); lsSet('secDrift', JSON.stringify(l.slice(0, 40))); } catch (e) { /* ignore */ } }
+    const warnAdmin = (id, st) => { drift(id, st); toast('⚠ Saved, but the Firebase login for ' + id + ' could not be updated (' + st + '). Open 🔎 Security Check or 🔐 Staff Login Accounts.', 'error'); };
+
+    document.addEventListener('submit', (e) => {                                 // "Add staff" (admin) / "Create account" (developer panel)
+        try {
+            if (off() || !e.target || !e.target.id) return;
+            let idEl = null, pwEl = null;
+            if (e.target.id === 'admin-create-teacher-form') { idEl = document.getElementById('admin-adec-number'); pwEl = document.getElementById('admin-password'); }
+            else if (e.target.id === 'dev-create-account-form') { idEl = document.getElementById('dev-adec-number'); pwEl = document.getElementById('dev-password'); }
+            else return;
+            const id = clean(idEl && idEl.value).toUpperCase(), pw = clean(pwEl && pwEl.value);
+            if (!id || !pw) return;
+            setTimeout(async () => {
+                try {
+                    const r = await createFor(id, pw);
+                    if (r.status === 'notsaved' || r.status === 'noauth') return;       // staff was not saved (error already shown) / Auth not available
+                    if (!r.uid) warnAdmin(id, r.status + (r.code ? ' ' + r.code : ''));
+                } catch (er) { /* the staff tool repairs it */ }
+            }, 3000);
+        } catch (er) { /* never disturb the form */ }
+    }, true);
+
+    document.addEventListener('click', async (e) => {                             // "Edit staff" -> new password
+        try {
+            const b = e.target && e.target.closest && e.target.closest('#se-save');
+            if (!b || off()) return;
+            if (b.__secPass) { b.__secPass = false; return; }
+            const modal = document.getElementById('staffEditModal'); if (!modal) return;
+            const pw = clean((modal.querySelector('#se-pass') || {}).value);
+            if (!pw || pw.length < 4) return;                                        // no password change: the normal save runs untouched
+            const idEl = modal.querySelector('input[disabled]'); const id = clean(idEl && idEl.value); if (!id) return;
+            e.stopImmediatePropagation(); e.preventDefault();
+            let oldPw = '';
+            try { oldPw = String((await get(ref(db, 'users/' + id + '/password'))).val() || ''); } catch (er) { /* unknown */ }
+            b.__secPass = true; b.click();                                           // now the normal save runs, exactly as before
+            setTimeout(async () => {
+                try {
+                    const now = String((await get(ref(db, 'users/' + id + '/password'))).val() || '');
+                    if (now !== pw) return;                                          // the save did not go through
+                    const r = await changeFor(id, oldPw, pw);
+                    if (r.status === 'noauth') return;
+                    if (!['updated', 'created', 'ok'].includes(r.status)) warnAdmin(id, r.status + (r.code ? ' ' + r.code : ''));
+                } catch (er) { /* the staff tool repairs it */ }
+            }, 2500);
+        } catch (er) { /* never disturb the form */ }
+    }, true);
+
+    // ---------- 4) admin tool: Security Check ----------
+    const NODES = ['users', 'orders', 'inventory', 'settings', 'user_signatures', 'fcm_tokens', 'announcements', 'audit_logs', 'stock_movements', 'inventory_history', 'lowStockAlerts', 'lowStockMeta', 'itemLimits', 'itemLimitRules', 'onBehalf', 'authMap', 'meta', 'po_orders', 'po_files'];
+    async function publicProbe() {                                                // asks the database like a stranger: no login, no token
+        const base = String(firebaseConfig.databaseURL).replace(/\/$/, ''); const out = { read: [], write: null, root: null, at: new Date().toISOString() };
+        const rd = async (path) => { try { const r = await fetch(base + '/' + path + '.json?shallow=true', { cache: 'no-store' }); return r.ok ? 'OPEN' : 'protected'; } catch (e) { return 'unknown'; } };
+        out.root = await rd('');
+        for (const n of NODES) out.read.push({ node: n, state: await rd(n) });
+        try {
+            const p = base + '/__sec_probe.json'; const r = await fetch(p, { method: 'PUT', body: '"x"', cache: 'no-store' });
+            if (r.ok) { out.write = 'OPEN'; try { await fetch(p, { method: 'DELETE', cache: 'no-store' }); } catch (e) { /* tiny key, harmless */ } } else out.write = 'protected';
+        } catch (e) { out.write = 'unknown'; }
+        return out;
+    }
+    function reportText(st, pr) {
+        const L = ['SECURITY CHECK - ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' - app v' + window.__APP_BUILD, ''];
+        if (st) L.push('Firebase login on this phone: ' + (st.authOn ? 'working (' + st.email + ')' : 'not signed in'), 'Staff in database: ' + st.total + ' | with a Firebase login: ' + st.withUid + ' | login lookup entries (authMap): ' + st.mapCount, '');
+        if (pr) { L.push('PUBLIC ACCESS TEST (a stranger with no login):', '  Whole database listing: ' + pr.root, '  Writing data: ' + pr.write); pr.read.forEach((r) => L.push('  Read ' + r.node + ': ' + r.state)); const o = pr.read.filter((r) => r.state === 'OPEN').length; L.push('', 'Nodes anyone can read: ' + o + ' of ' + pr.read.length); }
+        return L.join('\n');
+    }
+    let ov = null;
+    function openCheck() {
+        if (!isAdmin() || off()) return;
+        if (ov) ov.remove();
+        ov = document.createElement('div'); ov.id = 'secOv';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100003;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:12px';
+        ov.innerHTML = '<div style="background:#fff;color:#111827;border-radius:18px;width:min(560px,100%);max-height:92dvh;display:flex;flex-direction:column;font:14px/1.45 system-ui,sans-serif;overflow:hidden"><div style="padding:14px 16px;background:#0f1a3a;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🔎 Security Check</b><button type="button" id="secX" style="background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;min-width:38px;min-height:38px;font-size:18px">✕</button></div><div id="secBd" style="padding:14px 16px;overflow:auto;flex:1">Checking…</div><div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap"><button type="button" id="secRun" style="flex:1;min-height:44px;border-radius:12px;border:0;background:#2563eb;color:#fff;font-weight:700">Run public access test</button><button type="button" id="secCp" style="min-height:44px;border-radius:12px;border:0;background:#e5e7eb;font-weight:700;padding:0 14px">Copy report</button></div></div>';
+        document.body.appendChild(ov);
+        const bd = ov.querySelector('#secBd'); let st = null, pr = null;
+        ov.querySelector('#secX').onclick = () => { ov.remove(); ov = null; };
+        const draw = () => {
+            const row = (a, b, good) => '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9"><span>' + a + '</span><b style="color:' + (good === true ? '#15803d' : good === false ? '#b91c1c' : '#334155') + '">' + b + '</b></div>';
+            let h = '<div style="font-weight:700;margin-bottom:4px">This phone</div>';
+            if (st) h += row('Firebase login', st.authOn ? 'working' : 'not signed in', st.authOn) + row('Signed in as', esc(st.email || '-')) + row('Staff in database', st.total) + row('Staff with a Firebase login', st.withUid + ' of ' + st.total, st.withUid === st.total) + row('Login lookup entries (authMap)', st.mapCount, st.mapCount >= st.withUid);
+            const dr = (() => { try { return JSON.parse(lsGet('secDrift') || '[]'); } catch (e) { return []; } })();
+            if (dr.length) h += '<div style="margin-top:8px;color:#b45309"><b>Needs attention (password could not be synced):</b> ' + dr.map((x) => esc(x.id)).join(', ') + '</div>';
+            h += '<div style="font-weight:700;margin:14px 0 4px">Public access test <small style="font-weight:400;color:#64748b">(a stranger, no login)</small></div>';
+            if (!pr) h += '<div style="color:#64748b">Not run yet. Tap “Run public access test”.</div>';
+            else { h += row('Whole database listing', pr.root, pr.root !== 'OPEN') + row('Writing data', pr.write, pr.write !== 'OPEN'); pr.read.forEach((r) => { h += row('Read: ' + r.node, r.state, r.state !== 'OPEN'); }); const o = pr.read.filter((r) => r.state === 'OPEN').length; h += '<div style="margin-top:10px;font-weight:700;color:' + (o ? '#b91c1c' : '#15803d') + '">' + (o ? o + ' of ' + pr.read.length + ' nodes can be read by anyone' : 'No node can be read by a stranger') + '</div>'; }
+            bd.innerHTML = h;
+        };
+        (async () => {
+            try {
+                const a = await mainAuth(); const cu = a && a.currentUser;
+                const us = (await get(ref(db, 'users'))).val() || {}; let map = {}; try { map = (await get(ref(db, 'authMap'))).val() || {}; } catch (e) { /* rules */ }
+                const ids = Object.keys(us).filter((k) => us[k] && typeof us[k] === 'object');
+                st = { authOn: !!cu, email: cu && cu.email, total: ids.length, withUid: ids.filter((k) => us[k].authUid).length, mapCount: Object.keys(map).length };
+            } catch (e) { st = { authOn: false, email: '', total: 0, withUid: 0, mapCount: 0 }; }
+            draw();
+        })();
+        ov.querySelector('#secRun').onclick = async (e) => { e.target.disabled = true; e.target.textContent = 'Testing…'; pr = await publicProbe(); draw(); e.target.disabled = false; e.target.textContent = 'Run again'; };
+        ov.querySelector('#secCp').onclick = async () => { const t = reportText(st, pr); try { await navigator.clipboard.writeText(t); toast('Report copied'); } catch (e) { window.prompt('Copy this report:', t); } };
+    }
+    function ensureMenu() {
+        const nav = document.getElementById('admin-menu'); if (!nav) return;
+        const have = document.getElementById('drawer-sec-btn');
+        if (!isAdmin() || off()) { if (have) have.remove(); return; }
+        if (have) return;
+        const b = document.createElement('button'); b.id = 'drawer-sec-btn'; b.type = 'button'; b.className = 'drawer-item'; b.textContent = '🔎 Security Check';
+        b.addEventListener('click', () => { const c = document.getElementById('close-drawer-btn'); if (c) c.click(); openCheck(); });
+        nav.insertBefore(b, document.getElementById('drawer-backup-btn') || document.getElementById('logout-btn-admin') || null);
+    }
+    setInterval(() => { try { if (currentUser) ensureMenu(); } catch (e) { /* display only */ } }, 2000);
+    window.__secCheck = { open: openCheck, probe: publicProbe, report: reportText, okIds, version: '2.27.0' };
 })();
