@@ -14258,3 +14258,159 @@ window.openDeveloperPanel = typeof openDeveloperPanel !== 'undefined' ? openDeve
     setInterval(() => { try { if (currentUser) ensureMenu(); } catch (e) { /* display only */ } }, 2000);
     window.__secCheck = { open: openCheck, probe: publicProbe, report: reportText, okIds, version: '2.27.0' };
 })();
+
+// =====================================================================================
+// v2.28.0 (additive) - NOTIFICATION CHECK ("🔔 Check notifications" under the Notifications switch, every role)
+//   Push notifications go:  app -> your Google Apps Script -> OneSignal -> the phone. When nothing arrives while the app is
+//   closed, ONE link is broken. This tool checks every link ON THE PHONE ITSELF and sends a real test notification, showing
+//   exactly what the server answered:
+//     browser permission | app switch | background worker (OneSignalSDKWorker.js) | OneSignal loaded | phone subscription |
+//     OneSignal user id (ADEK) | Apps Script address | Firebase device record
+//   Test send: shows the Apps Script / OneSignal answer in plain words (API key missing, user not subscribed, wrong deployment...).
+//   Admins also get "Test admin broadcast" (the same route new-order alerts use).
+//   "Repair" switches this phone's notifications OFF and ON again (fresh subscription) - the normal fix for a dead phone.
+//   Nothing else in the app changes. Kill switch: localStorage.pushDoctorOff = '1'.
+// =====================================================================================
+(function () {
+    'use strict';
+    if (window.__pushDoctorV2280) return;
+    window.__pushDoctorV2280 = true;
+    window.__APP_BUILD = '2.28.0';
+
+    const off = () => { try { return localStorage.getItem('pushDoctorOff') === '1'; } catch (e) { return false; } };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const isAdminRole = () => ['ADMIN', 'DEVELOPER', 'SUPER_ADMIN'].includes(String((currentUser && currentUser.role) || '').toUpperCase());
+    const scriptUrl = () => window.GOOGLE_SCRIPT_URL || (function () { try { return localStorage.getItem('driveScriptUrl'); } catch (e) { return ''; } })();
+
+    async function gather() {
+        const out = { rows: [] };
+        const add = (name, state, detail, hint) => out.rows.push({ name, state, detail: detail || '', hint: hint || '' });       // state: ok | bad | warn
+        // 1) browser permission
+        const perm = ('Notification' in window) ? Notification.permission : 'unsupported';
+        add('Browser permission', perm === 'granted' ? 'ok' : (perm === 'denied' ? 'bad' : 'warn'), perm,
+            perm === 'denied' ? 'Chrome ne notification block ki hai. Chrome menu → Settings → Site settings → Notifications → is website ko Allow karo.' :
+                perm === 'default' ? 'Permission abhi di nahi gayi. App me 🔔 Notifications switch ON karke "Allow" dabao.' : perm === 'unsupported' ? 'Ye browser web push support nahi karta.' : '');
+        // 2) app switch
+        let on = false; try { on = isPushOnHere(); } catch (e) { /* ignore */ }
+        add('App switch (this phone)', on ? 'ok' : 'bad', on ? 'ON' : 'OFF', on ? '' : 'Menu me 🔔 Notifications switch ON karo (ya neeche "Repair" dabao). Agar "active on another device" likha hai to ye phone band hai: ek user ka ek hi phone chalu rehta hai.');
+        // 3) background worker
+        let regs = [];
+        try { regs = ('serviceWorker' in navigator) ? await navigator.serviceWorker.getRegistrations() : []; } catch (e) { regs = []; }
+        const act = regs.map((r) => ({ scope: r.scope, url: (r.active && r.active.scriptURL) || (r.waiting && r.waiting.scriptURL) || (r.installing && r.installing.scriptURL) || '', state: (r.active && r.active.state) || (r.waiting ? 'waiting' : (r.installing ? 'installing' : '')) }));
+        const good = act.find((x) => /OneSignalSDKWorker\.js(\?|$)/.test(x.url) && x.state === 'activated');
+        add('Background worker', good ? 'ok' : 'bad', act.length ? act.map((x) => x.url.split('/').pop() + ' (' + x.state + ')').join(', ') : 'none',
+            good ? '' : act.length ? 'Notification dikhane wala worker (OneSignalSDKWorker.js) active nahi hai; koi aur worker chal raha hai. "Repair" dabao, phir app band karke dobara kholo.' : 'Koi background worker nahi mila, isliye app band hone par notification nahi dikh sakti. "Repair" dabao.');
+        // 4/5/6) OneSignal
+        let OS = null; try { OS = await Promise.race([loadOneSignal(), sleep(8000).then(() => null)]); } catch (e) { OS = null; }
+        add('OneSignal service', OS ? 'ok' : 'bad', OS ? 'loaded' : 'not loaded', OS ? '' : 'OneSignal load nahi hua (internet ya ad-blocker?). Internet check karke dobara try karo.');
+        let sub = null, ext = null;
+        try { if (OS) { sub = OS.User.PushSubscription; ext = OS.User.externalId || null; } } catch (e) { /* ignore */ }
+        const subOk = !!(sub && sub.id && sub.optedIn && sub.token);
+        add('Phone subscription', subOk ? 'ok' : 'bad', sub ? ('id ' + (sub.id ? String(sub.id).slice(0, 8) + '…' : 'none') + ', optedIn ' + (!!sub.optedIn) + ', token ' + (!!sub.token)) : 'none',
+            subOk ? '' : 'Is phone ka OneSignal subscription chalu nahi hai. "Repair" dabao aur Allow do.');
+        let want = ''; try { want = pushUid(); } catch (e) { /* ignore */ }
+        add('OneSignal user id (ADEK)', ext && ext === want ? 'ok' : 'warn', (ext || 'none') + ' (expected ' + want + ')', ext === want ? '' : 'OneSignal me is phone ka user id sahi nahi hai, isliye personal notification nahi pahunchegi. "Repair" dabao.');
+        // 7) Apps Script address
+        const url = scriptUrl();
+        add('Apps Script address', url ? 'ok' : 'bad', url ? 'saved' : 'missing', url ? '' : 'Server ka address nahi mila. Admin ko Drive Connector me Google Apps Script ka URL save karna hai.');
+        // 8) Firebase device record
+        try {
+            const dev = 'os_' + osDeviceId(); const v = (await get(ref(db, 'fcm_tokens/' + want + '/' + dev))).val();
+            add('Device record (Firebase)', v ? 'ok' : 'warn', v ? 'present' : 'missing', v ? '' : 'Is phone ka record nahi hai. "Repair" dabao.');
+        } catch (e) { add('Device record (Firebase)', 'warn', 'could not read', ''); }
+        return out;
+    }
+
+    // what did the server answer, in plain words
+    function explain(raw, parsed) {
+        if (raw == null) return { state: 'bad', text: 'Apps Script se koi jawab nahi mila (internet / URL galat / deployment band).' };
+        if (!parsed) return { state: 'bad', text: 'Apps Script ne JSON ke bajay kuch aur diya (shayad Google login page). Deploy → Manage deployments me "Who has access: Anyone" rakho aur New version deploy karo. Jawab: ' + String(raw).slice(0, 140) };
+        const st = parsed.status;
+        if (st === 'duplicate') return { state: 'warn', text: 'Ye event pehle bhej diya gaya tha (6 ghante tak dobara nahi bhejta). Dobara dabao.' };
+        if (st === 'error') {
+            const m = String(parsed.message || '');
+            if (/PUSH_API_KEY not set/i.test(m)) return { state: 'bad', text: 'Apps Script me OneSignal REST API Key paste nahi hui. (Script me PUSH_API_KEY bharo, phir Deploy → New version.)' };
+            if (/OneSignal (401|403)/.test(m)) return { state: 'bad', text: 'OneSignal ne API Key reject ki (401/403). Sahi REST API Key dalo aur New version deploy karo. ' + m.slice(0, 120) };
+            if (/OneSignal 400/.test(m)) return { state: 'bad', text: 'OneSignal ne request reject ki (400): ' + m.slice(0, 200) };
+            if (/no target/i.test(m)) return { state: 'bad', text: 'Server ko user ka id nahi mila (no target).' };
+            return { state: 'bad', text: 'Server error: ' + m.slice(0, 220) };
+        }
+        if (st === 'success') {
+            let j = null; try { j = JSON.parse(parsed.response || '{}'); } catch (e) { /* ignore */ }
+            const errs = j && j.errors ? (Array.isArray(j.errors) ? j.errors.join('; ') : JSON.stringify(j.errors)) : '';
+            if (errs) return { state: 'bad', text: 'OneSignal ne kaha: ' + errs.slice(0, 200) + (/not subscribed|no subscribed/i.test(errs) ? '  (Is user ka koi subscribed phone nahi. Us phone par "Repair" dabao.)' : '') };
+            if (j && j.id === '') return { state: 'bad', text: 'OneSignal ne notification banayi hi nahi (id khali): is user ka koi subscribed phone nahi. "Repair" dabao.' };
+            return { state: 'ok', text: 'Bhej diya gaya' + (j && j.id ? ' (id ' + String(j.id).slice(0, 8) + '…)' : '') + '. Ab app BAND karo aur 1 minute ruko: notification aani chahiye.' };
+        }
+        return { state: 'warn', text: 'Anjaan jawab: ' + JSON.stringify(parsed).slice(0, 160) };
+    }
+    async function sendTest(admins) {
+        const url = scriptUrl(); if (!url) return explain(null);
+        let uid = ''; try { uid = pushUid(); } catch (e) { /* ignore */ }
+        const payload = { action: 'pushNotify', eventKey: 'test_' + (admins ? 'admins_' : uid + '_') + Date.now(), title: admins ? '🔔 Admin test notification' : '🔔 Test notification', body: 'Agar ye dikh raha hai to notification sahi kaam kar rahi hai.', url: location.origin + location.pathname.replace(/[^\/]*$/, '') };
+        if (admins) payload.admins = true; else payload.externalId = uid;
+        let raw = null, parsed = null;
+        try {
+            const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 20000);
+            const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), signal: ctrl.signal });
+            clearTimeout(t); raw = await r.text();
+            try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+        } catch (e) { raw = null; }
+        return explain(raw, parsed);
+    }
+
+    let ov = null;
+    function open() {
+        if (off()) return;
+        if (ov) ov.remove();
+        ov = document.createElement('div'); ov.id = 'pdOv';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100004;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:12px';
+        ov.innerHTML = '<div style="background:#fff;color:#111827;border-radius:18px;width:min(560px,100%);max-height:92dvh;display:flex;flex-direction:column;font:14px/1.45 system-ui,sans-serif;overflow:hidden"><div style="padding:14px 16px;background:#0f1a3a;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🔔 Notification Check</b><button type="button" id="pdX" style="background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;min-width:38px;min-height:38px;font-size:18px">✕</button></div><div id="pdBd" style="padding:14px 16px;overflow:auto;flex:1">Checking this phone…</div><div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap"><button type="button" id="pdTest" style="flex:1;min-width:140px;min-height:44px;border-radius:12px;border:0;background:#2563eb;color:#fff;font-weight:700">Send test notification</button>' + (isAdminRole() ? '<button type="button" id="pdAdm" style="min-height:44px;border-radius:12px;border:0;background:#0f766e;color:#fff;font-weight:700;padding:0 12px">Test admin broadcast</button>' : '') + '<button type="button" id="pdFix" style="min-height:44px;border-radius:12px;border:0;background:#e5e7eb;font-weight:700;padding:0 12px">🔄 Repair</button></div></div>';
+        document.body.appendChild(ov);
+        const bd = ov.querySelector('#pdBd'); let data = null, result = null;
+        ov.querySelector('#pdX').onclick = () => { ov.remove(); ov = null; };
+        const icon = (s) => s === 'ok' ? '✅' : (s === 'bad' ? '❌' : '⚠️');
+        const draw = () => {
+            let h = '';
+            if (!data) h = 'Checking this phone…';
+            else {
+                h += data.rows.map((r) => '<div style="padding:7px 0;border-bottom:1px solid #f1f5f9"><div style="display:flex;justify-content:space-between;gap:8px"><span>' + icon(r.state) + ' ' + esc(r.name) + '</span><small style="color:#64748b;text-align:right;word-break:break-word">' + esc(r.detail) + '</small></div>' + (r.hint && r.state !== 'ok' ? '<div style="margin-top:3px;color:#b45309;font-size:13px">👉 ' + esc(r.hint) + '</div>' : '') + '</div>').join('');
+                const bad = data.rows.filter((r) => r.state === 'bad').length;
+                h += '<div style="margin-top:10px;font-weight:700;color:' + (bad ? '#b91c1c' : '#15803d') + '">' + (bad ? bad + ' cheez theek karni hai (upar 👉 dekho)' : 'Is phone par sab theek dikh raha hai. Ab test notification bhejo.') + '</div>';
+            }
+            if (result) h += '<div style="margin-top:12px;padding:10px;border-radius:12px;background:' + (result.state === 'ok' ? '#ecfdf5' : result.state === 'warn' ? '#fffbeb' : '#fef2f2') + '">' + icon(result.state) + ' ' + esc(result.text) + '</div>';
+            bd.innerHTML = h;
+        };
+        const refresh = async () => { data = await gather(); draw(); };
+        draw(); refresh();
+        ov.querySelector('#pdTest').onclick = async (e) => { e.target.disabled = true; e.target.textContent = 'Sending…'; result = await sendTest(false); draw(); e.target.disabled = false; e.target.textContent = 'Send test again'; };
+        const adm = ov.querySelector('#pdAdm'); if (adm) adm.onclick = async (e) => { e.target.disabled = true; result = await sendTest(true); draw(); e.target.disabled = false; };
+        ov.querySelector('#pdFix').onclick = async (e) => {
+            if (!confirm('Is phone par notifications band karke dobara chalu karein? (Permission "Allow" poochhi ja sakti hai.)')) return;
+            e.target.disabled = true; e.target.textContent = 'Repairing…';
+            try {
+                try { if (isPushOnHere()) await deactivatePushHere(true); } catch (er) { /* ignore */ }
+                try { localStorage.removeItem(pushFlag('push_user_off')); localStorage.removeItem(pushFlag('push_moved')); } catch (er) { /* ignore */ }
+                await window.enableFcmNotifications();
+                await sleep(1500);
+            } catch (er) { result = { state: 'bad', text: 'Repair me dikkat: ' + (er && er.message ? er.message : er) }; }
+            e.target.disabled = false; e.target.textContent = '🔄 Repair'; await refresh();
+        };
+    }
+
+    // a small "check" line under the Notifications switch (admin drawer, teacher drawer, teacher sheet menu)
+    function ensureButtons() {
+        if (off() || typeof currentUser === 'undefined' || !currentUser) return;
+        [['enable-notifications-btn-admin', 'drawer-item'], ['enable-notifications-btn-teacher', 'drawer-item'], ['enable-notifications-btn-teacher2', 'nav2']].forEach(([id, cls]) => {
+            const sw = document.getElementById(id); if (!sw || !sw.parentNode) return;
+            const bid = 'pd-check-' + id;
+            if (document.getElementById(bid)) return;
+            const b = document.createElement('button'); b.id = bid; b.type = 'button'; b.className = cls; b.textContent = '🔎 Check notifications';
+            b.addEventListener('click', () => { const c = document.getElementById('close-drawer-btn'); if (c) c.click(); open(); });
+            sw.parentNode.insertBefore(b, sw.nextSibling);
+        });
+    }
+    setInterval(() => { try { ensureButtons(); } catch (e) { /* display only */ } }, 2000);
+    window.__pushDoctor = { open, gather, sendTest, explain, version: '2.28.0' };
+})();
